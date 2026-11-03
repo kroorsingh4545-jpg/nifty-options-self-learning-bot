@@ -1,0 +1,22 @@
+# Secrets — never commit
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+.venv/
+venv/
+
+# Local databases
+*.db
+*.sqlite3
+
+# Runtime output
+logs/
+models/
+mlruns/
+output/
+
+# Personal Claude Code settings
+.claude/settings.local.json

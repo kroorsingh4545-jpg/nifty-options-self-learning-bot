@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./**/*.env)",
+      "Edit(./.env)",
+      "mcp__sqlite__write_query",
+      "mcp__sqlite__create_table"
+    ],
+    "ask": [
+      "mcp__filesystem__write_file",
+      "mcp__filesystem__edit_file",
+      "mcp__filesystem__move_file",
+      "mcp__sqlite-dev__write_query",
+      "mcp__sqlite-dev__create_table",
+      "mcp__github__create_or_update_file",
+      "mcp__github__push_files",
+      "mcp__github__merge_pull_request",
+      "mcp__github__delete_file"
+    ]
+  }
+}
