@@ -59,6 +59,18 @@ costs:
   stamp_duty_buy_pct: 0.003      # % of premium, buy side
   gst_pct: 18.0                  # on brokerage + exchange txn + SEBI fee
 
+execution:
+  use_exchange_stop_orders: true   # resting SL-M protective order for every position
+  entry_limit_buffer_ticks: 2      # entry LIMIT price = ask + buffer ticks
+  entry_timeout_seconds: 30        # unfilled entry remainder is cancelled
+  exit_order_type: MARKET          # exits prioritise certainty of execution
+  exit_max_attempts: 5             # then CRITICAL alert + kill switch (manual intervention)
+  exit_retry_base_seconds: 0.5
+  exit_retry_max_seconds: 5
+  reconcile_interval_seconds: 300  # periodic reconciliation (max 300)
+  reconcile_debounce_seconds: 2    # after order updates
+  square_off_check_seconds: 5
+
 logging:
   level: INFO
   directory: logs

@@ -141,6 +141,19 @@ class CostsSection(_Frozen):
     gst_pct: NonNegativeFloat = 18.0
 
 
+class ExecutionSection(_Frozen):
+    use_exchange_stop_orders: bool = True   # resting SL-M order per position
+    entry_limit_buffer_ticks: int = Field(default=2, ge=0, le=20)  # entry LIMIT = ask + buffer
+    entry_timeout_seconds: PositiveFloat = 30.0  # unfilled entry remainder cancelled after this
+    exit_order_type: Literal["MARKET"] = "MARKET"  # exits prioritise certainty of execution
+    exit_max_attempts: int = Field(default=5, ge=1, le=10)
+    exit_retry_base_seconds: PositiveFloat = 0.5
+    exit_retry_max_seconds: PositiveFloat = 5.0
+    reconcile_interval_seconds: PositiveFloat = Field(default=300, le=hl.MAX_RECONCILE_INTERVAL_SECONDS)
+    reconcile_debounce_seconds: NonNegativeFloat = 2.0
+    square_off_check_seconds: PositiveFloat = 5.0
+
+
 class AppSettings(_Frozen):
     app: AppSection = AppSection()
     market_session: MarketSession = MarketSession()
@@ -149,6 +162,7 @@ class AppSettings(_Frozen):
     websocket: WebSocketSection = WebSocketSection()
     paper_broker: PaperBrokerSection = PaperBrokerSection()
     costs: CostsSection = CostsSection()
+    execution: ExecutionSection = ExecutionSection()
     logging: LoggingSection = LoggingSection()
 
 
@@ -221,6 +235,14 @@ class TimeRules(_Frozen):
         return self
 
 
+class KillSwitchLimits(_Frozen):
+    websocket_disconnect_grace_seconds: PositiveFloat = Field(le=hl.MAX_WS_DISCONNECT_GRACE_SECONDS)
+    abnormal_spread_pct: PositiveFloat = Field(le=hl.MAX_ABNORMAL_SPREAD_PCT)
+    abnormal_spread_consecutive_ticks: PositiveInt = Field(le=hl.MAX_ABNORMAL_SPREAD_TICKS)
+    max_consecutive_api_failures: PositiveInt = Field(le=hl.MAX_CONSECUTIVE_API_FAILURES)
+    max_consecutive_order_rejections: PositiveInt = Field(le=hl.MAX_CONSECUTIVE_ORDER_REJECTIONS)
+
+
 class WindowLimits(_Frozen):
     per_second: PositiveInt
     per_minute: PositiveInt
@@ -273,6 +295,7 @@ class RiskLimits(_Frozen):
     per_strategy: PerStrategyLimits
     global_: GlobalLimits = Field(alias="global")
     time_rules: TimeRules
+    kill_switch: KillSwitchLimits
     rate_limits: RateLimits
 
     @model_validator(mode="after")

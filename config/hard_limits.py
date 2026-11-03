@@ -43,6 +43,16 @@ LATEST_NEW_ENTRY_TIME: Final = time(14, 45)
 LATEST_SQUARE_OFF_START: Final = time(15, 10)
 LATEST_SQUARE_OFF_END: Final = time(15, 20)
 
+# Kill-switch thresholds (config may only lower these)
+MAX_WS_DISCONNECT_GRACE_SECONDS: Final = 60
+MAX_ABNORMAL_SPREAD_PCT: Final = 10.0
+MAX_ABNORMAL_SPREAD_TICKS: Final = 10
+MAX_CONSECUTIVE_API_FAILURES: Final = 5
+MAX_CONSECUTIVE_ORDER_REJECTIONS: Final = 5
+
+# Reconciliation must run at least every 5 minutes.
+MAX_RECONCILE_INTERVAL_SECONDS: Final = 300
+
 # Upstox API rate limits (official, per project spec — re-verify before LIVE)
 MIN_RATE_LIMIT_SAFETY_BUFFER: Final = 0.20
 UPSTOX_OFFICIAL_LIMITS: Final = {
