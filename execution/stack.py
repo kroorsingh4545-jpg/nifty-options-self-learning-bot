@@ -93,11 +93,11 @@ def build_stack(
 
     guard = DailyLossGuard(cfg.risk, strategy_limits, mode=cfg.mode, repo=repos.daily_pnl, now_fn=now_fn,
                            on_strategy_breach=on_strategy_breach, on_global_breach=on_global_breach, on_pause=on_pause)
+    charges = ChargeCalculator(cfg.settings.costs)
     orders = OrderManager(broker=broker, repos=repos, kill_switch=kill_switch, settings=cfg.settings.execution,
                           max_consecutive_rejections=ks_cfg.max_consecutive_order_rejections, alerts=alerts,
-                          now_fn=now_fn, sleep=sleep)
+                          now_fn=now_fn, sleep=sleep, charges=charges)
     positions = PositionManager(cfg, repos=repos, orders=orders, guard=guard, now_fn=now_fn)
-    charges = ChargeCalculator(cfg.settings.costs)
 
     def status_of(sid: str) -> StrategyStatus:
         rec = repos.strategies.get(sid)

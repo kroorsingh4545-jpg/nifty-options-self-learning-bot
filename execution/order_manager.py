@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from broker.broker_interface import Broker
+from broker.charges import ChargeCalculator
 from broker.errors import BrokerError, BrokerTimeoutError, LiveTradingDisabledError
 from broker.upstox_rate_limiter import backoff_delay
 from config.settings import ExecutionSection
@@ -100,6 +101,7 @@ class OrderManager:
         alerts: AlertSink | None = None,
         now_fn: Callable[[], datetime] = now_ist,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        charges: ChargeCalculator | None = None,
     ) -> None:
         if broker.mode is not repos.mode:
             raise ValueError("broker and repositories must use the same trading mode")
@@ -112,6 +114,7 @@ class OrderManager:
         self.alerts = alerts or LogAlertSink()
         self._now = now_fn
         self._sleep = sleep
+        self._charges = charges or ChargeCalculator()
         self._listeners: list[OrderListener] = []
         self._events: dict[str, asyncio.Event] = {}
         self.rejection_streak = 0
@@ -235,18 +238,23 @@ class OrderManager:
             except Exception:
                 log.exception("order listener failed", extra={"order_id": coid})
 
-    @staticmethod
-    def _synthesize_fill(rec: OrderRecord, u: OrderUpdate) -> OrderUpdate:
+    def _synthesize_fill(self, rec: OrderRecord, u: OrderUpdate) -> OrderUpdate:
         """An order-book snapshot (reconciliation) shows more filled quantity
         than we saw fills for: derive the missing fill from the deltas.
-        Charges are unknown here (recorded as 0) and flagged in the fill id."""
+
+        Charges are computed with the configured cost model — the same one the
+        paper broker uses — with brokerage included only if this is the
+        order's first fill (brokerage is charged once per order). The fill id
+        is prefixed ``RECON-`` so reconstructed fills stay identifiable."""
         assert u.average_price is not None
         delta = u.filled_quantity - rec.filled_quantity
         prev_value = (rec.average_price or 0.0) * rec.filled_quantity
         price = round((u.average_price * u.filled_quantity - prev_value) / delta, 4)
+        charges = self._charges.compute(rec.side, delta, price, include_brokerage=rec.filled_quantity == 0).total
         log.warning("synthesized missing fill from order book",
-                    extra={"order_id": rec.client_order_id, "qty": delta, "price": price})
+                    extra={"order_id": rec.client_order_id, "qty": delta, "price": price, "charges": charges})
         return u.model_copy(update={"last_fill_quantity": delta, "last_fill_price": price,
+                                    "last_fill_charges": charges,
                                     "last_fill_id": f"RECON-{rec.client_order_id}-{u.filled_quantity}"})
 
     def _record_fill(self, rec: OrderRecord, u: OrderUpdate) -> None:

@@ -127,6 +127,9 @@ async def test_unknown_order_is_resolved_not_resent() -> None:
     assert resolved.filled_quantity == 75
     fills = h.repos.fills.list_for_order(resolved.id)  # type: ignore[arg-type]
     assert len(fills) == 1 and fills[0].paper_fill_id and fills[0].paper_fill_id.startswith("RECON-")
+    # Recovered fill carries the real charges (identical to what the broker charged).
+    assert fills[0].charges > 20
+    assert fills[0].charges == pytest.approx(h.broker.charges_paid, abs=0.01)
     # exactly one order exists at the broker: it was never re-sent
     assert len(await h.broker.get_orders()) == 1
     await h.settle()
@@ -258,3 +261,80 @@ async def test_restart_restores_trades_guard_and_kill_state(tmp_path: Any) -> No
     assert not rep.ok and h2.s.kill_switch.active
     await h2.settle()
     h2.db.close()
+
+
+async def test_recovered_partial_fill_charges_exclude_repeat_brokerage() -> None:
+    from broker.charges import ChargeCalculator
+    from core.models import OrderUpdate
+
+    h = Harness()
+    h.tick(CE.instrument_key, 100.0)
+    real_place = h.broker.place_order
+
+    async def accepted_no_fill(req: OrderRequest) -> Any:
+        raise BrokerTimeoutError("timeout")  # broker accepted it, but we never heard back
+
+    h.broker.place_order = accepted_no_fill  # type: ignore[method-assign]
+    rec = await h.s.orders.submit(OrderIntent("orb_options", CE, OrderSide.BUY, 150, OrderType.LIMIT,
+                                              OrderPurpose.ENTRY, price=100.5))
+    h.broker.place_order = real_place  # type: ignore[method-assign]
+    coid = rec.client_order_id
+    calc = ChargeCalculator(h.cfg.settings.costs)
+
+    # 1st snapshot: 75 filled @100.20 -> first fill of the order pays brokerage
+    h.s.orders.on_broker_update(OrderUpdate(client_order_id=coid, instrument_key=CE.instrument_key,
+                                            side=OrderSide.BUY, status=OrderStatus.PARTIALLY_FILLED, quantity=150,
+                                            filled_quantity=75, average_price=100.20))
+    # 2nd snapshot: 150 filled, avg 100.25 -> second 75 @100.30, no brokerage again
+    h.s.orders.on_broker_update(OrderUpdate(client_order_id=coid, instrument_key=CE.instrument_key,
+                                            side=OrderSide.BUY, status=OrderStatus.COMPLETE, quantity=150,
+                                            filled_quantity=150, average_price=100.25))
+    o = h.s.orders.get(coid)
+    assert o is not None and o.status is OrderStatus.COMPLETE and o.filled_quantity == 150
+    fills = h.repos.fills.list_for_order(o.id)  # type: ignore[arg-type]
+    assert [f.quantity for f in fills] == [75, 75]
+    assert fills[0].price == pytest.approx(100.20) and fills[1].price == pytest.approx(100.30)
+    expected_first = calc.compute(OrderSide.BUY, 75, 100.20, include_brokerage=True).total
+    expected_second = calc.compute(OrderSide.BUY, 75, 100.30, include_brokerage=False).total
+    assert fills[0].charges == pytest.approx(expected_first)
+    assert fills[1].charges == pytest.approx(expected_second)
+    assert fills[0].charges - fills[1].charges > 20  # brokerage (+GST) charged once only
+    await h.settle()
+
+
+async def test_recovered_exit_fill_charges_flow_into_trade_pnl() -> None:
+    from broker.charges import ChargeCalculator
+
+    h = Harness()
+    t = await h.enter()
+    entry_charges = t.charges
+    real_place = h.broker.place_order
+    listeners = h.broker._listeners
+
+    async def lose_exit_response(req: OrderRequest) -> Any:
+        if req.side.value == "SELL" and req.order_type.value == "MARKET":
+            h.broker._listeners = []
+            try:
+                await real_place(req)
+            finally:
+                h.broker._listeners = listeners
+            raise BrokerTimeoutError("timeout")
+        return await real_place(req)
+
+    h.broker.place_order = lose_exit_response  # type: ignore[method-assign]
+    from risk.stop_loss_manager import ExitReason
+
+    assert await h.s.positions.exit_trade(t.trade_uid, ExitReason.MANUAL)
+    await h.settle()
+    rec = h.repos.trades.get(t.trade_uid)
+    assert rec is not None and rec.status.value == "CLOSED"
+    sell_fill = [f for o in h.repos.orders.list_for_trade(t.trade_uid) if o.side is OrderSide.SELL
+                 and o.filled_quantity for f in h.repos.fills.list_for_order(o.id)]  # type: ignore[arg-type]
+    assert len(sell_fill) == 1 and sell_fill[0].paper_fill_id.startswith("RECON-")  # type: ignore[union-attr]
+    calc = ChargeCalculator(h.cfg.settings.costs)
+    exit_charges = calc.compute(OrderSide.SELL, 75, sell_fill[0].price).total
+    assert sell_fill[0].charges == pytest.approx(exit_charges)
+    assert rec.charges == pytest.approx(entry_charges + exit_charges, abs=0.01)
+    assert rec.net_pnl == pytest.approx(rec.gross_pnl - rec.charges, abs=0.01)  # type: ignore[operator]
+    # and it matches what the paper broker actually charged in total
+    assert rec.charges == pytest.approx(h.broker.charges_paid, abs=0.02)
