@@ -132,11 +132,16 @@ class OrderRequest(_Model):
     product: ProductType = ProductType.INTRADAY
     price: float | None = Field(default=None, gt=0)
     trigger_price: float | None = Field(default=None, gt=0)
+    # PAPER only: simulated order id assigned by the order manager before
+    # submission (so the CREATED row can be persisted first).
+    paper_order_id: str | None = None
 
     @model_validator(mode="after")
     def _prices(self) -> OrderRequest:
         if not self.client_order_id.startswith(f"{self.mode.value}-"):
             raise ValueError("client_order_id prefix must match mode")
+        if self.mode is TradingMode.LIVE and self.paper_order_id is not None:
+            raise ValueError("LIVE orders must not carry a paper_order_id")
         needs_price = self.order_type in (OrderType.LIMIT, OrderType.SL)
         needs_trigger = self.order_type in (OrderType.SL, OrderType.SL_M)
         if needs_price and self.price is None:

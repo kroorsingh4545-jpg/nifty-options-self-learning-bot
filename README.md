@@ -2,10 +2,24 @@
 
 A NIFTY weekly options intraday trading bot for Indian markets, using the Upstox Developer API.
 
-> **Status: Phase 2 (market data + Upstox adapter) complete.** Config, logging, SQLite, the
-> rate-limited Upstox REST/WebSocket adapters, candle builder, option chain and paper broker exist.
-> **No real orders can be placed**: the Upstox order methods refuse unconditionally. Strategies,
-> risk/execution, ML and RL come later. The full roadmap is in [`docs/build-plan.md`](docs/build-plan.md).
+> **Status: Phase 3 (risk + execution) complete.** On top of Phases 1–2: position sizing,
+> SL/TP/trailing stops, daily loss guards, kill switch, order lifecycle, reconciliation and
+> square-off, all in PAPER mode. **No real orders can be placed.** Strategies, the dashboard, ML
+> and RL come later. Roadmap: [`docs/build-plan.md`](docs/build-plan.md). Latest audit:
+> [`docs/audits/phase-3-risk-execution-audit.md`](docs/audits/phase-3-risk-execution-audit.md).
+
+## Risk & execution (Phase 3)
+
+- **`risk/risk_manager.py`** is the only gate from a signal to an order. It checks the kill switch, strategy status, session time (entry window, no entries after 14:45, none in square-off), daily guard, open-trade caps (2 per strategy, 4 total), quote freshness, spread, premium bounds, stop/target levels, and the risk budget, then sizes the position.
+- **`risk/position_sizer.py`**: whole lots from the rupee risk budget (≤ ₹2,000 and ≤ the remaining daily budget), stop distance, slippage, round-trip charges, and margin. The ML multiplier can only shrink size.
+- **`risk/stop_loss_manager.py`** and **`risk/trailing_stop_manager.py`**: initial SL/TP plus trailing in PREMIUM_PERCENT, POINTS, R_MULTIPLE and STRUCTURAL (NIFTY level) modes. Stops only tighten, and the database refuses widening.
+- **`risk/daily_loss_guard.py`**: ₹5,000 per strategy and ₹10,000 global, both including mark-to-market. Also enforces 4 trades/day, a 15-minute cooldown after a loss, and a pause after 3 consecutive losses. State persists and is restored after a restart.
+- **`risk/kill_switch.py`**: global or per-strategy. It cancels pending orders, exits positions, disables strategies, alerts, and writes an audit record. Triggers: loss breach, API failure, rate-limit lock, auth failure, WebSocket down past the grace period, reconciliation mismatch, abnormal spread, repeated rejections, exit failure, incomplete square-off, and manual. Reset requires a named operator.
+- **`execution/order_manager.py`**: lifecycle CREATED → SUBMITTED → OPEN → PARTIALLY_FILLED → COMPLETE / REJECTED / CANCELLED, plus UNKNOWN on timeouts, which is reconciled and never blindly re-sent. Exits retry safely.
+- **`execution/position_manager.py`**: per-strategy trades from fills, an exchange-side SL-M protective stop per position, and tick-based SL/TP/trailing monitoring.
+- **`execution/reconciliation.py`**: runs at startup, after order updates (debounced), every 5 minutes, and before and after square-off.
+- **`execution/square_off.py`**: forced square-off from 15:10 to 15:20, escalating if anything is still open.
+- **`execution/stack.py`** wires it all together.
 
 ## Market data & broker layer (Phase 2)
 

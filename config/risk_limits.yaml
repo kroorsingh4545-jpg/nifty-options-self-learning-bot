@@ -31,6 +31,13 @@ time_rules:                        # IST, quoted
   square_off_start: "15:10"
   square_off_end: "15:20"
 
+kill_switch:                       # thresholds may only be made stricter (lower)
+  websocket_disconnect_grace_seconds: 30   # market feed down longer than this -> kill
+  abnormal_spread_pct: 5.0                 # held contract spread above this % of mid ...
+  abnormal_spread_consecutive_ticks: 3     # ... for this many consecutive ticks -> kill
+  max_consecutive_api_failures: 3          # e.g. reconciliation cannot reach the broker
+  max_consecutive_order_rejections: 3      # repeated rejections halt trading
+
 rate_limits:
   safety_buffer: 0.20              # minimum 0.20 (20% below official limits)
   # Official Upstox limits per project spec. Re-verify against current

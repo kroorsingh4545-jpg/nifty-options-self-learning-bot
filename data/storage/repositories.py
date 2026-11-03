@@ -175,6 +175,19 @@ class OrderRepository(_ModeScoped):
             params.extend(status_list)
         return [OrderRecord.from_row(r) for r in self.db.query(sql + " ORDER BY id", params)]
 
+    def list_open(self) -> list[OrderRecord]:
+        """All non-terminal orders (any strategy) for this mode."""
+        rows = self.db.query(
+            "SELECT * FROM orders WHERE mode = ? AND status NOT IN ('COMPLETE','REJECTED','CANCELLED') ORDER BY id",
+            (self.mode.value,),
+        )
+        return [OrderRecord.from_row(r) for r in rows]
+
+    def list_for_trade(self, trade_uid: str) -> list[OrderRecord]:
+        rows = self.db.query("SELECT * FROM orders WHERE mode = ? AND trade_uid = ? ORDER BY id",
+                             (self.mode.value, trade_uid))
+        return [OrderRecord.from_row(r) for r in rows]
+
     def update_status(
         self,
         client_order_id: str,
@@ -277,6 +290,25 @@ class TradeRepository(_ModeScoped):
             sql += " AND status = ?"
             params.append(TradeStatus(status).value)
         return [TradeRecord.from_row(r) for r in self.db.query(sql + " ORDER BY id", params)]
+
+    _UPDATABLE = frozenset({
+        "quantity", "entry_price", "entry_time", "stop_loss", "target", "status", "exit_reason", "charges",
+        "regime", "ml_confidence",
+    })
+
+    def update(self, trade_uid: str, **fields: Any) -> None:
+        """Update whitelisted fields. The schema additionally refuses to widen
+        a long trade's stop-loss and to change identity columns."""
+        bad = set(fields) - self._UPDATABLE
+        if bad:
+            raise ValueError(f"cannot update trade fields: {sorted(bad)}")
+        fields["updated_at"] = now_ist()
+        if self._update("trades", {"trade_uid": trade_uid}, fields) == 0:
+            raise NotFoundError(f"{self.mode.value} trade {trade_uid!r} not found")
+
+    def list_open(self) -> list[TradeRecord]:
+        rows = self.db.query("SELECT * FROM trades WHERE mode = ? AND status = 'OPEN' ORDER BY id", (self.mode.value,))
+        return [TradeRecord.from_row(r) for r in rows]
 
     def count_entries_on(self, strategy_id: str, day: date) -> int:
         row = self.db.query_one(

@@ -232,7 +232,7 @@ class PaperBroker(Broker):
             return self._ack(existing)
         order = _PaperOrder(
             request=request,
-            paper_order_id=new_paper_order_id(),
+            paper_order_id=request.paper_order_id or new_paper_order_id(),
             quantity=request.quantity,
             price=request.price,
             trigger_price=request.trigger_price,

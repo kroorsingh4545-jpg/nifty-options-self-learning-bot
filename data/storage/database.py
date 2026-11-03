@@ -12,7 +12,7 @@ from typing import Any
 
 from core.clock import now_ist
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # v2: trades stop-loss tighten-only trigger
 
 REQUIRED_TABLES = (
     "strategies",

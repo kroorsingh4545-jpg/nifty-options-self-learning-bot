@@ -1,5 +1,5 @@
 -- ============================================================================
--- NIFTY options self-learning bot — SQLite schema, version 1
+-- NIFTY options self-learning bot — SQLite schema, version 2
 --
 -- Design rules enforced IN THE DATABASE (not only in Python):
 --   * Every order / fill / position / trade row carries `mode` (PAPER | LIVE).
@@ -354,6 +354,14 @@ WHEN NEW.mode IS NOT OLD.mode
   OR NEW.trade_uid IS NOT OLD.trade_uid
 BEGIN
     SELECT RAISE(ABORT, 'immutable: trade mode/strategy/uid cannot change');
+END;
+
+-- v2: a long trade's stop-loss may only be tightened (moved up), never widened.
+CREATE TRIGGER IF NOT EXISTS trg_trades_stop_tighten_only
+BEFORE UPDATE OF stop_loss ON trades
+WHEN NEW.side = 'BUY' AND NEW.stop_loss < OLD.stop_loss
+BEGIN
+    SELECT RAISE(ABORT, 'risk: stop_loss of a long trade can only be tightened');
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_positions_identity_immutable
