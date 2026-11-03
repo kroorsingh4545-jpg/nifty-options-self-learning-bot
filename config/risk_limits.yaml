@@ -1,0 +1,45 @@
+# Risk limits. These may be made STRICTER, never looser: every value is
+# validated against config/hard_limits.py at startup and the bot refuses to
+# start if a limit is weakened. ML/RL/learning components cannot change them.
+
+capital:
+  total_capital: 200000
+  per_strategy_capital: 100000     # isolated virtual capital per strategy
+
+per_trade:
+  max_risk_per_trade: 2000         # ₹ — 2% of strategy capital
+
+per_strategy:
+  max_daily_loss: 5000             # ₹ — 5% of strategy capital
+  max_open_trades: 2
+  max_trades_per_day: 4
+  loss_cooldown_minutes: 15
+  max_consecutive_losses: 3        # strategy paused after this many
+
+global:
+  max_daily_loss: 10000            # ₹ — 5% of total capital
+  max_open_trades: 4
+  on_breach:
+    - CANCEL_PENDING_ORDERS
+    - EXIT_ALL_POSITIONS
+    - DISABLE_ALL_STRATEGIES
+    - TRIGGER_KILL_SWITCH
+    - SEND_ALERTS
+
+time_rules:                        # IST, quoted
+  no_new_entries_after: "14:45"
+  square_off_start: "15:10"
+  square_off_end: "15:20"
+
+rate_limits:
+  safety_buffer: 0.20              # minimum 0.20 (20% below official limits)
+  # Official Upstox limits per project spec. Re-verify against current
+  # Upstox documentation before LIVE.
+  order_api:
+    per_second: 10
+    per_minute: 500
+    per_30_minutes: 2000
+  standard_api:
+    per_second: 50
+    per_minute: 500
+    per_30_minutes: 2000

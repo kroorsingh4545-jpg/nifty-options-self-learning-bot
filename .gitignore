@@ -20,3 +20,16 @@ output/
 
 # Personal Claude Code settings
 .claude/settings.local.json
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Tooling / build artefacts
+.coverage
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/

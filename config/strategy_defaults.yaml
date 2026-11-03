@@ -1,0 +1,109 @@
+# Default strategy configuration. Each strategy is isolated: its own capital,
+# positions, P&L, risk budget, and model state. Per-strategy limits must sit
+# within risk_limits.yaml. Times are IST and must be quoted.
+#
+# Lot size is NOT configured here — it is read from the Upstox instrument
+# master at runtime (Phase 2), because NSE revises it.
+#
+# `params` are strategy-specific; they get typed models in Phase 4.
+
+strategies:
+  orb_options:
+    name: Opening Range Breakout (Options)
+    version: "0.1.0"
+    enabled: true
+    allocated_capital: 100000
+    timeframe_minutes: 5
+    entry_window:
+      start: "09:30"
+      end: "11:00"
+    params:
+      opening_range_start: "09:15"
+      opening_range_end: "09:30"
+      breakout_confirmation: candle_close_beyond_level
+      breakout_buffer_points: 5
+      max_entries_per_direction_per_day: 1
+    strike_selection:
+      mode: ATM                    # ATM | ITM | OTM
+      offset_steps: 0
+      strike_step: 50
+      min_premium: 40
+      max_premium: 400
+      liquidity:
+        min_volume: 10000
+        min_oi: 50000
+        max_spread_pct: 1.5
+    sizing:
+      risk_per_trade: 2000
+      size_multiplier: 1.0         # 0 < m <= 1; can only reduce size
+    stop_loss:
+      mode: PREMIUM_PERCENT        # PREMIUM_PERCENT | POINTS
+      value: 25
+    take_profit:
+      mode: R_MULTIPLE             # R_MULTIPLE | PREMIUM_PERCENT | POINTS
+      value: 2.0
+    trailing:
+      enabled: true
+      mode: R_MULTIPLE             # PREMIUM_PERCENT | POINTS | R_MULTIPLE | STRUCTURAL
+      activation: 1.0
+      step: 0.5
+    risk:
+      max_daily_loss: 5000
+      max_open_trades: 2
+      max_trades_per_day: 4
+      loss_cooldown_minutes: 15
+      max_consecutive_losses: 3
+    ml:
+      enabled: false
+      confidence_threshold: 0.60
+
+  vwap_ema:
+    name: VWAP + EMA Momentum
+    version: "0.1.0"
+    enabled: true
+    allocated_capital: 100000
+    timeframe_minutes: 5           # 3 or 5
+    entry_window:
+      start: "09:45"
+      end: "14:30"
+    params:
+      ema_period: 20
+      momentum_confirmation: consecutive_closes
+      momentum_bars: 2
+      min_volume_ratio: 1.2        # vs. rolling average volume
+      chop_filter: vwap_cross_count
+      max_vwap_crosses: 4          # in lookback window
+      chop_lookback_bars: 12
+    strike_selection:
+      mode: ATM
+      offset_steps: 0
+      strike_step: 50
+      min_premium: 40
+      max_premium: 400
+      liquidity:
+        min_volume: 10000
+        min_oi: 50000
+        max_spread_pct: 1.5
+    sizing:
+      risk_per_trade: 2000
+      size_multiplier: 1.0
+    stop_loss:
+      mode: PREMIUM_PERCENT
+      value: 20
+    take_profit:
+      mode: R_MULTIPLE
+      value: 2.0
+    trailing:
+      enabled: true
+      mode: PREMIUM_PERCENT
+      activation: 15
+      step: 5
+    risk:
+      max_daily_loss: 5000
+      max_open_trades: 2
+      max_trades_per_day: 4
+      loss_cooldown_minutes: 15
+      max_consecutive_losses: 3
+    ml:
+      enabled: false
+      confidence_threshold: 0.60

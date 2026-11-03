@@ -1,0 +1,25 @@
+# Application settings. No secrets here — secrets come from .env only.
+# Times are IST and MUST be quoted ("HH:MM"); unquoted 09:15 is parsed by
+# YAML as a number.
+
+app:
+  name: nifty-options-self-learning-bot
+  timezone: Asia/Kolkata
+  # OBSERVE_ONLY | PAPER_AUTO_IMPROVE | LIVE_CANDIDATE_APPROVAL
+  autonomy_level: PAPER_AUTO_IMPROVE
+
+market_session:
+  market_open: "09:15"
+  market_close: "15:30"
+
+database:
+  # Relative paths resolve against the project root.
+  path: data/trading.db
+
+logging:
+  level: INFO
+  directory: logs
+  file_name: bot.jsonl
+  console: true
+  max_bytes: 10485760   # 10 MiB per file
+  backup_count: 10
