@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
 from core.clock import now_ist
@@ -198,6 +198,26 @@ class KillSwitch:
             else:
                 self.strategy_events[sid] = ev
             log.critical("kill switch restored as ACTIVE after restart", extra={"strategy_id": sid})
+
+    def roll_day(self, today: date) -> list[str]:
+        """New trading day: clear kill events from PREVIOUS days only ("disabled
+        for the day"). Anything triggered today is never auto-cleared.
+        Returns the scopes cleared; each is audited."""
+        cleared: list[str] = []
+        if self.global_event is not None and self.global_event.at.date() < today:
+            self.global_event = None
+            cleared.append("GLOBAL")
+        for sid, ev in list(self.strategy_events.items()):
+            if ev.at.date() < today:
+                del self.strategy_events[sid]
+                cleared.append(sid)
+        for scope in cleared:
+            scope_sid: str | None = None if scope == "GLOBAL" else scope
+            log.warning("kill switch cleared for new trading day", extra={"strategy_id": scope_sid,
+                                                                          "day": str(today)})
+            self._record(RESET_EVENT, RiskSeverity.INFO, "NEW_DAY", f"auto-cleared for trading day {today}",
+                         scope_sid, {"operator": "system:new_day"})
+        return cleared
 
     def status(self) -> dict[str, object]:
         return {

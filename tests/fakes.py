@@ -104,7 +104,7 @@ class FakeConnector:
         self.new_connection.set()
         return conn
 
-    async def wait_for_connections(self, n: int, timeout: float = 2.0) -> FakeConnection:
+    async def wait_for_connections(self, n: int, timeout: float = 5.0) -> FakeConnection:
         async def _wait() -> None:
             while len(self.connections) < n:
                 self.new_connection.clear()

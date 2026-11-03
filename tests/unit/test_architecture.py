@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 PACKAGES = (
     "backtest", "broker", "config", "core", "dashboard", "data", "data.storage", "execution",
-    "learning", "ml", "monitoring", "options", "risk", "strategies",
+    "learning", "ml", "monitoring", "options", "risk", "runtime", "strategies",
 )  # fmt: skip
 PROJECT_TOP_LEVEL = {p.split(".")[0] for p in PACKAGES}
 
@@ -117,3 +117,15 @@ def test_gitignore_protects_secrets_and_databases() -> None:
     gi = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     for required in (".env", "*.db", "logs/"):
         assert required in gi
+
+
+def test_strategies_never_import_broker_or_execution() -> None:
+    for path in _py_files("strategies"):
+        bad = _imported_top_levels(path) & {"broker", "execution", "runtime", "data"}
+        assert not bad, f"{path.relative_to(PROJECT_ROOT)} imports {bad}"
+
+
+def test_only_entry_points_import_runtime() -> None:
+    for pkg in PROJECT_TOP_LEVEL - {"runtime", "dashboard"}:
+        for path in _py_files(pkg):
+            assert "runtime" not in _imported_top_levels(path), f"{path.relative_to(PROJECT_ROOT)} imports runtime"

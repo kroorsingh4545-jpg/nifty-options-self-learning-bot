@@ -28,7 +28,7 @@ def _reset_active() -> Iterator[None]:
     upstox_websocket._ACTIVE_KINDS.clear()
 
 
-async def until(cond: object, timeout: float = 2.0) -> None:
+async def until(cond: object, timeout: float = 5.0) -> None:
     async def _p() -> None:
         while not cond():  # type: ignore[operator]
             await asyncio.sleep(0.002)

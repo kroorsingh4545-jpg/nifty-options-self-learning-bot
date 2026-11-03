@@ -8,7 +8,7 @@ checked against ``config.hard_limits`` and may only be made stricter.
 from __future__ import annotations
 
 import math
-from datetime import datetime, time
+from datetime import date, datetime, time
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -68,12 +68,25 @@ class AppSection(_Frozen):
 class MarketSession(_Frozen):
     market_open: HHMM = time(9, 15)
     market_close: HHMM = time(15, 30)
+    holidays: tuple[date, ...] = ()
 
     @model_validator(mode="after")
     def _order(self) -> MarketSession:
         if not self.market_open < self.market_close:
             raise ValueError("market_open must be before market_close")
         return self
+
+    def is_trading_day(self, d: date) -> bool:
+        return d.weekday() < 5 and d not in self.holidays
+
+    def is_open(self, at: datetime) -> bool:
+        return self.is_trading_day(at.date()) and self.market_open <= at.time() < self.market_close
+
+
+class InstrumentsSection(_Frozen):
+    nifty_index_key: str = "NSE_INDEX|Nifty 50"
+    nifty_futures_key: str = ""
+    strike_band: int = Field(default=3, ge=0, le=10)
 
 
 class DatabaseSection(_Frozen):
@@ -157,6 +170,7 @@ class ExecutionSection(_Frozen):
 class AppSettings(_Frozen):
     app: AppSection = AppSection()
     market_session: MarketSession = MarketSession()
+    instruments: InstrumentsSection = InstrumentsSection()
     database: DatabaseSection = DatabaseSection()
     broker: BrokerSection = BrokerSection()
     websocket: WebSocketSection = WebSocketSection()

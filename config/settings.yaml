@@ -11,6 +11,16 @@ app:
 market_session:
   market_open: "09:15"
   market_close: "15:30"
+  # NSE trading holidays (YYYY-MM-DD). Keep this list current each year.
+  holidays: []
+
+instruments:
+  nifty_index_key: "NSE_INDEX|Nifty 50"
+  # Near-month NIFTY futures key (NSE_FO|<token>) from the Upstox instrument
+  # master. Required by strategies whose signal_instrument is NIFTY_FUT; if
+  # empty those strategies are disabled at startup (with a CRITICAL log).
+  nifty_futures_key: ""
+  strike_band: 3                 # subscribe ATM +/- N strikes (CE and PE) of the nearest expiry
 
 database:
   # Relative paths resolve against the project root.
