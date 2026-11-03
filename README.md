@@ -2,9 +2,24 @@
 
 A NIFTY weekly options intraday trading bot for Indian markets, using the Upstox Developer API.
 
-> **Status: Phase 1 (foundation) complete.** Configuration, logging, SQLite schema and data-access
-> layer exist. There are no broker calls, strategies, ML, or RL yet. The full roadmap is in
-> [`docs/build-plan.md`](docs/build-plan.md).
+> **Status: Phase 2 (market data + Upstox adapter) complete.** Config, logging, SQLite, the
+> rate-limited Upstox REST/WebSocket adapters, candle builder, option chain and paper broker exist.
+> **No real orders can be placed**: the Upstox order methods refuse unconditionally. Strategies,
+> risk/execution, ML and RL come later. The full roadmap is in [`docs/build-plan.md`](docs/build-plan.md).
+
+## Market data & broker layer (Phase 2)
+
+| Module | Role |
+|---|---|
+| `broker/upstox_rate_limiter.py` | The single gate for every Upstox REST call. Order and standard budgets each enforce 1 s / 60 s / 30 min sliding windows at 80% of the official limits. Requests queue FIFO. HTTP 429 opens a circuit breaker with exponential cooldown that respects `Retry-After`. Repeated 429s lock it until a manual reset. Includes debounce (`RequestCoalescer`) and batching (`KeyBatcher`). |
+| `broker/upstox_rest.py` | Official REST endpoints for option contracts, option chain, LTP, intraday candles, positions, funds, order book, and feed authorize. Retries GETs only. Auth failures and the daily 03:30 token expiry fail fast without looping. **Order methods always refuse.** |
+| `broker/upstox_websocket.py` | Market feed V3 (Protobuf, official `.proto` in `broker/proto/`) and the portfolio stream. Handles subscribe/unsubscribe/change_mode, heartbeat, reconnect with backoff, and re-authorize plus re-subscribe after every reconnect. Limited to one stream of each kind per process. |
+| `broker/paper_broker.py` | Simulates fills against live quotes, with slippage, partial fills, and Indian F&O charges (`broker/charges.py`). Never fills on stale data and refuses naked selling. |
+| `data/` | `market_data.py` (tick cache and staleness), `candle_builder.py` (1/3/5/15-minute candles), `option_chain.py` (chain, strike selection, liquidity filter), `websocket_manager.py`. |
+
+Settings live in `config/settings.yaml` under `broker`, `websocket`, `paper_broker`, and `costs`.
+**Verify the cost rates against the current Upstox/NSE charge sheets.** To regenerate the
+Protobuf module, see `broker/proto/__init__.py`.
 
 ## Setup (Phase 1)
 

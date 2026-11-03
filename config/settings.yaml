@@ -16,6 +16,49 @@ database:
   # Relative paths resolve against the project root.
   path: data/trading.db
 
+broker:
+  rest_base_url: https://api.upstox.com
+  connect_timeout_seconds: 5
+  request_timeout_seconds: 10
+  max_retries: 3                 # idempotent GETs only; order requests are never auto-retried
+  backoff_base_seconds: 0.5
+  backoff_max_seconds: 30
+  queue_timeout_seconds: 30      # max wait for a rate-limit slot before failing
+  debounce_seconds: 1.0          # identical GETs within this window share one call
+  token_expiry_time: "03:30"     # Upstox access tokens expire daily at this IST time
+  circuit_breaker:
+    base_cooldown_seconds: 1
+    max_cooldown_seconds: 60
+    max_consecutive_429: 5       # then the circuit stays open until manually reset
+
+websocket:
+  reconnect_base_seconds: 1
+  reconnect_max_seconds: 60
+  max_reconnect_attempts: 20     # then FAILED (kill-switch trigger in Phase 3)
+  heartbeat_interval_seconds: 15
+  heartbeat_timeout_seconds: 10
+  stale_after_seconds: 10        # connected but silent this long -> data marked stale
+  subscribe_chunk_size: 100
+  market_data_mode: full         # ltpc | full | option_greeks | full_d30
+  portfolio_update_types: [order, position]
+
+paper_broker:
+  starting_funds: 200000
+  slippage_ticks: 1              # adverse ticks added to every simulated fill
+  max_quote_age_seconds: 5       # never fill against a quote older than this
+  simulate_partial_fills: true   # cap fills at top-of-book quantity
+  allow_short_options: false     # strategies buy options; naked selling is refused
+
+# Indian F&O (options) transaction costs. Verify against the current Upstox
+# and NSE charge sheets before relying on simulated P&L.
+costs:
+  brokerage_per_order: 20.0      # ₹ per executed order
+  stt_sell_pct: 0.15             # % of premium, sell side (rate from 2026-04-01)
+  exchange_txn_pct: 0.03503      # % of premium, both sides (NSE options)
+  sebi_fee_per_crore: 10.0       # ₹ per ₹1 crore turnover
+  stamp_duty_buy_pct: 0.003      # % of premium, buy side
+  gst_pct: 18.0                  # on brokerage + exchange txn + SEBI fee
+
 logging:
   level: INFO
   directory: logs
