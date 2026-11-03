@@ -59,13 +59,44 @@ def test_no_raw_os_environ_outside_config() -> None:
             )
 
 
-def test_no_network_clients_in_phase1_modules() -> None:
-    """No module may talk to Upstox yet (broker calls start in Phase 2)."""
-    forbidden = {"requests", "httpx", "aiohttp", "websockets", "websocket", "upstox_client"}
+NETWORK_CLIENTS = {"requests", "httpx", "aiohttp", "websockets", "websocket", "urllib3", "upstox_client"}
+# The ONLY modules allowed to open network connections (both go through the
+# central rate limiter / authorize flow).
+NETWORK_ALLOWED = {
+    Path("broker/upstox_rest.py"): {"httpx"},
+    Path("broker/upstox_websocket.py"): {"websockets"},
+}
+
+
+def test_network_access_only_from_upstox_adapters() -> None:
     for pkg in PROJECT_TOP_LEVEL:
         for path in _py_files(pkg):
-            bad = _imported_top_levels(path) & forbidden
-            assert not bad, f"{path.relative_to(PROJECT_ROOT)} imports {bad}"
+            rel = path.relative_to(PROJECT_ROOT)
+            used = _imported_top_levels(path) & NETWORK_CLIENTS
+            # websockets is imported lazily inside a function; scan text too.
+            if re.search(r"^\s*from websockets|^\s*import websockets", path.read_text(encoding="utf-8"), re.M):
+                used.add("websockets")
+            allowed = NETWORK_ALLOWED.get(rel, set())
+            assert used <= allowed, f"{rel} imports network client(s) {used - allowed}"
+
+
+def test_unofficial_upstox_sdk_not_used() -> None:
+    for pkg in PROJECT_TOP_LEVEL:
+        for path in _py_files(pkg):
+            assert "upstox_client" not in _imported_top_levels(path)
+
+
+def test_only_official_upstox_host_configured() -> None:
+    from config.settings import BrokerSection
+
+    assert BrokerSection().rest_base_url == "https://api.upstox.com"
+    with pytest.raises(ValueError):
+        BrokerSection(rest_base_url="https://evil.example.com")  # type: ignore[arg-type]
+
+
+def test_core_models_do_not_depend_on_broker() -> None:
+    for path in _py_files("core"):
+        assert "broker" not in _imported_top_levels(path)
 
 
 SECRET_PATTERNS = [

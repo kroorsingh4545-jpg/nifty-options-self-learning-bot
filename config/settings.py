@@ -89,10 +89,66 @@ class LoggingSection(_Frozen):
     backup_count: int = Field(default=10, ge=0)
 
 
+class CircuitBreakerSection(_Frozen):
+    base_cooldown_seconds: PositiveFloat = 1.0
+    max_cooldown_seconds: PositiveFloat = 60.0
+    max_consecutive_429: PositiveInt = 5
+
+
+class BrokerSection(_Frozen):
+    rest_base_url: Literal["https://api.upstox.com"] = "https://api.upstox.com"
+    connect_timeout_seconds: PositiveFloat = 5.0
+    request_timeout_seconds: PositiveFloat = 10.0
+    max_retries: int = Field(default=3, ge=0, le=5)
+    backoff_base_seconds: PositiveFloat = 0.5
+    backoff_max_seconds: PositiveFloat = 30.0
+    queue_timeout_seconds: PositiveFloat = 30.0
+    debounce_seconds: NonNegativeFloat = 1.0
+    token_expiry_time: HHMM = time(3, 30)
+    circuit_breaker: CircuitBreakerSection = CircuitBreakerSection()
+
+
+MarketDataMode = Literal["ltpc", "full", "option_greeks", "full_d30"]
+PortfolioUpdateType = Literal["order", "position", "holding", "gtt_order"]
+
+
+class WebSocketSection(_Frozen):
+    reconnect_base_seconds: PositiveFloat = 1.0
+    reconnect_max_seconds: PositiveFloat = 60.0
+    max_reconnect_attempts: PositiveInt = 20
+    heartbeat_interval_seconds: PositiveFloat = 15.0
+    heartbeat_timeout_seconds: PositiveFloat = 10.0
+    stale_after_seconds: PositiveFloat = 10.0
+    subscribe_chunk_size: int = Field(default=100, ge=1, le=500)
+    market_data_mode: MarketDataMode = "full"
+    portfolio_update_types: tuple[PortfolioUpdateType, ...] = ("order", "position")
+
+
+class PaperBrokerSection(_Frozen):
+    starting_funds: PositiveFloat = 200_000.0
+    slippage_ticks: int = Field(default=1, ge=0, le=20)
+    max_quote_age_seconds: PositiveFloat = 5.0
+    simulate_partial_fills: bool = True
+    allow_short_options: Literal[False] = False
+
+
+class CostsSection(_Frozen):
+    brokerage_per_order: NonNegativeFloat = 20.0
+    stt_sell_pct: NonNegativeFloat = 0.15
+    exchange_txn_pct: NonNegativeFloat = 0.03503
+    sebi_fee_per_crore: NonNegativeFloat = 10.0
+    stamp_duty_buy_pct: NonNegativeFloat = 0.003
+    gst_pct: NonNegativeFloat = 18.0
+
+
 class AppSettings(_Frozen):
     app: AppSection = AppSection()
     market_session: MarketSession = MarketSession()
     database: DatabaseSection = DatabaseSection()
+    broker: BrokerSection = BrokerSection()
+    websocket: WebSocketSection = WebSocketSection()
+    paper_broker: PaperBrokerSection = PaperBrokerSection()
+    costs: CostsSection = CostsSection()
     logging: LoggingSection = LoggingSection()
 
 
