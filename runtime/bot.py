@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import date, datetime, time
 from typing import Any
 
@@ -52,11 +52,13 @@ from data.instruments import InstrumentMaster, build_master
 from data.market_data import MarketDataService
 from data.storage.repositories import Repositories
 from execution.stack import ExecutionStack, build_stack
+from ml.inference_service import InferenceService, StrategyModels
 from monitoring.alerts import Alert
 from monitoring.json_logger import get_logger
 from runtime.contracts import OptionContractResolver, OptionUniverse
 from runtime.control import ControlService
 from runtime.gateway import RiskEntryGateway
+from runtime.ml import build_inference
 from strategies.base_strategy import BaseStrategy
 from strategies.registry import STRATEGY_CLASSES
 
@@ -109,6 +111,8 @@ class TradingBot:
         instrument_refresh_attempts: int = 5,
         instrument_retry_seconds: float = 30.0,
         wall_fn: Callable[[], datetime] = now_ist,
+        ml_models: Mapping[str, StrategyModels] | None = None,
+        ml_research: bool = False,
     ) -> None:
         if cfg.mode is not TradingMode.PAPER:
             raise RuntimeError("only PAPER mode can run in this build")
@@ -128,7 +132,13 @@ class TradingBot:
                                                  now_fn=now_fn, sleep=sleep,
                                                  reconcile_confirm_delay=reconcile_confirm_delay)
         self.mode = ModeController(live_available=False, autonomy=cfg.settings.app.autonomy_level, now_fn=now_fn)
-        self.filter = signal_filter or PassThroughFilter()
+        self.filter: SignalFilter = signal_filter or PassThroughFilter()
+        self._filter_injected = signal_filter is not None
+        # Per-strategy ML models (HISTORICAL production models; research=True
+        # allows SYNTHETIC research models in PAPER backtests only).
+        self._ml_models = dict(ml_models or {})
+        self._ml_research = ml_research
+        self.inference: InferenceService | None = None
         self.scheduler = scheduler or TradingScheduler()
         session = cfg.settings.market_session
         self.candles = CandleBuilder(session_open=session.market_open, session_close=session.market_close)
@@ -198,6 +208,7 @@ class TradingBot:
                                           block_fn=self.instrument_block_reason)
         self._resolver = resolver
         gateway = RiskEntryGateway(self.cfg, s, self.broker)
+        self._attach_ml()
         strategies: list[StrategyProtocol] = list(self.strategies)
         self.engine = TradingEngine(strategies=strategies, resolver=resolver, gateway=gateway,
                                     signal_filter=self.filter, bus=self.bus,
@@ -212,6 +223,23 @@ class TradingBot:
         await s.reconciler.reconcile("startup")
         log.info("bot prepared", extra={**self.instrument_summary,
                                         "strategies": [x.strategy_id for x in self.strategies]})
+
+    def _attach_ml(self) -> None:
+        """Use the ML inference service as the signal filter when any strategy
+        enables ML (and no filter was injected). A strategy with ML enabled but
+        no deployable model has every entry refused (fail-closed)."""
+        enabled = [sid for sid, s in self.cfg.strategies.strategies.items() if s.ml.enabled]
+        if self._filter_injected or not enabled:
+            return
+        missing = [sid for sid in enabled if self._ml_models.get(sid) is None
+                   or self._ml_models[sid].signal_filter is None]
+        if missing:
+            log.critical("ML is enabled but no deployable signal-filter model was loaded: entries for these "
+                         "strategies are refused (fail-closed)", extra={"strategies": missing})
+        self.inference = build_inference(self, self._ml_models, research=self._ml_research)
+        self.filter = self.inference
+        log.info("ML signal filter attached", extra={"strategies": enabled, "research": self._ml_research,
+                                                     "models": {k: v.versions() for k, v in self._ml_models.items()}})
 
     def _paper_book_entries(self) -> list[BookEntry]:
         """Persisted PAPER orders + fills, oldest first, for the paper broker."""
@@ -296,6 +324,8 @@ class TradingBot:
             for strat in self.strategies:
                 if signal_source(self.cfg, strat.strategy_id) == "NIFTY_FUT":
                     strat.set_signal_instrument(new_future)
+            if self.inference is not None:
+                self.inference.features.set_futures_key(new_future)
             held = {t.instrument.instrument_key for t in self.stack.positions.open_trades()}
             remove = {old_future} - held if old_future else set()
             await self._subscribe({new_future}, remove)
@@ -389,4 +419,5 @@ class TradingBot:
             "session_phase": s.square_off.phase().value,
             "open_trades": s.positions.open_trade_count(),
             "instruments": self.instrument_summary,
+            "ml": dict(self.inference.last) if self.inference is not None else {},
         }

@@ -2,12 +2,30 @@
 
 A NIFTY weekly options intraday trading bot for Indian markets, using the Upstox Developer API.
 
-> **Status: Phase 6 (backtesting) complete.** On top of Phases 1–5: an event-driven backtester that replays
-> historical 1-minute candles through the real PAPER bot on simulated time, with Indian F&O costs, walk-forward
-> validation and purged cross-validation. PAPER is the default, and LIVE is always refused in this build.
-> **No real orders can be placed.** ML and RL come next. Roadmap: [`docs/build-plan.md`](docs/build-plan.md).
+> **Status: Phase 7 (ML layer) complete.** On top of Phases 1–6: point-in-time features, triple-barrier labels,
+> LightGBM signal filter / outcome predictor / regime classifier with purged, embargoed walk-forward validation
+> over 5+ seeds, and a model registry. **There is no real historical data yet: every model so far is trained
+> on SYNTHETIC data and can never be promoted.** ML is off by default. PAPER is the default, and LIVE is
+> always refused in this build. **No real orders can be placed.** RL comes next.
+> Roadmap: [`docs/build-plan.md`](docs/build-plan.md). ML: [`docs/ml-layer.md`](docs/ml-layer.md).
 > Backtesting: [`docs/backtesting.md`](docs/backtesting.md). Dashboard: [`docs/dashboard.md`](docs/dashboard.md).
 > Strategies and engine: [`docs/strategies.md`](docs/strategies.md). Risk audits: [`docs/audits/`](docs/audits/).
+
+## ML layer (Phase 7)
+
+```bash
+python -m ml train --synthetic --lot-units 65 --days 30 --strategy orb_options --kind all   # SYNTHETIC research run
+python -m ml train --data path/to/dataset --strategy vwap_ema --kind signal_filter        # your historical data
+python -m ml list --research
+```
+
+Features are computed only from data available at the decision time, by the same function in training and
+live inference. Labels use a triple barrier (target / stop-loss / time, capped at the square-off start).
+Validation is chronological, purged and embargoed, with a final untouched holdout and at least 5 seeds.
+The signal filter can only veto, delay or shrink an entry (threshold 0.60). It never touches stops or risk
+limits, and the risk manager re-checks every entry. Models trained on SYNTHETIC data are refused for
+validation, promotion and trading by the database, the registry and the inference service. See
+[`docs/ml-layer.md`](docs/ml-layer.md) for the feature dictionary, pipeline and registry schema.
 
 ## Backtesting (Phase 6)
 
@@ -125,7 +143,9 @@ log.info("signal generated", extra={"side": "CE"})
 
 SQLite at `data/trading.db` (git-ignored, WAL mode, foreign keys on). The schema is
 `data/storage/schema.sql`. Tables: `strategies`, `orders`, `fills`, `positions`, `trades`, `daily_pnl`
-(+ view `v_daily_pnl_global`), `risk_events`, `feature_snapshots`, `model_runs`, `learning_events`.
+(+ view `v_daily_pnl_global`), `risk_events`, `feature_snapshots`, `model_runs`, `learning_events`,
+`control_commands`, `runtime_state`. Schema v4 adds `model_runs.data_source`: only models trained on
+HISTORICAL data can be validated or promoted.
 
 PAPER/LIVE separation is enforced **by the database itself**, not only by Python:
 - Every order, fill, position and trade row has a `mode` column.

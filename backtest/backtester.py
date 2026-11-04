@@ -60,6 +60,7 @@ from data.storage.bootstrap import sync_strategies
 from data.storage.database import Database
 from data.storage.records import DailyPnlRecord, FillRecord, OrderRecord, RiskEventRecord, TradeRecord
 from data.storage.repositories import Repositories
+from ml.inference_service import StrategyModels
 from monitoring.json_logger import get_logger
 from runtime.bot import TradingBot
 
@@ -324,6 +325,21 @@ def with_strategy_overrides(cfg: BotConfig, overrides: Mapping[str, Mapping[str,
         raise BacktestConfigError(f"invalid strategy overrides: {exc}") from exc
 
 
+def with_ml_enabled(cfg: BotConfig, strategy_ids: Sequence[str]) -> BotConfig:
+    """Turn ON the ML signal filter for these strategies (only the
+    ``ml.enabled`` flag; thresholds stay as configured), fully re-validated.
+    The filter can only veto or shrink entries."""
+    unknown = set(strategy_ids) - set(cfg.strategies.strategies)
+    if unknown:
+        raise BacktestConfigError(f"unknown strategies {sorted(unknown)}")
+    data = {sid: s.model_dump() for sid, s in cfg.strategies.strategies.items()}
+    for sid in strategy_ids:
+        data[sid]["ml"]["enabled"] = True
+    strategies = StrategyDefaults.model_validate({"strategies": data})
+    return BotConfig(project_root=cfg.project_root, settings=cfg.settings, risk=cfg.risk, strategies=strategies,
+                     env=cfg.env)
+
+
 def with_settings_overrides(cfg: BotConfig, overrides: Mapping[str, Mapping[str, Any]]) -> BotConfig:
     """Override ``settings.yaml`` sections (e.g. ``paper_broker.slippage_ticks``,
     ``costs``, ``market_session.holidays``) with full re-validation."""
@@ -413,6 +429,12 @@ class BacktestOptions:
     strategies: tuple[str, ...] | None = None  # None = every strategy enabled in config
     database_path: Path | None = None  # None = in memory
     progress: Callable[[date, int, int], None] | None = None
+    #: Phase 7: run these strategies with the ML signal filter ON, using
+    #: ``ml_models`` (per strategy). ``ml_research`` allows SYNTHETIC research
+    #: models (backtests only). Empty = the configured ``ml.enabled`` flags.
+    ml_strategies: tuple[str, ...] = ()
+    ml_models: Mapping[str, StrategyModels] | None = None
+    ml_research: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -431,6 +453,8 @@ class Backtester:
                 raise BacktestConfigError(f"unknown strategies {sorted(unknown)}")
             cfg = with_strategy_overrides(cfg, {sid: {"enabled": sid in self.options.strategies}
                                                 for sid in cfg.strategies.strategies})
+        if self.options.ml_strategies:
+            cfg = with_ml_enabled(cfg, self.options.ml_strategies)
         self.cfg = cfg
         self.dataset = dataset
         session = cfg.settings.market_session
@@ -484,7 +508,8 @@ class Backtester:
         # confirmation wait could never be woken; a mismatch then kills at once (fail-safe).
         bot = TradingBot(cfg, repos=repos, broker=broker, market_data=md, source=HistoricalSource(ds.instruments),
                          subscriber=subscriber, now_fn=clock, sleep=clock.sleep, scheduler=scheduler,
-                         reconcile_confirm_delay=0, instrument_refresh_attempts=1, wall_fn=clock)
+                         reconcile_confirm_delay=0, instrument_refresh_attempts=1, wall_fn=clock,
+                         ml_models=self.options.ml_models, ml_research=self.options.ml_research)
         raw_fills: list[tuple[OrderUpdate, float]] = []
 
         def on_fill(u: OrderUpdate) -> None:
