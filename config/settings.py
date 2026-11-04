@@ -432,8 +432,23 @@ class StrategyRiskConfig(_Frozen):
 
 
 class MLConfig(_Frozen):
+    """Per-strategy ML signal filter policy. The filter can only veto, delay
+    or SHRINK an entry (size multiplier in [min_size_multiplier, 1]); it
+    never touches stops, targets or risk limits."""
+
     enabled: bool = False
-    confidence_threshold: float = Field(default=0.60, ge=0.0, le=1.0)
+    confidence_threshold: float = Field(default=0.60, ge=0.0, le=1.0)  # below: veto
+    reduce_below: float = Field(default=0.70, ge=0.0, le=1.0)  # [threshold, reduce_below): reduced size
+    min_size_multiplier: float = Field(default=0.5, gt=0.0, le=1.0)  # size at score == threshold
+    delay_band: float = Field(default=0.05, ge=0.0, le=0.5)  # [threshold - band, threshold): DELAY
+
+    @model_validator(mode="after")
+    def _order(self) -> MLConfig:
+        if self.reduce_below < self.confidence_threshold:
+            raise ValueError("ml.reduce_below must be >= ml.confidence_threshold")
+        if self.delay_band > self.confidence_threshold:
+            raise ValueError("ml.delay_band cannot exceed ml.confidence_threshold")
+        return self
 
 
 class StrategyConfig(_Frozen):
