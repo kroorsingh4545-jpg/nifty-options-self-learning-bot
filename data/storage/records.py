@@ -40,6 +40,11 @@ StrategyId = Annotated[str, Field(pattern=STRATEGY_ID_PATTERN)]
 
 
 def _now() -> datetime:
+    """Placeholder default for clock-stamped timestamp fields.
+
+    Repositories replace every such field the caller left unset with THEIR
+    injected clock on insert/upsert (``Record.clock_fields``), so a backtest
+    running on simulated time never persists a wall-clock timestamp."""
     return now_ist()
 
 
@@ -50,6 +55,11 @@ class Record(BaseModel):
 
     #: Fields serialised as JSON text columns.
     json_fields: ClassVar[tuple[str, ...]] = ()
+
+    @classmethod
+    def clock_fields(cls) -> tuple[str, ...]:
+        """Timestamp fields defaulting to "now": stamped by the repository clock."""
+        return tuple(n for n, f in cls.model_fields.items() if f.default_factory is _now)
 
     @field_validator("*", mode="before")
     @classmethod

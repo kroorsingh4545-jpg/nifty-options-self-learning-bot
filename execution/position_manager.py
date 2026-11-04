@@ -234,9 +234,12 @@ class PositionManager(OpenTradeCounter):
         t.exit_value += qty * price
         t.charges += charges
         if t.exit_reason is None:
-            t.exit_reason = {OrderPurpose.STOP_LOSS: ExitReason.STOP_LOSS, OrderPurpose.TARGET: ExitReason.TARGET,
-                             OrderPurpose.SQUARE_OFF: ExitReason.SQUARE_OFF,
-                             OrderPurpose.KILL_SWITCH: ExitReason.KILL_SWITCH}.get(purpose, ExitReason.MANUAL)
+            reason = {OrderPurpose.STOP_LOSS: ExitReason.STOP_LOSS, OrderPurpose.TARGET: ExitReason.TARGET,
+                      OrderPurpose.SQUARE_OFF: ExitReason.SQUARE_OFF,
+                      OrderPurpose.KILL_SWITCH: ExitReason.KILL_SWITCH}.get(purpose, ExitReason.MANUAL)
+            if reason is ExitReason.STOP_LOSS and t.trail.active:
+                reason = ExitReason.TRAILING_STOP  # the resting stop had been trailed (label only)
+            t.exit_reason = reason
         self._sync_position(t, realized_delta=realized)
         if t.open_qty == 0 and t.entry_complete:
             self._close_trade(t)

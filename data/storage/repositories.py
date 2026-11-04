@@ -5,13 +5,19 @@ events, feature snapshots) are bound to ONE trading mode at construction.
 Every read filters by that mode and every write is rejected if the record's
 mode differs, so PAPER code cannot read or write LIVE rows and vice versa.
 Strategy isolation is preserved by always scoping by ``strategy_id``.
+
+Clock: every repository writes timestamps (``updated_at``, ``closed_at``,
+``exit_time``, and any record timestamp the caller left at its default) from
+ONE injected clock, ``Repositories(clock=...)``. The bot binds it to its own
+``now_fn`` (``Repositories.with_clock``), so a backtest on simulated time
+persists simulated timestamps only; the wall clock is just the default.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import date, datetime
 from typing import Any, TypeVar
 
@@ -43,6 +49,7 @@ from data.storage.records import (
 )
 
 R = TypeVar("R", bound=Record)
+Clock = Callable[[], datetime]
 
 _IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
@@ -93,9 +100,29 @@ def _to_value(value: Any) -> Any:
     return value
 
 
-class _ModeScoped:
-    def __init__(self, db: Database, mode: TradingMode) -> None:
+def _stamp(record: R, clock: Clock) -> R:
+    """Set every clock-stamped field the caller did not pass explicitly to
+    the repository clock (explicit values are kept)."""
+    unset = [n for n in record.clock_fields() if n not in record.model_fields_set]
+    if not unset:
+        return record
+    now = ensure_ist(clock())
+    return record.model_copy(update=dict.fromkeys(unset, now))
+
+
+class _Clocked:
+    def __init__(self, db: Database, *, clock: Clock = now_ist) -> None:
         self.db = db
+        self.clock = clock
+
+    def now(self) -> datetime:
+        """The repository clock's current time (IST)."""
+        return ensure_ist(self.clock())
+
+
+class _ModeScoped(_Clocked):
+    def __init__(self, db: Database, mode: TradingMode, *, clock: Clock = now_ist) -> None:
+        super().__init__(db, clock=clock)
         self.mode = TradingMode(mode)
 
     def _guard(self, record: Any) -> None:
@@ -124,11 +151,9 @@ class _ModeScoped:
 # --------------------------------------------------------------------------- #
 
 
-class StrategyRepository:
-    def __init__(self, db: Database) -> None:
-        self.db = db
-
+class StrategyRepository(_Clocked):
     def upsert(self, record: StrategyRecord) -> None:
+        record = _stamp(record, self.clock)
         _upsert(self.db, "strategies", record.to_row(), conflict=("strategy_id",), keep=("created_at",))
 
     def get(self, strategy_id: str) -> StrategyRecord | None:
@@ -157,7 +182,7 @@ class StrategyRepository:
 class OrderRepository(_ModeScoped):
     def insert(self, order: OrderRecord) -> int:
         self._guard(order)
-        return _insert(self.db, "orders", order.to_row(exclude={"id"}))
+        return _insert(self.db, "orders", _stamp(order, self.clock).to_row(exclude={"id"}))
 
     def get(self, client_order_id: str) -> OrderRecord | None:
         row = self.db.query_one(
@@ -213,7 +238,7 @@ class OrderRepository(_ModeScoped):
         identifier immutability."""
         if broker_order_id is not None and self.mode is TradingMode.PAPER:
             raise ModeIsolationError("PAPER orders cannot be given a broker_order_id")
-        fields: dict[str, Any] = {"status": OrderStatus(status), "updated_at": now_ist()}
+        fields: dict[str, Any] = {"status": OrderStatus(status), "updated_at": self.now()}
         if filled_quantity is not None:
             fields["filled_quantity"] = filled_quantity
         if average_price is not None:
@@ -229,7 +254,7 @@ class OrderRepository(_ModeScoped):
 class FillRepository(_ModeScoped):
     def insert(self, fill: FillRecord) -> int:
         self._guard(fill)
-        return _insert(self.db, "fills", fill.to_row(exclude={"id"}))
+        return _insert(self.db, "fills", _stamp(fill, self.clock).to_row(exclude={"id"}))
 
     def list_all(self) -> list[FillRecord]:
         """Every fill for this mode, oldest first."""
@@ -251,7 +276,7 @@ class FillRepository(_ModeScoped):
 class PositionRepository(_ModeScoped):
     def insert(self, position: PositionRecord) -> int:
         self._guard(position)
-        return _insert(self.db, "positions", position.to_row(exclude={"id"}))
+        return _insert(self.db, "positions", _stamp(position, self.clock).to_row(exclude={"id"}))
 
     def get_open(self, strategy_id: str, instrument_key: str) -> PositionRecord | None:
         row = self.db.query_one(
@@ -276,13 +301,13 @@ class PositionRepository(_ModeScoped):
         bad = set(fields) - allowed
         if bad:
             raise ValueError(f"cannot update position fields: {sorted(bad)}")
-        fields["updated_at"] = now_ist()
+        fields["updated_at"] = self.now()
         if self._update("positions", {"id": position_id}, fields) == 0:
             raise NotFoundError(f"{self.mode.value} position {position_id} not found")
 
     def close(self, position_id: int, realized_pnl: float) -> None:
         self.update(
-            position_id, quantity=0, status=PositionStatus.CLOSED, closed_at=now_ist(), realized_pnl=realized_pnl,
+            position_id, quantity=0, status=PositionStatus.CLOSED, closed_at=self.now(), realized_pnl=realized_pnl,
             unrealized_pnl=0.0,
         )
 
@@ -290,7 +315,7 @@ class PositionRepository(_ModeScoped):
 class TradeRepository(_ModeScoped):
     def insert(self, trade: TradeRecord) -> int:
         self._guard(trade)
-        return _insert(self.db, "trades", trade.to_row(exclude={"id"}))
+        return _insert(self.db, "trades", _stamp(trade, self.clock).to_row(exclude={"id"}))
 
     def get(self, trade_uid: str) -> TradeRecord | None:
         row = self.db.query_one(
@@ -317,7 +342,7 @@ class TradeRepository(_ModeScoped):
         bad = set(fields) - self._UPDATABLE
         if bad:
             raise ValueError(f"cannot update trade fields: {sorted(bad)}")
-        fields["updated_at"] = now_ist()
+        fields["updated_at"] = self.now()
         if self._update("trades", {"trade_uid": trade_uid}, fields) == 0:
             raise NotFoundError(f"{self.mode.value} trade {trade_uid!r} not found")
 
@@ -352,7 +377,7 @@ class TradeRepository(_ModeScoped):
         charges: float,
         r_multiple: float | None = None,
     ) -> None:
-        now = now_ist()
+        now = self.now()
         fields = {
             "exit_price": exit_price,
             "exit_time": now,
@@ -376,6 +401,7 @@ class TradeRepository(_ModeScoped):
 class DailyPnlRepository(_ModeScoped):
     def upsert(self, record: DailyPnlRecord) -> None:
         self._guard(record)
+        record = _stamp(record, self.clock)
         _upsert(self.db, "daily_pnl", record.to_row(), conflict=("trade_date", "mode", "strategy_id"), keep=())
 
     def get(self, day: date, strategy_id: str) -> DailyPnlRecord | None:
@@ -402,7 +428,7 @@ class DailyPnlRepository(_ModeScoped):
 class RiskEventRepository(_ModeScoped):
     def insert(self, event: RiskEventRecord) -> int:
         self._guard(event)
-        return _insert(self.db, "risk_events", event.to_row(exclude={"id"}))
+        return _insert(self.db, "risk_events", _stamp(event, self.clock).to_row(exclude={"id"}))
 
     def recent(self, limit: int = 50, strategy_id: str | None = None) -> list[RiskEventRecord]:
         sql = "SELECT * FROM risk_events WHERE mode = ?"
@@ -428,7 +454,7 @@ class RiskEventRepository(_ModeScoped):
 class FeatureSnapshotRepository(_ModeScoped):
     def insert(self, snapshot: FeatureSnapshotRecord) -> int:
         self._guard(snapshot)
-        return _insert(self.db, "feature_snapshots", snapshot.to_row(exclude={"id"}))
+        return _insert(self.db, "feature_snapshots", _stamp(snapshot, self.clock).to_row(exclude={"id"}))
 
     def list_for_trade(self, trade_uid: str) -> list[FeatureSnapshotRecord]:
         rows = self.db.query(
@@ -443,12 +469,9 @@ class FeatureSnapshotRepository(_ModeScoped):
 # --------------------------------------------------------------------------- #
 
 
-class ModelRunRepository:
-    def __init__(self, db: Database) -> None:
-        self.db = db
-
+class ModelRunRepository(_Clocked):
     def insert(self, run: ModelRunRecord) -> int:
-        return _insert(self.db, "model_runs", run.to_row(exclude={"id"}))
+        return _insert(self.db, "model_runs", _stamp(run, self.clock).to_row(exclude={"id"}))
 
     def get(self, run_id: str) -> ModelRunRecord | None:
         row = self.db.query_one("SELECT * FROM model_runs WHERE run_id = ?", (run_id,))
@@ -471,18 +494,15 @@ class ModelRunRepository:
             raise ValueError("LIVE_APPROVED requires a named human approver")
         cur = self.db.execute(
             "UPDATE model_runs SET status = ?, approved_by = COALESCE(?, approved_by), updated_at = ? WHERE run_id = ?",
-            (status.value, approved_by, now_ist().isoformat(), run_id),
+            (status.value, approved_by, self.now().isoformat(), run_id),
         )
         if cur.rowcount == 0:
             raise NotFoundError(f"model run {run_id!r} not found")
 
 
-class LearningEventRepository:
-    def __init__(self, db: Database) -> None:
-        self.db = db
-
+class LearningEventRepository(_Clocked):
     def insert(self, event: LearningEventRecord) -> int:
-        return _insert(self.db, "learning_events", event.to_row(exclude={"id"}))
+        return _insert(self.db, "learning_events", _stamp(event, self.clock).to_row(exclude={"id"}))
 
     def list_for_strategy(self, strategy_id: str) -> list[LearningEventRecord]:
         rows = self.db.query(
@@ -501,7 +521,7 @@ class ControlCommandRepository(_ModeScoped):
         self._guard(cmd)
         if cmd.status is not ControlCommandStatus.PENDING:
             raise ValueError("new commands must be PENDING")
-        return _insert(self.db, "control_commands", cmd.to_row(exclude={"id"}))
+        return _insert(self.db, "control_commands", _stamp(cmd, self.clock).to_row(exclude={"id"}))
 
     def get(self, command_id: int) -> ControlCommandRecord | None:
         row = self.db.query_one("SELECT * FROM control_commands WHERE mode = ? AND id = ?",
@@ -552,23 +572,31 @@ class RuntimeStateRepository(_ModeScoped):
 
 
 class Repositories:
-    """All repositories for one trading mode, sharing one Database."""
+    """All repositories for one trading mode, sharing one Database and one
+    clock (the source of every timestamp they write)."""
 
-    def __init__(self, db: Database, mode: TradingMode) -> None:
+    def __init__(self, db: Database, mode: TradingMode, *, clock: Clock = now_ist) -> None:
         self.db = db
         self.mode = TradingMode(mode)
-        self.strategies = StrategyRepository(db)
-        self.orders = OrderRepository(db, self.mode)
-        self.fills = FillRepository(db, self.mode)
-        self.positions = PositionRepository(db, self.mode)
-        self.trades = TradeRepository(db, self.mode)
-        self.daily_pnl = DailyPnlRepository(db, self.mode)
-        self.risk_events = RiskEventRepository(db, self.mode)
-        self.feature_snapshots = FeatureSnapshotRepository(db, self.mode)
-        self.model_runs = ModelRunRepository(db)
-        self.learning_events = LearningEventRepository(db)
-        self.commands = ControlCommandRepository(db, self.mode)
-        self.runtime_state = RuntimeStateRepository(db, self.mode)
+        self.clock = clock
+        self.strategies = StrategyRepository(db, clock=clock)
+        self.orders = OrderRepository(db, self.mode, clock=clock)
+        self.fills = FillRepository(db, self.mode, clock=clock)
+        self.positions = PositionRepository(db, self.mode, clock=clock)
+        self.trades = TradeRepository(db, self.mode, clock=clock)
+        self.daily_pnl = DailyPnlRepository(db, self.mode, clock=clock)
+        self.risk_events = RiskEventRepository(db, self.mode, clock=clock)
+        self.feature_snapshots = FeatureSnapshotRepository(db, self.mode, clock=clock)
+        self.model_runs = ModelRunRepository(db, clock=clock)
+        self.learning_events = LearningEventRepository(db, clock=clock)
+        self.commands = ControlCommandRepository(db, self.mode, clock=clock)
+        self.runtime_state = RuntimeStateRepository(db, self.mode, clock=clock)
+
+    def with_clock(self, clock: Clock) -> Repositories:
+        """The same database and mode, stamping timestamps with ``clock``."""
+        if clock is self.clock:
+            return self
+        return Repositories(self.db, self.mode, clock=clock)
 
 
 __all__: Sequence[str] = (

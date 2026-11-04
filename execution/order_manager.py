@@ -23,7 +23,6 @@ Order lifecycle (persisted in ``orders``; fills appended to ``fills``)::
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -332,12 +331,21 @@ class OrderManager:
         return ok
 
     async def wait_terminal(self, client_order_id: str, timeout: float) -> OrderRecord | None:
+        """Wait until the order is terminal or ``timeout`` elapses on the
+        injected clock (``sleep``): real seconds live, simulated seconds in a
+        backtest, so a backtest never depends on wall-clock timers."""
         ev = self._events.get(client_order_id)
         rec = self.get(client_order_id)
         if rec is None or rec.status in TERMINAL or ev is None:
             return rec
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(ev.wait(), timeout)
+        done = asyncio.ensure_future(ev.wait())
+        timer = asyncio.ensure_future(self._sleep(timeout))
+        try:
+            await asyncio.wait({done, timer}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for fut in (done, timer):
+                fut.cancel()
+            await asyncio.gather(done, timer, return_exceptions=True)
         return self.get(client_order_id)
 
     async def resolve_unknown(self, client_order_id: str) -> OrderStatus:

@@ -2,13 +2,26 @@
 
 A NIFTY weekly options intraday trading bot for Indian markets, using the Upstox Developer API.
 
-> **Status: Phase 5 (dashboard) complete.** On top of Phases 1–4: a Streamlit dashboard that shows the
-> PAPER bot's live state and sends operator commands (kill switch, named reset with strategy re-activation,
-> manual exits, Start/Pause/Stop, autonomy, LIVE request) through the risk and execution services. PAPER is
-> the default, and LIVE is always refused in this build. **No real orders can be placed.** Backtesting, ML
-> and RL come next. Roadmap: [`docs/build-plan.md`](docs/build-plan.md). Dashboard:
-> [`docs/dashboard.md`](docs/dashboard.md). Strategies and engine: [`docs/strategies.md`](docs/strategies.md).
-> Risk audits: [`docs/audits/`](docs/audits/).
+> **Status: Phase 6 (backtesting) complete.** On top of Phases 1–5: an event-driven backtester that replays
+> historical 1-minute candles through the real PAPER bot on simulated time, with Indian F&O costs, walk-forward
+> validation and purged cross-validation. PAPER is the default, and LIVE is always refused in this build.
+> **No real orders can be placed.** ML and RL come next. Roadmap: [`docs/build-plan.md`](docs/build-plan.md).
+> Backtesting: [`docs/backtesting.md`](docs/backtesting.md). Dashboard: [`docs/dashboard.md`](docs/dashboard.md).
+> Strategies and engine: [`docs/strategies.md`](docs/strategies.md). Risk audits: [`docs/audits/`](docs/audits/).
+
+## Backtesting (Phase 6)
+
+```bash
+python -m backtest synthetic --lot-units 65 --days 20 --seed 7 --out reports/synthetic   # SYNTHETIC demo data
+python -m backtest run --data path/to/dataset --out reports/run1              # your historical data
+python -m backtest walk-forward --data path/to/dataset --train 10 --test 5 --embargo 1 --holdout 5 --out reports/wf
+```
+
+The backtest runs the same strategy, risk and execution code as PAPER trading, on a simulated clock: every
+order, fill, position, trade and strategy timestamp is simulated time. Reports cover returns, a CAGR-like
+daily metric, win rate, profit factor, drawdown, Sharpe, trade duration, cost impact (brokerage, STT,
+exchange, SEBI, stamp duty, GST, spread, slippage), risk compliance and per-strategy results. See
+[`docs/backtesting.md`](docs/backtesting.md) for the dataset format and the fill model.
 
 ## Dashboard (Phase 5)
 

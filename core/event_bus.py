@@ -44,10 +44,11 @@ Handler = Callable[[Event], Any]
 
 
 class EventBus:
-    def __init__(self, history: int = 200) -> None:
+    def __init__(self, history: int = 200, *, now_fn: Callable[[], datetime] = now_ist) -> None:
         self._handlers: dict[Topic, list[Handler]] = defaultdict(list)
         self._recent: dict[Topic, deque[Event]] = defaultdict(lambda: deque(maxlen=history))
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._now = now_fn  # the bot's clock: simulated time in backtests
         self.errors = 0
 
     def subscribe(self, topic: Topic, handler: Handler) -> Callable[[], None]:
@@ -55,7 +56,7 @@ class EventBus:
         return lambda: self._handlers[topic].remove(handler)
 
     def publish(self, topic: Topic, payload: Any) -> Event:
-        ev = Event(topic, payload)
+        ev = Event(topic, payload, self._now())
         self._recent[topic].append(ev)
         for h in list(self._handlers[topic]):
             try:

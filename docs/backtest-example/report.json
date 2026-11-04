@@ -1,0 +1,733 @@
+{
+  "label": "synthetic-example (seed 7, 20 days)",
+  "generated_at": "2026-11-04T17:56:08+05:30",
+  "data_source": "SYNTHETIC",
+  "data_description": "SYNTHETIC random-walk data (seed 7, 20 days from 2026-09-01); NOT real NIFTY prices",
+  "synthetic": true,
+  "first_day": "2026-09-01",
+  "last_day": "2026-09-29",
+  "trading_days": 20,
+  "strategies": [
+    "orb_options",
+    "vwap_ema"
+  ],
+  "config_fingerprint": "2e2c82f42c911277",
+  "summary": {
+    "capital": 200000.0,
+    "trading_days": 20,
+    "trades": 12,
+    "wins": 7,
+    "losses": 5,
+    "win_rate_pct": 58.33,
+    "gross_pnl": -3864.25,
+    "charges": 756.95,
+    "net_pnl": -4621.2,
+    "total_return_pct": -2.311,
+    "avg_daily_return_pct": -0.1155,
+    "cagr_like_pct": -25.34,
+    "sharpe": -6.844,
+    "profit_factor": 0.5,
+    "expectancy": -385.1,
+    "avg_win": 659.1,
+    "avg_loss": -1846.98,
+    "best_trade": 1170.83,
+    "worst_trade": -2249.39,
+    "avg_r_multiple": -0.203,
+    "max_drawdown": 4962.78,
+    "max_drawdown_pct": 2.481,
+    "avg_trade_minutes": 12.7,
+    "days_with_trades": 6,
+    "exit_reasons": {
+      "STOP_LOSS": 4,
+      "TRAILING_STOP": 8
+    }
+  },
+  "by_strategy": {
+    "orb_options": {
+      "capital": 100000.0,
+      "trading_days": 20,
+      "trades": 6,
+      "wins": 3,
+      "losses": 3,
+      "win_rate_pct": 50.0,
+      "gross_pnl": -3909.75,
+      "charges": 357.44,
+      "net_pnl": -4267.19,
+      "total_return_pct": -4.267,
+      "avg_daily_return_pct": -0.2134,
+      "cagr_like_pct": -41.94,
+      "sharpe": -5.013,
+      "profit_factor": 0.27,
+      "expectancy": -711.2,
+      "avg_win": 526.27,
+      "avg_loss": -1948.67,
+      "best_trade": 664.33,
+      "worst_trade": -2116.19,
+      "avg_r_multiple": -0.461,
+      "max_drawdown": 4904.31,
+      "max_drawdown_pct": 4.904,
+      "avg_trade_minutes": 11.3,
+      "days_with_trades": 5,
+      "exit_reasons": {
+        "STOP_LOSS": 3,
+        "TRAILING_STOP": 3
+      }
+    },
+    "vwap_ema": {
+      "capital": 100000.0,
+      "trading_days": 20,
+      "trades": 6,
+      "wins": 4,
+      "losses": 2,
+      "win_rate_pct": 66.67,
+      "gross_pnl": 45.5,
+      "charges": 399.51,
+      "net_pnl": -354.01,
+      "total_return_pct": -0.354,
+      "avg_daily_return_pct": -0.0177,
+      "cagr_like_pct": -4.56,
+      "sharpe": -0.678,
+      "profit_factor": 0.896,
+      "expectancy": -59.0,
+      "avg_win": 758.73,
+      "avg_loss": -1694.46,
+      "best_trade": 1170.83,
+      "worst_trade": -2249.39,
+      "avg_r_multiple": 0.054,
+      "max_drawdown": 2544.93,
+      "max_drawdown_pct": 2.49,
+      "avg_trade_minutes": 14.0,
+      "days_with_trades": 4,
+      "exit_reasons": {
+        "TRAILING_STOP": 5,
+        "STOP_LOSS": 1
+      }
+    }
+  },
+  "costs": {
+    "brokerage": 480.0,
+    "stt": 120.06,
+    "exchange_txn": 57.41,
+    "sebi_fee": 0.21,
+    "stamp_duty": 2.51,
+    "gst": 96.76,
+    "charges": 756.95,
+    "slippage": 130.0,
+    "spread": 477.75,
+    "execution": 607.75,
+    "total": 1364.7,
+    "turnover": 163959.25,
+    "pnl_before_costs": -3256.5,
+    "gross_pnl": -3864.25,
+    "net_pnl": -4621.2,
+    "cost_per_trade": 113.73,
+    "cost_pct_of_turnover": 0.832,
+    "cost_pct_of_pnl_before_costs": 41.9
+  },
+  "costs_by_strategy": {
+    "orb_options": {
+      "brokerage": 240.0,
+      "stt": 46.11,
+      "exchange_txn": 22.89,
+      "sebi_fee": 0.09,
+      "stamp_duty": 1.04,
+      "gst": 47.31,
+      "charges": 357.44,
+      "slippage": 65.0,
+      "spread": 204.75,
+      "execution": 269.75,
+      "total": 627.19,
+      "turnover": 65380.25,
+      "pnl_before_costs": -3640.0,
+      "gross_pnl": -3909.75,
+      "net_pnl": -4267.19,
+      "cost_per_trade": 104.53,
+      "cost_pct_of_turnover": 0.959,
+      "cost_pct_of_pnl_before_costs": 17.2
+    },
+    "vwap_ema": {
+      "brokerage": 240.0,
+      "stt": 73.95,
+      "exchange_txn": 34.52,
+      "sebi_fee": 0.12,
+      "stamp_duty": 1.47,
+      "gst": 49.45,
+      "charges": 399.51,
+      "slippage": 65.0,
+      "spread": 273.0,
+      "execution": 338.0,
+      "total": 737.51,
+      "turnover": 98579.0,
+      "pnl_before_costs": 383.5,
+      "gross_pnl": 45.5,
+      "net_pnl": -354.01,
+      "cost_per_trade": 122.92,
+      "cost_pct_of_turnover": 0.748,
+      "cost_pct_of_pnl_before_costs": 192.3
+    }
+  },
+  "compliance_status": "PASS WITH WARNINGS",
+  "compliance": [
+    {
+      "name": "open trades per strategy",
+      "status": "OK",
+      "detail": "none"
+    },
+    {
+      "name": "open trades total",
+      "status": "OK",
+      "detail": "none"
+    },
+    {
+      "name": "trades per strategy per day",
+      "status": "OK",
+      "detail": "none"
+    },
+    {
+      "name": "no entries at/after 14:45",
+      "status": "OK",
+      "detail": "none"
+    },
+    {
+      "name": "entries inside the strategy entry window",
+      "status": "OK",
+      "detail": "none"
+    },
+    {
+      "name": "flat after square-off",
+      "status": "OK",
+      "detail": "none"
+    },
+    {
+      "name": "every trade had a stop-loss",
+      "status": "OK",
+      "detail": "none"
+    },
+    {
+      "name": "closed by 15:20",
+      "status": "OK",
+      "detail": "none"
+    },
+    {
+      "name": "loss per trade within the per-trade risk budget (gaps can overshoot)",
+      "status": "WARN",
+      "detail": "PAPER-T-orb_options-9af33586d901: -2116; PAPER-T-orb_options-5631be3d468b: -2002; PAPER-T-vwap_ema-be2662e4b654: -2249"
+    },
+    {
+      "name": "daily loss per strategy within limit",
+      "status": "OK",
+      "detail": "none"
+    },
+    {
+      "name": "global daily loss within limit",
+      "status": "OK",
+      "detail": "none"
+    }
+  ],
+  "pipeline": {
+    "orb_options": {
+      "signals": 35,
+      "approved": 6,
+      "top_rejections": [
+        [
+          "position size zero: risk budget # too small for one lot at #/unit",
+          24
+        ],
+        [
+          "NIFTY # PE # SEP # SYNTH: premium # < #",
+          3
+        ],
+        [
+          "cooldown after loss (# min left)",
+          1
+        ],
+        [
+          "NIFTY # CE # SEP # SYNTH: premium # < #",
+          1
+        ]
+      ]
+    },
+    "vwap_ema": {
+      "signals": 46,
+      "approved": 6,
+      "top_rejections": [
+        [
+          "position size zero: risk budget # too small for one lot at #/unit",
+          26
+        ],
+        [
+          "NIFTY # PE # SEP # SYNTH: premium # < #",
+          10
+        ],
+        [
+          "NIFTY # CE # SEP # SYNTH: premium # < #",
+          4
+        ]
+      ]
+    }
+  },
+  "daily": [
+    {
+      "day": "2026-09-01",
+      "orb_options": 0.0,
+      "vwap_ema": 0.0,
+      "total": 0.0
+    },
+    {
+      "day": "2026-09-02",
+      "orb_options": 0.0,
+      "vwap_ema": 0.0,
+      "total": 0.0
+    },
+    {
+      "day": "2026-09-03",
+      "orb_options": 0.0,
+      "vwap_ema": 0.0,
+      "total": 0.0
+    },
+    {
+      "day": "2026-09-04",
+      "orb_options": 0.0,
+      "vwap_ema": 0.0,
+      "total": 0.0
+    },
+    {
+      "day": "2026-09-07",
+      "orb_options": -1727.66,
+      "vwap_ema": 0.0,
+      "total": -1727.66
+    },
+    {
+      "day": "2026-09-08",
+      "orb_options": -1451.86,
+      "vwap_ema": 1020.09,
+      "total": -431.77
+    },
+    {
+      "day": "2026-09-09",
+      "orb_options": 0.0,
+      "vwap_ema": 0.0,
+      "total": 0.0
+    },
+    {
+      "day": "2026-09-10",
+      "orb_options": 0.0,
+      "vwap_ema": 0.0,
+      "total": 0.0
+    },
+    {
+      "day": "2026-09-11",
+      "orb_options": 0.0,
+      "vwap_ema": 0.0,
+      "total": 0.0
+    },
+    {
+      "day": "2026-09-15",
+      "orb_options": 277.36,
+      "vwap_ema": 0.0,
+      "total": 277.36
+    },
+    {
+      "day": "2026-09-16",
+      "orb_options": 0.0,
+      "vwap_ema": 0.0,
+      "total": 0.0
+    },
+    {
+      "day": "2026-09-17",
+      "orb_options": 0.0,
+      "vwap_ema": -1078.56,
+      "total": -1078.56
+    },
+    {
+      "day": "2026-09-18",
+      "orb_options": 0.0,
+      "vwap_ema": 0.0,
+      "total": 0.0
+    },
+    {
+      "day": "2026-09-21",
+      "orb_options": -2002.15,
+      "vwap_ema": 565.99,
+      "total": -1436.16
+    },
+    {
+      "day": "2026-09-22",
+      "orb_options": 0.0,
+      "vwap_ema": 0.0,
+      "total": 0.0
+    },
+    {
+      "day": "2026-09-23",
+      "orb_options": 0.0,
+      "vwap_ema": 0.0,
+      "total": 0.0
+    },
+    {
+      "day": "2026-09-24",
+      "orb_options": 0.0,
+      "vwap_ema": 0.0,
+      "total": 0.0
+    },
+    {
+      "day": "2026-09-25",
+      "orb_options": 0.0,
+      "vwap_ema": 0.0,
+      "total": 0.0
+    },
+    {
+      "day": "2026-09-28",
+      "orb_options": 637.12,
+      "vwap_ema": -861.53,
+      "total": -224.41
+    },
+    {
+      "day": "2026-09-29",
+      "orb_options": 0.0,
+      "vwap_ema": 0.0,
+      "total": 0.0
+    }
+  ],
+  "trades": [
+    {
+      "trade_uid": "PAPER-T-orb_options-77295720472b",
+      "strategy_id": "orb_options",
+      "strategy_version": "0.1.0",
+      "symbol": "NIFTY 25050 PE 08 SEP 26 SYNTH",
+      "option_type": "PE",
+      "strike": 25050.0,
+      "expiry": "2026-09-08",
+      "quantity": 65,
+      "status": "CLOSED",
+      "created_at": "2026-09-07T09:50:00+05:30",
+      "entry_time": "2026-09-07T09:50:00+05:30",
+      "entry_price": 85.85,
+      "initial_stop_loss": 64.35,
+      "target": 128.7,
+      "exit_time": "2026-09-07T10:27:30+05:30",
+      "exit_price": 60.15,
+      "exit_reason": "STOP_LOSS",
+      "gross_pnl": -1670.5,
+      "charges": 57.16,
+      "net_pnl": -1727.66,
+      "r_multiple": -1.198,
+      "entry_reason": "ORB breakdown: close 25044.10 < low 25051.40 - 5.0"
+    },
+    {
+      "trade_uid": "PAPER-T-orb_options-2f208b415767",
+      "strategy_id": "orb_options",
+      "strategy_version": "0.1.0",
+      "symbol": "NIFTY 25150 CE 08 SEP 26 SYNTH",
+      "option_type": "CE",
+      "strike": 25150.0,
+      "expiry": "2026-09-08",
+      "quantity": 130,
+      "status": "CLOSED",
+      "created_at": "2026-09-08T09:45:00+05:30",
+      "entry_time": "2026-09-08T09:45:00+05:30",
+      "entry_price": 49.15,
+      "initial_stop_loss": 36.85,
+      "target": 73.6,
+      "exit_time": "2026-09-08T09:48:30+05:30",
+      "exit_price": 54.75,
+      "exit_reason": "TRAILING_STOP",
+      "gross_pnl": 728.0,
+      "charges": 63.67,
+      "net_pnl": 664.33,
+      "r_multiple": 0.457,
+      "entry_reason": "ORB breakout: close 25168.46 > high 25154.71 + 5.0"
+    },
+    {
+      "trade_uid": "PAPER-T-orb_options-9af33586d901",
+      "strategy_id": "orb_options",
+      "strategy_version": "0.1.0",
+      "symbol": "NIFTY 25100 PE 08 SEP 26 SYNTH",
+      "option_type": "PE",
+      "strike": 25100.0,
+      "expiry": "2026-09-08",
+      "quantity": 130,
+      "status": "CLOSED",
+      "created_at": "2026-09-08T10:55:00+05:30",
+      "entry_time": "2026-09-08T10:55:00+05:30",
+      "entry_price": 40.55,
+      "initial_stop_loss": 30.4,
+      "target": 60.7,
+      "exit_time": "2026-09-08T11:02:30+05:30",
+      "exit_price": 24.7,
+      "exit_reason": "STOP_LOSS",
+      "gross_pnl": -2060.5,
+      "charges": 55.69,
+      "net_pnl": -2116.19,
+      "r_multiple": -1.569,
+      "entry_reason": "ORB breakdown: close 25087.41 < low 25118.50 - 5.0"
+    },
+    {
+      "trade_uid": "PAPER-T-orb_options-5994426d158b",
+      "strategy_id": "orb_options",
+      "strategy_version": "0.1.0",
+      "symbol": "NIFTY 25000 CE 15 SEP 26 SYNTH",
+      "option_type": "CE",
+      "strike": 25000.0,
+      "expiry": "2026-09-15",
+      "quantity": 130,
+      "status": "CLOSED",
+      "created_at": "2026-09-15T10:45:00+05:30",
+      "entry_time": "2026-09-15T10:45:00+05:30",
+      "entry_price": 41.7,
+      "initial_stop_loss": 31.25,
+      "target": 62.45,
+      "exit_time": "2026-09-15T10:52:30+05:30",
+      "exit_price": 44.3,
+      "exit_reason": "TRAILING_STOP",
+      "gross_pnl": 338.0,
+      "charges": 60.64,
+      "net_pnl": 277.36,
+      "r_multiple": 0.25,
+      "entry_reason": "ORB breakout: close 25023.67 > high 25015.77 + 5.0"
+    },
+    {
+      "trade_uid": "PAPER-T-orb_options-5631be3d468b",
+      "strategy_id": "orb_options",
+      "strategy_version": "0.1.0",
+      "symbol": "NIFTY 24850 CE 22 SEP 26 SYNTH",
+      "option_type": "CE",
+      "strike": 24850.0,
+      "expiry": "2026-09-22",
+      "quantity": 130,
+      "status": "CLOSED",
+      "created_at": "2026-09-21T09:35:00+05:30",
+      "entry_time": "2026-09-21T09:35:00+05:30",
+      "entry_price": 49.5,
+      "initial_stop_loss": 37.1,
+      "target": 74.15,
+      "exit_time": "2026-09-21T09:44:30+05:30",
+      "exit_price": 34.55,
+      "exit_reason": "STOP_LOSS",
+      "gross_pnl": -1943.5,
+      "charges": 58.65,
+      "net_pnl": -2002.15,
+      "r_multiple": -1.211,
+      "entry_reason": "ORB breakout: close 24827.06 > high 24800.40 + 5.0"
+    },
+    {
+      "trade_uid": "PAPER-T-orb_options-8a88bf764d8e",
+      "strategy_id": "orb_options",
+      "strategy_version": "0.1.0",
+      "symbol": "NIFTY 25250 PE 29 SEP 26 SYNTH",
+      "option_type": "PE",
+      "strike": 25250.0,
+      "expiry": "2026-09-29",
+      "quantity": 65,
+      "status": "CLOSED",
+      "created_at": "2026-09-28T09:35:00+05:30",
+      "entry_time": "2026-09-28T09:35:00+05:30",
+      "entry_price": 85.35,
+      "initial_stop_loss": 64.0,
+      "target": 127.9,
+      "exit_time": "2026-09-28T09:37:30+05:30",
+      "exit_price": 96.1,
+      "exit_reason": "TRAILING_STOP",
+      "gross_pnl": 698.75,
+      "charges": 61.63,
+      "net_pnl": 637.12,
+      "r_multiple": 0.505,
+      "entry_reason": "ORB breakdown: close 25249.12 < low 25263.06 - 5.0"
+    },
+    {
+      "trade_uid": "PAPER-T-vwap_ema-e1a3ce5c106a",
+      "strategy_id": "vwap_ema",
+      "strategy_version": "0.1.0",
+      "symbol": "NIFTY 25150 CE 08 SEP 26 SYNTH",
+      "option_type": "CE",
+      "strike": 25150.0,
+      "expiry": "2026-09-08",
+      "quantity": 195,
+      "status": "CLOSED",
+      "created_at": "2026-09-08T09:45:00+05:30",
+      "entry_time": "2026-09-08T09:45:00+05:30",
+      "entry_price": 49.15,
+      "initial_stop_loss": 39.3,
+      "target": 68.7,
+      "exit_time": "2026-09-08T09:48:30+05:30",
+      "exit_price": 54.75,
+      "exit_reason": "TRAILING_STOP",
+      "gross_pnl": 1092.0,
+      "charges": 71.91,
+      "net_pnl": 1020.09,
+      "r_multiple": 0.571,
+      "entry_reason": "VWAP+EMA momentum: 2 closes above VWAP 25167.64 and EMA20 25140.79, volume 1.23x"
+    },
+    {
+      "trade_uid": "PAPER-T-vwap_ema-eaf6ad85ca1b",
+      "strategy_id": "vwap_ema",
+      "strategy_version": "0.1.0",
+      "symbol": "NIFTY 24550 PE 22 SEP 26 SYNTH",
+      "option_type": "PE",
+      "strike": 24550.0,
+      "expiry": "2026-09-22",
+      "quantity": 65,
+      "status": "CLOSED",
+      "created_at": "2026-09-17T13:45:00+05:30",
+      "entry_time": "2026-09-17T13:45:00+05:30",
+      "entry_price": 137.5,
+      "initial_stop_loss": 110.0,
+      "target": 192.35,
+      "exit_time": "2026-09-17T14:16:30+05:30",
+      "exit_price": 156.6,
+      "exit_reason": "TRAILING_STOP",
+      "gross_pnl": 1241.5,
+      "charges": 70.67,
+      "net_pnl": 1170.83,
+      "r_multiple": 0.696,
+      "entry_reason": "VWAP+EMA momentum: 2 closes below VWAP 24585.01 and EMA20 24591.85, volume 1.77x"
+    },
+    {
+      "trade_uid": "PAPER-T-vwap_ema-be2662e4b654",
+      "strategy_id": "vwap_ema",
+      "strategy_version": "0.1.0",
+      "symbol": "NIFTY 24550 PE 22 SEP 26 SYNTH",
+      "option_type": "PE",
+      "strike": 24550.0,
+      "expiry": "2026-09-22",
+      "quantity": 65,
+      "status": "CLOSED",
+      "created_at": "2026-09-17T14:00:00+05:30",
+      "entry_time": "2026-09-17T14:00:00+05:30",
+      "entry_price": 145.95,
+      "initial_stop_loss": 116.75,
+      "target": 204.2,
+      "exit_time": "2026-09-17T14:37:30+05:30",
+      "exit_price": 112.35,
+      "exit_reason": "STOP_LOSS",
+      "gross_pnl": -2184.0,
+      "charges": 65.39,
+      "net_pnl": -2249.39,
+      "r_multiple": -1.153,
+      "entry_reason": "VWAP+EMA momentum: 2 closes below VWAP 24583.55 and EMA20 24582.04, volume 1.24x"
+    },
+    {
+      "trade_uid": "PAPER-T-vwap_ema-806c56a4bc76",
+      "strategy_id": "vwap_ema",
+      "strategy_version": "0.1.0",
+      "symbol": "NIFTY 25050 CE 22 SEP 26 SYNTH",
+      "option_type": "CE",
+      "strike": 25050.0,
+      "expiry": "2026-09-22",
+      "quantity": 130,
+      "status": "CLOSED",
+      "created_at": "2026-09-21T13:00:00+05:30",
+      "entry_time": "2026-09-21T13:00:00+05:30",
+      "entry_price": 52.55,
+      "initial_stop_loss": 42.0,
+      "target": 73.5,
+      "exit_time": "2026-09-21T13:02:30+05:30",
+      "exit_price": 57.4,
+      "exit_reason": "TRAILING_STOP",
+      "gross_pnl": 630.5,
+      "charges": 64.51,
+      "net_pnl": 565.99,
+      "r_multiple": 0.462,
+      "entry_reason": "VWAP+EMA momentum: 2 closes above VWAP 24886.56 and EMA20 24968.45, volume 1.21x"
+    },
+    {
+      "trade_uid": "PAPER-T-vwap_ema-1420846fa040",
+      "strategy_id": "vwap_ema",
+      "strategy_version": "0.1.0",
+      "symbol": "NIFTY 25150 PE 29 SEP 26 SYNTH",
+      "option_type": "PE",
+      "strike": 25150.0,
+      "expiry": "2026-09-29",
+      "quantity": 65,
+      "status": "CLOSED",
+      "created_at": "2026-09-28T10:25:00+05:30",
+      "entry_time": "2026-09-28T10:25:00+05:30",
+      "entry_price": 79.25,
+      "initial_stop_loss": 63.4,
+      "target": 110.8,
+      "exit_time": "2026-09-28T10:27:30+05:30",
+      "exit_price": 84.45,
+      "exit_reason": "TRAILING_STOP",
+      "gross_pnl": 338.0,
+      "charges": 60.0,
+      "net_pnl": 278.0,
+      "r_multiple": 0.329,
+      "entry_reason": "VWAP+EMA momentum: 2 closes below VWAP 25252.81 and EMA20 25235.85, volume 1.51x"
+    },
+    {
+      "trade_uid": "PAPER-T-vwap_ema-a0d34f48ff55",
+      "strategy_id": "vwap_ema",
+      "strategy_version": "0.1.0",
+      "symbol": "NIFTY 24850 PE 29 SEP 26 SYNTH",
+      "option_type": "PE",
+      "strike": 24850.0,
+      "expiry": "2026-09-29",
+      "quantity": 130,
+      "status": "CLOSED",
+      "created_at": "2026-09-28T11:50:00+05:30",
+      "entry_time": "2026-09-28T11:50:00+05:30",
+      "entry_price": 71.35,
+      "initial_stop_loss": 57.05,
+      "target": 99.8,
+      "exit_time": "2026-09-28T11:56:30+05:30",
+      "exit_price": 63.1,
+      "exit_reason": "TRAILING_STOP",
+      "gross_pnl": -1072.5,
+      "charges": 67.03,
+      "net_pnl": -1139.53,
+      "r_multiple": -0.579,
+      "entry_reason": "VWAP+EMA momentum: 2 closes below VWAP 25113.27 and EMA20 24963.10, volume 1.50x"
+    }
+  ],
+  "assumptions": {
+    "fill_model": {
+      "engine": "PaperBroker (same code as PAPER trading)",
+      "ticks_per_candle": 4,
+      "tick_offsets_seconds": [
+        0,
+        15,
+        30,
+        45
+      ],
+      "intra_candle_path": "up: O-L-H-C, down: O-H-L-C",
+      "entry": "LIMIT at ask + entry_limit_buffer_ticks",
+      "exit": "MARKET at bid",
+      "protective_stop": "resting SL-M at the stop (exchange-side)",
+      "partial_fills": true,
+      "max_quote_age_seconds": 5.0
+    },
+    "costs": {
+      "rates": {
+        "brokerage_per_order": 20.0,
+        "stt_sell_pct": 0.15,
+        "exchange_txn_pct": 0.03503,
+        "sebi_fee_per_crore": 10.0,
+        "stamp_duty_buy_pct": 0.003,
+        "gst_pct": 18.0
+      },
+      "slippage_ticks": 1,
+      "spread": {
+        "half_spread_pct": 0.25,
+        "min_half_spread_ticks": 1,
+        "depth_lots": 20
+      },
+      "brokerage_basis": "once per executed order (first fill)"
+    },
+    "capital": {
+      "per_strategy": {
+        "orb_options": 100000.0,
+        "vwap_ema": 100000.0
+      },
+      "total": 200000.0
+    },
+    "limitations": [
+      "Fills are simulated by the paper broker against prices replayed from 1-minute candles (4 ticks per candle); real order books, queue position and latency are not modelled.",
+      "Option bid/ask are synthesised by the spread model; historical quotes are not used.",
+      "Within a candle the path is open -> low -> high -> close (up-candle) or open -> high -> low -> close (down-candle); the true intra-minute order is unknown.",
+      "Each run starts cold: indicator warm-up (e.g. the VWAP+EMA strategy's EMA) is rebuilt from the first day.",
+      "Charges use the configured rates in config/settings.yaml; verify them against current Upstox/NSE sheets."
+    ]
+  },
+  "warnings": [],
+  "risk_events": {},
+  "elapsed_seconds": 66.15
+}

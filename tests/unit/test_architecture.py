@@ -126,21 +126,34 @@ def test_strategies_never_import_broker_or_execution() -> None:
 
 
 def test_only_entry_points_import_runtime() -> None:
-    for pkg in PROJECT_TOP_LEVEL - {"runtime", "dashboard"}:
+    # backtest/ is a composition root too: it builds the whole PAPER bot on simulated time.
+    for pkg in PROJECT_TOP_LEVEL - {"runtime", "dashboard", "backtest"}:
         for path in _py_files(pkg):
             assert "runtime" not in _imported_top_levels(path), f"{path.relative_to(PROJECT_ROOT)} imports runtime"
+
+
+def test_backtest_never_uses_the_upstox_adapters() -> None:
+    """Backtests replay data through the paper broker only: no REST/WebSocket
+    client, no network, and only runtime.bot from the composition root."""
+    for path in _py_files("backtest"):
+        mods = _imported_modules(path)
+        rel = path.relative_to(PROJECT_ROOT)
+        assert not {"broker.upstox_rest", "broker.upstox_websocket", "broker.factory"} & mods, rel
+        assert {m for m in mods if m.startswith("runtime")} <= {"runtime.bot"}, rel
 
 
 LOT_LITERAL = re.compile(
     r"\b(?i:lot(?:_size)?)\b\s*(?::\s*int\s*)?[=:]\s*\d+"  # lot_size = 75 / lot: int = 75 / YAML lot_size: 65
     r"|\b(?i:lots)\b\s*[=:]\s*\d{2,}"                      # lots = 75
     r"|\bLOT_SIZE\b\s*=(?!=)"                              # a LOT_SIZE constant (case-sensitive)
+    r"|\b[A-Za-z_]*(?i:lot)[A-Za-z_]*\s*(?::\s*int\s*)?[=:]\s*\d{2,}"  # any lot-named field: lot_units: int = 65
 )
 
 
 @pytest.mark.parametrize(("line", "flagged"), [
     ("LOT_SIZE = 65", True), ("lot_size = 75", True), ("def f(lot: int = 75)", True), ("lot_size: 65", True),
-    ("Lot_Size=50", True), ("lots = 75", True),
+    ("Lot_Size=50", True), ("lots = 75", True), ("lot_units: int = 65", True), ("units_per_lot=65", True),
+    ("contract_lot: 75", True), ("depth_lots: int = Field(default=20)", False), ("lot_units: int", False),
     ("risk(lot_size=p.instrument.lot_size)", False), ("lot_size=int(rec['lot_size'])", False),
     ("lots = depth // inst.lot_size", False), ("lots = 1", False), ("if LOT_SIZE == x:", False),
 ])

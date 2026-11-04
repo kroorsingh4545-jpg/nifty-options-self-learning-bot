@@ -119,7 +119,8 @@ class TradingBot:
         if cfg.mode is not TradingMode.PAPER:
             raise RuntimeError("only PAPER mode can run in this build")
         self.cfg = cfg
-        self.repos = repos
+        # Persisted timestamps follow the bot's clock (simulated in backtests).
+        self.repos = repos.with_clock(now_fn)
         self.broker = broker
         self.md = market_data
         self.source = source
@@ -128,8 +129,8 @@ class TradingBot:
         self._sleep = sleep
         self._refresh_attempts = max(1, instrument_refresh_attempts)
         self._retry_seconds = instrument_retry_seconds
-        self.bus = EventBus()
-        self.stack: ExecutionStack = build_stack(cfg, repos=repos, broker=broker, market_data=market_data,
+        self.bus = EventBus(now_fn=now_fn)
+        self.stack: ExecutionStack = build_stack(cfg, repos=self.repos, broker=broker, market_data=market_data,
                                                  now_fn=now_fn, sleep=sleep,
                                                  reconcile_confirm_delay=reconcile_confirm_delay)
         self.mode = ModeController(live_available=False, autonomy=cfg.settings.app.autonomy_level, now_fn=now_fn)

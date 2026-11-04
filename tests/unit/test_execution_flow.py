@@ -105,6 +105,19 @@ async def test_trailing_stop_tightens_moves_exchange_stop_and_exits() -> None:
     rec = h.repos.trades.get(t.trade_uid)
     assert rec is not None and rec.status is TradeStatus.CLOSED
     assert rec.net_pnl is not None and rec.net_pnl > 0  # locked-in profit
+    # the trailed exchange-side stop filled first: labelled as a trailing stop, not a plain stop-loss
+    assert rec.exit_reason == "TRAILING_STOP"
+    stop_fill = next(o for o in orders_of(h, t.trade_uid) if o.purpose is OrderPurpose.STOP_LOSS)
+    assert stop_fill.status is OrderStatus.COMPLETE
+
+
+async def test_untrailed_exchange_stop_fill_is_a_stop_loss() -> None:
+    h = Harness()
+    t = await h.enter()
+    h.tick(CE.instrument_key, t.stop - 0.05)
+    await h.settle()
+    rec = h.repos.trades.get(t.trade_uid)
+    assert rec is not None and rec.exit_reason == "STOP_LOSS" and not t.trail.active
 
 
 async def test_database_refuses_to_widen_stop() -> None:

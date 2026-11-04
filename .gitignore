@@ -17,6 +17,7 @@ logs/
 models/
 mlruns/
 output/
+reports/
 
 # Personal Claude Code settings
 .claude/settings.local.json
