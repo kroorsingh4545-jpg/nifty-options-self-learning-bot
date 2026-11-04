@@ -76,6 +76,9 @@ def build_stack(
 ) -> ExecutionStack:
     if broker.mode is not cfg.mode or repos.mode is not cfg.mode:
         raise ValueError("broker, repositories and config must share one trading mode")
+    # Every order, fill, position, trade, risk-event and strategy timestamp is
+    # written with the stack's clock, never the wall clock (backtests).
+    repos = repos.with_clock(now_fn)
     memory = MemoryAlertSink()
     alerts = FanoutAlertSink(memory, LogAlertSink(), *alert_sinks)
     ks_cfg = cfg.risk.kill_switch

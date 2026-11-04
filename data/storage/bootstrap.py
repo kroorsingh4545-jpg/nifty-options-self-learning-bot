@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from config.settings import BotConfig, StrategyConfig
-from core.clock import now_ist
 from core.enums import StrategyStatus
 from data.storage.database import Database
 from data.storage.records import StrategyRecord
@@ -17,6 +16,7 @@ def sync_strategies(repo: StrategyRepository, strategies: Mapping[str, StrategyC
 
     New strategies start ACTIVE if enabled, else DISABLED. For existing rows an
     intraday PAUSED/KILLED status is preserved; disabling in config always wins.
+    Timestamps come from the repository's clock (simulated in backtests).
     """
     for sid, cfg in strategies.items():
         existing = repo.get(sid)
@@ -26,7 +26,7 @@ def sync_strategies(repo: StrategyRepository, strategies: Mapping[str, StrategyC
             status = StrategyStatus.ACTIVE
         else:
             status = existing.status
-        now = now_ist()
+        now = repo.now()
         repo.upsert(
             StrategyRecord(
                 strategy_id=sid,
