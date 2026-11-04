@@ -1,0 +1,415 @@
+{
+ "model_kind": "signal_filter",
+ "strategy_id": "orb_options",
+ "data_source": "SYNTHETIC",
+ "synthetic": true,
+ "dataset": {
+  "events": 2782,
+  "data_source": "SYNTHETIC",
+  "strategy_id": "orb_options",
+  "days": 30,
+  "target_first_rate": 0.1387,
+  "loss_rate": 0.5611,
+  "hits": {
+   "TIME": 1570,
+   "STOP": 826,
+   "TARGET": 386
+  },
+  "dropped": {
+   "premium outside strategy bounds": 638
+  }
+ },
+ "policy": {
+  "threshold": 0.6,
+  "reduce_below": 0.7,
+  "min_size_multiplier": 0.5,
+  "delay_band": 0.05
+ },
+ "split": {
+  "development_days": [
+   "2026-07-01",
+   "2026-07-02",
+   "2026-07-03",
+   "2026-07-06",
+   "2026-07-07",
+   "2026-07-08",
+   "2026-07-09",
+   "2026-07-10",
+   "2026-07-13",
+   "2026-07-14",
+   "2026-07-15",
+   "2026-07-16",
+   "2026-07-17",
+   "2026-07-20",
+   "2026-07-21",
+   "2026-07-22",
+   "2026-07-23",
+   "2026-07-24",
+   "2026-07-27",
+   "2026-07-28",
+   "2026-07-29",
+   "2026-07-30",
+   "2026-07-31",
+   "2026-08-03"
+  ],
+  "holdout_days": [
+   "2026-08-04",
+   "2026-08-05",
+   "2026-08-06",
+   "2026-08-07",
+   "2026-08-10",
+   "2026-08-11"
+  ],
+  "folds": [
+   {
+    "fold": 0,
+    "train": 0,
+    "test": 462,
+    "purged": 3,
+    "embargoed": 3,
+    "test_start": "2026-07-01T09:45:00+05:30",
+    "test_end": "2026-07-07T11:06:00+05:30",
+    "skipped": "0 training events < 100"
+   },
+   {
+    "fold": 1,
+    "train": 461,
+    "test": 462,
+    "purged": 2,
+    "embargoed": 0,
+    "test_start": "2026-07-07T10:50:00+05:30",
+    "test_end": "2026-07-13T14:40:00+05:30",
+    "train_end": "2026-07-07T10:36:00+05:30"
+   },
+   {
+    "fold": 2,
+    "train": 915,
+    "test": 462,
+    "purged": 11,
+    "embargoed": 4,
+    "test_start": "2026-07-13T14:25:00+05:30",
+    "test_end": "2026-07-21T10:26:00+05:30",
+    "train_end": "2026-07-13T14:24:00+05:30"
+   },
+   {
+    "fold": 3,
+    "train": 1385,
+    "test": 462,
+    "purged": 1,
+    "embargoed": 0,
+    "test_start": "2026-07-21T10:20:00+05:30",
+    "test_end": "2026-07-27T14:41:00+05:30",
+    "train_end": "2026-07-21T09:52:00+05:30"
+   },
+   {
+    "fold": 4,
+    "train": 1848,
+    "test": 462,
+    "purged": 0,
+    "embargoed": 0,
+    "test_start": "2026-07-28T10:00:00+05:30",
+    "test_end": "2026-08-03T14:40:00+05:30",
+    "train_end": "2026-07-27T14:57:00+05:30"
+   }
+  ],
+  "embargo_minutes": 60,
+  "forward_only": true,
+  "development_events": 2310,
+  "holdout_events": 472,
+  "purged_before_holdout": 0
+ },
+ "oos_events": 1848,
+ "holdout_events": 472,
+ "seeds": [
+  11,
+  23,
+  37,
+  41,
+  53
+ ],
+ "warning": "SYNTHETIC DATA - research artefact only. Trained and evaluated on a seeded random walk, NOT real NIFTY prices. It can never be validated, promoted or used for trading.",
+ "oos": {
+  "events": 1848,
+  "p_target": {
+   "ensemble": {
+    "n": 1848,
+    "auc": 0.7483,
+    "brier": 0.1334,
+    "log_loss": 0.4725,
+    "base_rate": 0.1542,
+    "mean_score": 0.0678
+   },
+   "per_seed_auc": {
+    "mean": 0.7445,
+    "std": 0.0075,
+    "min": 0.7365,
+    "max": 0.755,
+    "n": 5
+   },
+   "per_seed_brier": {
+    "mean": 0.134,
+    "std": 0.0008,
+    "min": 0.1329,
+    "max": 0.1351,
+    "n": 5
+   }
+  },
+  "trading": {
+   "baseline_no_filter": {
+    "events": 1848,
+    "trades": 497,
+    "skipped_zero_lots": 1351,
+    "wins": 192,
+    "win_rate_pct": 38.63,
+    "profit_factor": 1.143,
+    "expectancy": 139.57,
+    "net_pnl": 69368.65,
+    "gross_pnl": 109185.7,
+    "charges": 39817.05,
+    "max_drawdown": 26661.19,
+    "avg_holding_minutes": 18.39,
+    "avg_size_multiplier": 1.0,
+    "compliance": {
+     "size multiplier within [0, 1]": "OK",
+     "every trade has a stop below entry": "OK",
+     "no entries at/after 14:45": "OK",
+     "closed by the 15:10 square-off start": "OK",
+     "loss per trade within the per-trade risk budget (gaps can overshoot)": "WARN"
+    },
+    "compliance_status": "PASS WITH WARNINGS"
+   },
+   "filtered": {
+    "events": 1848,
+    "trades": 12,
+    "skipped_zero_lots": 0,
+    "wins": 3,
+    "win_rate_pct": 25.0,
+    "profit_factor": 0.605,
+    "expectancy": -369.82,
+    "net_pnl": -4437.87,
+    "gross_pnl": -3509.35,
+    "charges": 928.52,
+    "max_drawdown": 9812.27,
+    "avg_holding_minutes": 17.0,
+    "avg_size_multiplier": 0.7609,
+    "compliance": {
+     "size multiplier within [0, 1]": "OK",
+     "every trade has a stop below entry": "OK",
+     "no entries at/after 14:45": "OK",
+     "closed by the 15:10 square-off start": "OK",
+     "loss per trade within the per-trade risk budget (gaps can overshoot)": "WARN"
+    },
+    "compliance_status": "PASS WITH WARNINGS"
+   },
+   "actions": {
+    "REJECT": 1829,
+    "REDUCE": 11,
+    "DELAY": 7,
+    "ALLOW": 1
+   }
+  },
+  "trading_per_seed_expectancy": {
+   "mean": -337.288,
+   "std": 200.089,
+   "min": -526.49,
+   "max": 0.67,
+   "n": 5
+  }
+ },
+ "holdout": {
+  "events": 472,
+  "p_target": {
+   "n": 472,
+   "auc": 0.7668,
+   "brier": 0.1066,
+   "log_loss": 0.3229,
+   "base_rate": 0.1292,
+   "mean_score": 0.1405
+  },
+  "trading": {
+   "baseline_no_filter": {
+    "events": 472,
+    "trades": 244,
+    "skipped_zero_lots": 228,
+    "wins": 96,
+    "win_rate_pct": 39.34,
+    "profit_factor": 1.115,
+    "expectancy": 92.2,
+    "net_pnl": 22496.7,
+    "gross_pnl": 38491.05,
+    "charges": 15994.35,
+    "max_drawdown": 24594.2,
+    "avg_holding_minutes": 36.68,
+    "avg_size_multiplier": 1.0,
+    "compliance": {
+     "size multiplier within [0, 1]": "OK",
+     "every trade has a stop below entry": "OK",
+     "no entries at/after 14:45": "OK",
+     "closed by the 15:10 square-off start": "OK",
+     "loss per trade within the per-trade risk budget (gaps can overshoot)": "WARN"
+    },
+    "compliance_status": "PASS WITH WARNINGS"
+   },
+   "filtered": {
+    "events": 472,
+    "trades": 0,
+    "skipped_zero_lots": 0,
+    "wins": 0,
+    "win_rate_pct": null,
+    "profit_factor": null,
+    "expectancy": null,
+    "net_pnl": 0.0,
+    "gross_pnl": 0.0,
+    "charges": 0.0,
+    "max_drawdown": 0.0,
+    "avg_holding_minutes": null,
+    "avg_size_multiplier": null,
+    "compliance": {
+     "size multiplier within [0, 1]": "OK",
+     "every trade has a stop below entry": "OK",
+     "no entries at/after 14:45": "OK",
+     "closed by the 15:10 square-off start": "OK",
+     "loss per trade within the per-trade risk budget (gaps can overshoot)": "OK"
+    },
+    "compliance_status": "PASS"
+   },
+   "actions": {
+    "REJECT": 471,
+    "DELAY": 1
+   }
+  }
+ },
+ "comparison": {
+  "production": null,
+  "note": "no production model for this strategy: compared with the no-filter baseline only"
+ },
+ "feature_importance": {
+  "p_target": {
+   "option_premium_pct_spot": 0.20946,
+   "option_premium": 0.07004,
+   "atr14_pct": 0.06604,
+   "rv_30m": 0.06441,
+   "minutes_to_expiry": 0.06234,
+   "option_iv": 0.05698,
+   "or_position": 0.04083,
+   "recent_avg_r_5": 0.03996,
+   "option_moneyness_pct": 0.03864,
+   "direction": 0.03603,
+   "vwap_dist_pct": 0.03284,
+   "option_volume_log": 0.03221,
+   "ret_30m": 0.02301,
+   "minutes_since_open": 0.02184,
+   "rv_15m": 0.02111
+  }
+ },
+ "feature_coverage": {
+  "direction": 1.0,
+  "ret_1m": 1.0,
+  "ret_3m": 1.0,
+  "ret_5m": 1.0,
+  "ret_15m": 1.0,
+  "ret_30m": 0.982,
+  "gap_pct": 0.959,
+  "vwap_dist_pct": 1.0,
+  "ema20_dist_pct": 1.0,
+  "ema20_slope_pct": 1.0,
+  "atr14_pct": 1.0,
+  "rv_15m": 1.0,
+  "rv_30m": 0.982,
+  "or_position": 1.0,
+  "or_width_pct": 1.0,
+  "minutes_since_open": 1.0,
+  "minutes_to_square_off": 1.0,
+  "day_of_week": 1.0,
+  "minutes_to_expiry": 1.0,
+  "is_expiry_day": 1.0,
+  "option_premium": 1.0,
+  "option_premium_pct_spot": 1.0,
+  "option_moneyness_pct": 1.0,
+  "option_iv": 1.0,
+  "option_volume_log": 1.0,
+  "option_oi_log": 1.0,
+  "option_spread_pct": 0.0,
+  "recent_win_rate_5": 0.9914,
+  "recent_avg_r_5": 0.9914,
+  "consecutive_losses": 1.0,
+  "regime_trend": 0.982,
+  "regime_vol": 0.982
+ },
+ "leakage_checks": [
+  "features computed by compute_features from bars completed at or before as-of (Bars.upto); verified by tests that rewrite every later bar and get identical features",
+  "every label starts at its feature as-of time (t0 == as_of, asserted) and ends at or after it (t1 >= t0)",
+  "recent-outcome features use only labels known by as-of (t1 <= as_of)",
+  "regime features are trailing rules; the forward regime model is never a training feature",
+  "no dataset-wide scaling or normalisation (no scaler to fit, nothing to leak)",
+  "chronological split; never shuffled",
+  "forward-only purged K-fold: training rows whose [t0, t1] overlaps a test block are purged, rows starting within the embargo after it are dropped, rows after it are never used",
+  "final holdout = last days, untouched until the single final evaluation; development rows whose label ends after the holdout starts are purged"
+ ],
+ "gates": {
+  "min OOS events": {
+   "value": 1848,
+   "threshold": 100,
+   "passed": true
+  },
+  "mean OOS AUC over seeds": {
+   "value": 0.7445,
+   "threshold": 0.55,
+   "passed": true
+  },
+  "AUC spread across seeds (std)": {
+   "value": 0.0075,
+   "threshold": 0.05,
+   "passed": true
+  },
+  "filtered OOS trades": {
+   "value": 12,
+   "threshold": 30,
+   "passed": false
+  },
+  "filtered OOS expectancy > 0 (net of costs)": {
+   "value": -369.82,
+   "threshold": 0,
+   "passed": false
+  },
+  "filtered OOS expectancy > no-filter baseline": {
+   "value": -369.82,
+   "threshold": 139.57,
+   "passed": false
+  },
+  "OOS risk compliance (no BREACH)": {
+   "value": "PASS WITH WARNINGS",
+   "threshold": "PASS / PASS WITH WARNINGS",
+   "passed": true
+  },
+  "holdout AUC": {
+   "value": 0.7668,
+   "threshold": 0.5,
+   "passed": true
+  },
+  "holdout risk compliance (no BREACH)": {
+   "value": "PASS",
+   "threshold": "PASS / PASS WITH WARNINGS",
+   "passed": true
+  }
+ },
+ "gates_passed": false,
+ "headline": {
+  "oos_auc_mean": 0.7445,
+  "oos_auc_std": 0.0075,
+  "oos_filtered_expectancy": -369.82,
+  "oos_baseline_expectancy": 139.57,
+  "oos_filtered_trades": 12,
+  "holdout": {
+   "events": 472,
+   "auc": 0.7668,
+   "brier": 0.1066,
+   "filtered_expectancy": null,
+   "baseline_expectancy": 92.2,
+   "filtered_trades": 0
+  },
+  "gates_passed": false
+ },
+ "status": "REJECTED",
+ "status_note": "SYNTHETIC: stays TRAINED/REJECTED for ever; never VALIDATED or promoted"
+}

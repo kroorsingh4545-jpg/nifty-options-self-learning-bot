@@ -1,0 +1,323 @@
+{
+ "model_kind": "regime_classifier",
+ "strategy_id": "orb_options",
+ "data_source": "SYNTHETIC",
+ "synthetic": true,
+ "dataset": {
+  "events": 2782,
+  "data_source": "SYNTHETIC",
+  "strategy_id": "orb_options",
+  "days": 30,
+  "target_first_rate": 0.1387,
+  "loss_rate": 0.5611,
+  "hits": {
+   "TIME": 1570,
+   "STOP": 826,
+   "TARGET": 386
+  },
+  "dropped": {
+   "premium outside strategy bounds": 638
+  }
+ },
+ "policy": {
+  "threshold": 0.6,
+  "reduce_below": 0.7,
+  "min_size_multiplier": 0.5,
+  "delay_band": 0.05
+ },
+ "split": {
+  "development_days": [
+   "2026-07-01",
+   "2026-07-02",
+   "2026-07-03",
+   "2026-07-06",
+   "2026-07-07",
+   "2026-07-08",
+   "2026-07-09",
+   "2026-07-10",
+   "2026-07-13",
+   "2026-07-14",
+   "2026-07-15",
+   "2026-07-16",
+   "2026-07-17",
+   "2026-07-20",
+   "2026-07-21",
+   "2026-07-22",
+   "2026-07-23",
+   "2026-07-24",
+   "2026-07-27",
+   "2026-07-28",
+   "2026-07-29",
+   "2026-07-30",
+   "2026-07-31",
+   "2026-08-03"
+  ],
+  "holdout_days": [
+   "2026-08-04",
+   "2026-08-05",
+   "2026-08-06",
+   "2026-08-07",
+   "2026-08-10",
+   "2026-08-11"
+  ],
+  "folds": [
+   {
+    "fold": 0,
+    "train": 0,
+    "test": 234,
+    "purged": 3,
+    "embargoed": 3,
+    "test_start": "2026-07-01T09:45:00+05:30",
+    "test_end": "2026-07-07T11:15:00+05:30",
+    "skipped": "0 training events < 100"
+   },
+   {
+    "fold": 1,
+    "train": 230,
+    "test": 234,
+    "purged": 5,
+    "embargoed": 0,
+    "test_start": "2026-07-07T10:50:00+05:30",
+    "test_end": "2026-07-13T14:50:00+05:30",
+    "train_end": "2026-07-07T10:45:00+05:30"
+   },
+   {
+    "fold": 2,
+    "train": 462,
+    "test": 234,
+    "purged": 11,
+    "embargoed": 1,
+    "test_start": "2026-07-13T14:25:00+05:30",
+    "test_end": "2026-07-21T10:45:00+05:30",
+    "train_end": "2026-07-13T14:20:00+05:30"
+   },
+   {
+    "fold": 3,
+    "train": 700,
+    "test": 234,
+    "purged": 2,
+    "embargoed": 0,
+    "test_start": "2026-07-21T10:20:00+05:30",
+    "test_end": "2026-07-27T14:55:00+05:30",
+    "train_end": "2026-07-20T14:55:00+05:30"
+   },
+   {
+    "fold": 4,
+    "train": 936,
+    "test": 234,
+    "purged": 0,
+    "embargoed": 0,
+    "test_start": "2026-07-28T10:00:00+05:30",
+    "test_end": "2026-08-03T14:55:00+05:30",
+    "train_end": "2026-07-27T14:55:00+05:30"
+   }
+  ],
+  "embargo_minutes": 60,
+  "forward_only": true,
+  "development_events": 1170,
+  "holdout_events": 244,
+  "purged_before_holdout": 0
+ },
+ "oos_events": 936,
+ "holdout_events": 244,
+ "seeds": [
+  11,
+  23,
+  37,
+  41,
+  53
+ ],
+ "warning": "SYNTHETIC DATA - research artefact only. Trained and evaluated on a seeded random walk, NOT real NIFTY prices. It can never be validated, promoted or used for trading.",
+ "oos": {
+  "events": 936,
+  "trend": {
+   "classes": [
+    "TRENDING_DOWN",
+    "RANGE_BOUND",
+    "TRENDING_UP"
+   ],
+   "ensemble": {
+    "n": 936,
+    "log_loss": 1.2005,
+    "accuracy": 0.641,
+    "baseline_log_loss": 0.8919,
+    "baseline_accuracy": 0.6635
+   },
+   "per_seed_log_loss": {
+    "mean": 1.2115,
+    "std": 0.0094,
+    "min": 1.1978,
+    "max": 1.2217,
+    "n": 5
+   },
+   "per_seed_accuracy": {
+    "mean": 0.6393,
+    "std": 0.004,
+    "min": 0.6357,
+    "max": 0.6453,
+    "n": 5
+   }
+  },
+  "vol": {
+   "classes": [
+    "LOW_VOL",
+    "NORMAL_VOL",
+    "HIGH_VOL"
+   ],
+   "ensemble": {
+    "n": 936,
+    "log_loss": 1.0947,
+    "accuracy": 0.6987,
+    "baseline_log_loss": 1.0012,
+    "baseline_accuracy": 0.5502
+   },
+   "per_seed_log_loss": {
+    "mean": 1.104,
+    "std": 0.0253,
+    "min": 1.0771,
+    "max": 1.1406,
+    "n": 5
+   },
+   "per_seed_accuracy": {
+    "mean": 0.6964,
+    "std": 0.0051,
+    "min": 0.6891,
+    "max": 0.7009,
+    "n": 5
+   }
+  }
+ },
+ "holdout": {
+  "events": 244,
+  "trend": {
+   "n": 244,
+   "log_loss": 0.87,
+   "accuracy": 0.709,
+   "baseline_log_loss": 0.7794,
+   "baseline_accuracy": 0.7295
+  },
+  "vol": {
+   "n": 244,
+   "log_loss": 0.7153,
+   "accuracy": 0.832,
+   "baseline_log_loss": 0.826,
+   "baseline_accuracy": 0.8443
+  }
+ },
+ "comparison": {
+  "production": null,
+  "note": "no production model for this strategy: compared with the no-filter baseline only"
+ },
+ "feature_importance": {
+  "trend": {
+   "minutes_to_expiry": 0.08538,
+   "or_position": 0.07041,
+   "gap_pct": 0.06523,
+   "rv_30m": 0.05948,
+   "recent_avg_r_5": 0.05238,
+   "ret_30m": 0.05203,
+   "vwap_dist_pct": 0.05162,
+   "option_volume_log": 0.04902,
+   "minutes_since_open": 0.04294,
+   "option_iv": 0.04293,
+   "rv_15m": 0.04117,
+   "atr14_pct": 0.03724,
+   "option_oi_log": 0.03304,
+   "ret_15m": 0.03254,
+   "ret_1m": 0.02971
+  },
+  "vol": {
+   "atr14_pct": 0.45223,
+   "rv_30m": 0.14484,
+   "or_position": 0.02984,
+   "minutes_since_open": 0.02877,
+   "recent_avg_r_5": 0.02815,
+   "option_volume_log": 0.02644,
+   "rv_15m": 0.02416,
+   "or_width_pct": 0.02288,
+   "option_iv": 0.02137,
+   "ret_15m": 0.02072,
+   "minutes_to_expiry": 0.02006,
+   "vwap_dist_pct": 0.01983,
+   "ret_30m": 0.01658,
+   "ema20_slope_pct": 0.01492,
+   "ret_1m": 0.01403
+  }
+ },
+ "feature_coverage": {
+  "direction": 1.0,
+  "ret_1m": 1.0,
+  "ret_3m": 1.0,
+  "ret_5m": 1.0,
+  "ret_15m": 1.0,
+  "ret_30m": 0.982,
+  "gap_pct": 0.959,
+  "vwap_dist_pct": 1.0,
+  "ema20_dist_pct": 1.0,
+  "ema20_slope_pct": 1.0,
+  "atr14_pct": 1.0,
+  "rv_15m": 1.0,
+  "rv_30m": 0.982,
+  "or_position": 1.0,
+  "or_width_pct": 1.0,
+  "minutes_since_open": 1.0,
+  "minutes_to_square_off": 1.0,
+  "day_of_week": 1.0,
+  "minutes_to_expiry": 1.0,
+  "is_expiry_day": 1.0,
+  "option_premium": 1.0,
+  "option_premium_pct_spot": 1.0,
+  "option_moneyness_pct": 1.0,
+  "option_iv": 1.0,
+  "option_volume_log": 1.0,
+  "option_oi_log": 1.0,
+  "option_spread_pct": 0.0,
+  "recent_win_rate_5": 0.9914,
+  "recent_avg_r_5": 0.9914,
+  "consecutive_losses": 1.0,
+  "regime_trend": 0.982,
+  "regime_vol": 0.982
+ },
+ "leakage_checks": [
+  "features computed by compute_features from bars completed at or before as-of (Bars.upto); verified by tests that rewrite every later bar and get identical features",
+  "every label starts at its feature as-of time (t0 == as_of, asserted) and ends at or after it (t1 >= t0)",
+  "recent-outcome features use only labels known by as-of (t1 <= as_of)",
+  "regime features are trailing rules; the forward regime model is never a training feature",
+  "no dataset-wide scaling or normalisation (no scaler to fit, nothing to leak)",
+  "chronological split; never shuffled",
+  "forward-only purged K-fold: training rows whose [t0, t1] overlaps a test block are purged, rows starting within the embargo after it are dropped, rows after it are never used",
+  "final holdout = last days, untouched until the single final evaluation; development rows whose label ends after the holdout starts are purged"
+ ],
+ "gates": {
+  "min OOS events": {
+   "value": 936,
+   "threshold": 100,
+   "passed": true
+  },
+  "trend: OOS log loss below the prior baseline": {
+   "value": 1.2005,
+   "threshold": 0.8919,
+   "passed": false
+  },
+  "vol: OOS log loss below the prior baseline": {
+   "value": 1.0947,
+   "threshold": 1.0012,
+   "passed": false
+  }
+ },
+ "gates_passed": false,
+ "headline": {
+  "oos_trend_log_loss": 1.2005,
+  "oos_trend_baseline": 0.8919,
+  "oos_vol_log_loss": 1.0947,
+  "oos_vol_baseline": 1.0012,
+  "holdout": {
+   "events": 244,
+   "trend_log_loss": 0.87,
+   "vol_log_loss": 0.7153
+  },
+  "gates_passed": false
+ },
+ "status": "REJECTED",
+ "status_note": "SYNTHETIC: stays TRAINED/REJECTED for ever; never VALIDATED or promoted"
+}
