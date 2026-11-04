@@ -5,7 +5,9 @@ here, through the same risk and execution services the strategies use.
 
 Kill-switch reset by a named human:
 
-1. The scope must actually be blocked.
+1. The kill's own actions (cancel, flatten, mark strategies KILLED) must have
+   finished, so the reset never races them; then the scope must still be
+   blocked.
 2. A daily-loss kill from today cannot be reset: the daily loss limit is a
    hard limit, and that kill clears automatically on the next trading day.
 3. Reconciliation must pass first, so local state and the broker agree. A
@@ -97,6 +99,10 @@ class OperatorControls:
             return ControlResult(False, "a note explaining the reset is required")
         ks = self.kill_switch
         scope = strategy_id or "GLOBAL"
+        # Let the kill's own actions (cancel, flatten, mark strategies KILLED)
+        # finish first, so the reset never races the action it undoes. Bounded
+        # by the exit retries; a failed exit escalates the kill meanwhile.
+        await ks.wait_idle()
         ev = ks.global_event if strategy_id is None else ks.strategy_events.get(strategy_id)
         if ev is None:
             return ControlResult(False, f"kill switch is not active for {scope}")

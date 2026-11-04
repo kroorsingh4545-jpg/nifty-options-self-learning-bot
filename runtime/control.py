@@ -13,6 +13,9 @@ works the same while the trading clock is simulated.
 Command rules:
 * KILL_SWITCH commands run before every other queued command, and a
   KILL_SWITCH never expires (acting late on an emergency stop is still safe).
+* A RESET_KILL_SWITCH queued before a kill in the same batch is rejected as
+  superseded: running kills first must never let an older reset undo a newer
+  emergency stop. A reset queued after the kill still runs (in order).
 * EXIT_POSITION runs as a background task, so a slow or failing exit (up to
   ~30 s of retries) never delays a later kill or the heartbeat. While it runs
   the command stays PENDING in the database but is tracked in memory, so it
@@ -98,10 +101,18 @@ class ControlService:
         queue = [c for c in repo.pending() if c.id not in self.in_flight]
         # Emergency stops first, whatever their position in the queue.
         queue.sort(key=lambda c: (c.command is not ControlCommandType.KILL_SWITCH, c.id or 0))
+        last_kill = max((c.id for c in queue if c.command is ControlCommandType.KILL_SWITCH and c.id is not None),
+                        default=None)
         started = 0
         for cmd in queue:
             assert cmd.id is not None
             now = self._wall()
+            if cmd.command is ControlCommandType.RESET_KILL_SWITCH and last_kill is not None and cmd.id < last_kill:
+                msg = f"superseded by a later kill switch command (#{last_kill}); re-issue the reset if still needed"
+                repo.complete(cmd.id, ControlCommandStatus.REJECTED, msg, at=now)
+                log.warning("reset rejected: a later kill switch was queued",
+                            extra={"id": cmd.id, "kill_id": last_kill, "operator": cmd.operator})
+                continue
             expired = cmd.expires_at is not None and cmd.expires_at < now
             if expired and cmd.command is not ControlCommandType.KILL_SWITCH:
                 repo.complete(cmd.id, ControlCommandStatus.EXPIRED, "expired before the bot processed it", at=now)

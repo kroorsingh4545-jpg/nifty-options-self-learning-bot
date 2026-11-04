@@ -1,6 +1,6 @@
 # Phase 5 Risk & Execution Audits
 
-This file holds two audits of the same branch, in order: the initial audit (PASS WITH WARNINGS) and the re-audit after the fixes for warnings 1, 2 and 4 (**FAIL**), appended at the end.
+This file holds three audits of the same branch, in order: the initial audit (PASS WITH WARNINGS), the re-audit after the fixes for warnings 1, 2 and 4 (**FAIL**: reset-before-kill race), and the re-audit after that fix (**PASS WITH WARNINGS**), appended at the end.
 
 ---
 
@@ -128,3 +128,59 @@ Verdict: **FAIL**
 1. A RESET queued before a KILL in the same batch must be rejected, and the kill must remain active (the regression test for blocking issue 1).
 2. A RESET queued after a KILL in the same batch must still run (the kill does not suppress later resets).
 3. Concurrent SQLite writes from the bot and the dashboard under load (carried over).
+
+---
+
+# Risk & Execution Audit Report (Phase 5 re-audit after the reset-before-kill fix)
+
+Date: 2026-11-04
+Scope (files / PR): branch `phase-5-dashboard`, covering:
+- `runtime/control.py` `process_pending` (superseded resets)
+- `execution/operator_controls.py` `reset_kill_switch` (waits for the kill's actions before resetting)
+- all other Phase 5 code
+
+Mode audited: PAPER
+Tests: 635 passed; ruff and mypy (strict) clean. The audit probe that reproduced the bug now ends with the kill switch active and both strategies KILLED.
+Verdict: **PASS WITH WARNINGS**
+
+## Results
+
+| # | Area | Status | Evidence (file:line, test) | Notes |
+|---|---|---|---|---|
+| 1 | Entry logic | OK | Unchanged | |
+| 2 | Exit logic | OK | `runtime/control.py:121` (manual exits in the background). Test: `test_kill_is_not_delayed_by_a_stuck_exit` | |
+| 3 | Stop-loss logic | OK | Unchanged | |
+| 4 | Take-profit logic | OK | Unchanged | |
+| 5 | Trailing-stop logic | OK | Unchanged | |
+| 6 | Position sizing | OK | Unchanged | |
+| 7 | Daily loss limits | OK | `execution/operator_controls.py:110` (an intraday daily-loss reset is still refused, checked after the wait) | |
+| 8 | Global loss limits | OK | Unchanged | |
+| 9 | Margin checks | OK | Unchanged | |
+| 10 | Order lifecycle handling | OK | Unchanged | |
+| 11 | Partial fills | OK | Unchanged | |
+| 12 | Order rejection handling | OK | Unchanged | |
+| 13 | Reconciliation | OK | `operator_controls.py:113`: the reset reconciles after the kill's flatten has finished, so it compares settled state. Test: `test_reset_waits_for_the_kill_to_finish_flattening` | |
+| 14 | Square-off logic | OK | Unchanged | |
+| 15 | Kill-switch behavior | OK | Superseding at `runtime/control.py:103-115`: kills sorted first, and any RESET with an id lower than the batch's newest kill is REJECTED. Waiting at `operator_controls.py:105`: the reset waits for the kill's handlers (`risk/kill_switch.py:187-190`), and the KILLED marking and flatten at `execution/square_off.py:136-139` complete before re-activation. Tests: `test_reset_queued_before_a_kill_is_rejected_and_the_kill_stands`, `test_reset_queued_after_a_kill_still_runs`, `test_queue_order_is_respected_around_a_kill`, `test_strategy_kill_also_supersedes_an_earlier_reset`, `test_reset_waits_for_the_kill_to_finish_flattening`, `test_kill_runs_before_commands_queued_ahead_of_it` | The blocking issue is fixed. The latest intent always wins: an earlier reset cannot undo a later kill, and a later reset still runs. Any later kill, including a strategy-scoped one, supersedes an earlier reset (errs on the side of staying stopped). |
+| 16 | API rate-limit compliance | WARN | `runtime/control.py:183`: funds read every second | Carried over. |
+| 17 | PAPER/LIVE isolation | OK | Unchanged | |
+| 18 | Restart recovery | OK | Unchanged. A superseded or expired reset is final in the database and never replays after a restart. | |
+| 19 | Logging and audit trail | OK | A superseded reset is recorded REJECTED with the kill's id and logged with the operator (`runtime/control.py:110-115`). The loopback-only bind and bot-only migration fixes are unchanged and tested. | |
+
+## Blocking issues
+
+None.
+
+## Warnings
+
+1. **A reset waiting on a slow flatten holds up the control loop.** The reset waits for the kill's handlers (up to ~30 s if exits keep failing). Commands are processed one at a time, so commands queued meanwhile, kills included, wait until the reset finishes and then run on the next tick (at most ~1 s later). The kill switch stays active for the whole wait, so the exposure is only that tick after a successful reset. Ordering is still correct: an earlier reset followed by a later kill ends killed.
+2. Funds are read every second (carried over; cache them before a real broker).
+3. There is one shared dashboard account (carried over; per-user accounts are needed before LIVE).
+4. A reset can re-activate strategies that still have open positions in scope (carried over; the reset form should list them).
+5. `--allow-remote` trusts the operator to provide TLS.
+6. Carried over from Phase 4: real-clock timestamps and the instrument list parsed on the event loop.
+
+## Required tests missing
+
+1. A kill queued while a reset waits on a slow, failing flatten: check that it is applied on the tick after the reset (bounds warning 1).
+2. Bot and dashboard writing to SQLite at the same time under load (carried over).

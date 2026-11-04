@@ -405,3 +405,94 @@ async def test_kill_is_not_delayed_by_a_stuck_exit() -> None:
     done = sim.repos.commands.get(exit_id)
     assert done is not None and done.status is ControlCommandStatus.REJECTED
     assert exit_id not in sim.bot.control.in_flight
+
+
+# --------------------------------------------------------------------------- #
+# A reset queued before a kill must never undo it (kills run first)
+# --------------------------------------------------------------------------- #
+
+
+async def idle_sim() -> Sim:
+    """Prepared bot, no positions: reconciliation is clean, so a reset that is
+    allowed to run succeeds."""
+    sim = Sim(at(9, 14))
+    sim.bot.control._wall = Wall()
+    await sim.bot.prepare()
+    return sim
+
+
+async def test_reset_queued_before_a_kill_is_rejected_and_the_kill_stands() -> None:
+    sim = await idle_sim()
+    ks = sim.bot.stack.kill_switch
+    ks.trigger(KillReason.MANUAL, "earlier stop")
+    await sim.bot.settle()
+    reset = enqueue(sim, ControlCommandType.RESET_KILL_SWITCH, note="all clear")  # queued first
+    kill = enqueue(sim, ControlCommandType.KILL_SWITCH, note="new emergency")     # queued a moment later
+    await sim.bot.control.process_pending()
+    await sim.bot.settle()
+    r = sim.repos.commands.get(reset)
+    assert r is not None and r.status is ControlCommandStatus.REJECTED
+    assert f"superseded by a later kill switch command (#{kill})" in (r.result_message or "")
+    assert sim.repos.commands.get(kill).status is ControlCommandStatus.DONE  # type: ignore[union-attr]
+    assert ks.active
+    assert set(statuses(sim).values()) == {StrategyStatus.KILLED}
+
+
+async def test_reset_queued_after_a_kill_still_runs() -> None:
+    sim = await idle_sim()
+    kill = enqueue(sim, ControlCommandType.KILL_SWITCH, note="stop")
+    reset = enqueue(sim, ControlCommandType.RESET_KILL_SWITCH, note="checked, resume")  # queued after the kill
+    await sim.bot.control.process_pending()
+    await sim.bot.settle()
+    assert sim.repos.commands.get(kill).status is ControlCommandStatus.DONE  # type: ignore[union-attr]
+    r = sim.repos.commands.get(reset)
+    assert r is not None and r.status is ControlCommandStatus.DONE, r.result_message
+    assert not sim.bot.stack.kill_switch.active
+    assert set(statuses(sim).values()) == {StrategyStatus.ACTIVE}
+
+
+async def test_queue_order_is_respected_around_a_kill() -> None:
+    """reset #1, kill #2, reset #3: #1 is superseded, #3 (the latest intent) runs."""
+    sim = await idle_sim()
+    sim.bot.stack.kill_switch.trigger(KillReason.MANUAL, "earlier stop")
+    await sim.bot.settle()
+    first = enqueue(sim, ControlCommandType.RESET_KILL_SWITCH, note="first")
+    kill = enqueue(sim, ControlCommandType.KILL_SWITCH, note="emergency")
+    last = enqueue(sim, ControlCommandType.RESET_KILL_SWITCH, note="verified after the emergency")
+    await sim.bot.control.process_pending()
+    await sim.bot.settle()
+    assert sim.repos.commands.get(first).status is ControlCommandStatus.REJECTED  # type: ignore[union-attr]
+    assert sim.repos.commands.get(kill).status is ControlCommandStatus.DONE  # type: ignore[union-attr]
+    assert sim.repos.commands.get(last).status is ControlCommandStatus.DONE  # type: ignore[union-attr]
+    assert not sim.bot.stack.kill_switch.active
+
+
+async def test_strategy_kill_also_supersedes_an_earlier_reset() -> None:
+    sim = await idle_sim()
+    ks = sim.bot.stack.kill_switch
+    ks.trigger(KillReason.MANUAL, "earlier stop")
+    await sim.bot.settle()
+    reset = enqueue(sim, ControlCommandType.RESET_KILL_SWITCH, note="all clear")
+    enqueue(sim, ControlCommandType.KILL_SWITCH, strategy_id="vwap_ema", note="vwap misbehaving")
+    await sim.bot.control.process_pending()
+    await sim.bot.settle()
+    assert sim.repos.commands.get(reset).status is ControlCommandStatus.REJECTED  # type: ignore[union-attr]
+    assert ks.active  # conservative: any later kill keeps everything stopped until a fresh reset
+
+
+async def test_reset_waits_for_the_kill_to_finish_flattening() -> None:
+    """kill then reset in one batch, with an open position: the reset must not
+    race the kill's flatten / KILLED marking (no strategy left KILLED with the
+    kill switch cleared, no position left open)."""
+    sim = await traded_sim()
+    await sim.step(at(10, 1), 24560.0)  # fresh quotes so the flatten can fill
+    kill = enqueue(sim, ControlCommandType.KILL_SWITCH, note="stop")
+    reset = enqueue(sim, ControlCommandType.RESET_KILL_SWITCH, note="flat confirmed, resume")
+    await sim.bot.control.process_pending()
+    await sim.bot.settle()
+    assert sim.repos.commands.get(kill).status is ControlCommandStatus.DONE  # type: ignore[union-attr]
+    r = sim.repos.commands.get(reset)
+    assert r is not None and r.status is ControlCommandStatus.DONE, r.result_message
+    assert sim.bot.stack.positions.open_trade_count() == 0  # the kill's flatten completed first
+    assert not sim.bot.stack.kill_switch.active
+    assert set(statuses(sim).values()) == {StrategyStatus.ACTIVE}  # consistent with the reset's report
