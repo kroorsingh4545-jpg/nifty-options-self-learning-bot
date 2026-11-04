@@ -2,12 +2,24 @@
 
 A NIFTY weekly options intraday trading bot for Indian markets, using the Upstox Developer API.
 
-> **Status: Phase 4 (strategies + engine) complete.** On top of Phases 1–3: the Opening Range Breakout and
-> VWAP+EMA strategies, the core engine, the event bus, the state manager, the mode controller (PAPER only),
-> and the APScheduler session jobs, all running end to end in PAPER mode. **No real orders can be placed.**
-> The dashboard, backtesting, ML and RL come next. Roadmap: [`docs/build-plan.md`](docs/build-plan.md).
-> Strategies and engine: [`docs/strategies.md`](docs/strategies.md). Risk audit:
-> [`docs/audits/phase-3-risk-execution-audit.md`](docs/audits/phase-3-risk-execution-audit.md).
+> **Status: Phase 5 (dashboard) complete.** On top of Phases 1–4: a Streamlit dashboard that shows the
+> PAPER bot's live state and sends operator commands (kill switch, named reset with strategy re-activation,
+> manual exits, Start/Pause/Stop, autonomy, LIVE request) through the risk and execution services. PAPER is
+> the default, and LIVE is always refused in this build. **No real orders can be placed.** Backtesting, ML
+> and RL come next. Roadmap: [`docs/build-plan.md`](docs/build-plan.md). Dashboard:
+> [`docs/dashboard.md`](docs/dashboard.md). Strategies and engine: [`docs/strategies.md`](docs/strategies.md).
+> Risk audits: [`docs/audits/`](docs/audits/).
+
+## Dashboard (Phase 5)
+
+```bash
+# DASHBOARD_USERNAME / DASHBOARD_PASSWORD must be set in .env
+streamlit run dashboard/app.py
+```
+
+The bot publishes its state to SQLite every second, and the dashboard queues commands that the bot runs
+through `execution/operator_controls.py`. The dashboard never talks to the broker. See
+[`docs/dashboard.md`](docs/dashboard.md).
 
 ## Risk & execution (Phase 3)
 

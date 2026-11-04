@@ -33,3 +33,6 @@ htmlcov/
 *.egg-info/
 build/
 dist/
+
+# Playwright MCP snapshots / screenshots (local QA output)
+.playwright-mcp/

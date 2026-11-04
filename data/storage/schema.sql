@@ -284,9 +284,54 @@ CREATE TABLE IF NOT EXISTS learning_events (
 );
 CREATE INDEX IF NOT EXISTS ix_learning_events_strategy ON learning_events(strategy_id, created_at);
 
+-- ---------------------------------------------------------------------------
+-- control_commands (v3): operator commands queued by the dashboard and
+-- executed by the bot through the risk / execution services. The operator is
+-- the authenticated dashboard user. A processed command is final.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS control_commands (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    mode           TEXT NOT NULL CHECK (mode IN ('PAPER','LIVE')),
+    command        TEXT NOT NULL CHECK (command IN ('KILL_SWITCH','RESET_KILL_SWITCH','EXIT_POSITION',
+                                                    'ENGINE_START','ENGINE_PAUSE','ENGINE_STOP',
+                                                    'SET_AUTONOMY','REQUEST_LIVE','REQUEST_PAPER')),
+    strategy_id    TEXT REFERENCES strategies(strategy_id),   -- NULL = global scope
+    target         TEXT,                                      -- e.g. trade_uid for EXIT_POSITION
+    payload_json   TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload_json)),
+    operator       TEXT NOT NULL CHECK (length(trim(operator)) > 0),
+    note           TEXT NOT NULL DEFAULT '',
+    status         TEXT NOT NULL DEFAULT 'PENDING'
+                   CHECK (status IN ('PENDING','DONE','REJECTED','FAILED','EXPIRED')),
+    result_message TEXT,
+    result_json    TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(result_json)),
+    requested_at   TEXT NOT NULL,
+    expires_at     TEXT,                                      -- NULL = never expires (kill switch)
+    processed_at   TEXT,
+    CHECK (status = 'PENDING' OR processed_at IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS ix_control_commands_status ON control_commands(mode, status, id);
+
+-- ---------------------------------------------------------------------------
+-- runtime_state (v3): the bot's latest published state snapshot (one row per
+-- mode), read by the dashboard. Contains no secrets.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS runtime_state (
+    mode          TEXT PRIMARY KEY CHECK (mode IN ('PAPER','LIVE')),
+    state_json    TEXT NOT NULL CHECK (json_valid(state_json)),
+    published_at  TEXT NOT NULL
+);
+
 -- ============================================================================
 -- Isolation / integrity triggers
 -- ============================================================================
+
+-- A processed control command can never be changed again.
+CREATE TRIGGER IF NOT EXISTS trg_control_commands_final
+BEFORE UPDATE ON control_commands
+WHEN OLD.status <> 'PENDING'
+BEGIN
+    SELECT RAISE(ABORT, 'control command already processed');
+END;
 
 -- An order linked to a trade must share its mode and strategy.
 CREATE TRIGGER IF NOT EXISTS trg_orders_trade_match_insert

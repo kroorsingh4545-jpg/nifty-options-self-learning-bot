@@ -12,7 +12,7 @@ from typing import Any
 
 from core.clock import now_ist
 
-SCHEMA_VERSION = 2  # v2: trades stop-loss tighten-only trigger
+SCHEMA_VERSION = 3  # v2: trades stop-loss tighten-only trigger; v3: control_commands, runtime_state
 
 REQUIRED_TABLES = (
     "strategies",
@@ -25,6 +25,8 @@ REQUIRED_TABLES = (
     "feature_snapshots",
     "model_runs",
     "learning_events",
+    "control_commands",
+    "runtime_state",
 )
 
 

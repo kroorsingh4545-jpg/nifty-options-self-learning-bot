@@ -9,13 +9,15 @@ Strategy isolation is preserved by always scoping by ``strategy_id``.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable, Sequence
 from datetime import date, datetime
 from typing import Any, TypeVar
 
-from core.clock import now_ist
+from core.clock import ensure_ist, now_ist
 from core.enums import (
+    ControlCommandStatus,
     ModelRunStatus,
     ModelType,
     OrderStatus,
@@ -26,6 +28,7 @@ from core.enums import (
 )
 from data.storage.database import Database
 from data.storage.records import (
+    ControlCommandRecord,
     DailyPnlRecord,
     FeatureSnapshotRecord,
     FillRecord,
@@ -177,6 +180,11 @@ class OrderRepository(_ModeScoped):
             params.extend(status_list)
         return [OrderRecord.from_row(r) for r in self.db.query(sql + " ORDER BY id", params)]
 
+    def list_all(self) -> list[OrderRecord]:
+        """Every order for this mode, oldest first."""
+        rows = self.db.query("SELECT * FROM orders WHERE mode = ? ORDER BY id", (self.mode.value,))
+        return [OrderRecord.from_row(r) for r in rows]
+
     def list_open(self) -> list[OrderRecord]:
         """All non-terminal orders (any strategy) for this mode."""
         rows = self.db.query(
@@ -222,6 +230,11 @@ class FillRepository(_ModeScoped):
     def insert(self, fill: FillRecord) -> int:
         self._guard(fill)
         return _insert(self.db, "fills", fill.to_row(exclude={"id"}))
+
+    def list_all(self) -> list[FillRecord]:
+        """Every fill for this mode, oldest first."""
+        rows = self.db.query("SELECT * FROM fills WHERE mode = ? ORDER BY filled_at, id", (self.mode.value,))
+        return [FillRecord.from_row(r) for r in rows]
 
     def list_for_order(self, order_id: int) -> list[FillRecord]:
         rows = self.db.query(
@@ -481,6 +494,63 @@ class LearningEventRepository:
 # --------------------------------------------------------------------------- #
 
 
+class ControlCommandRepository(_ModeScoped):
+    """Dashboard -> bot command queue (oldest first)."""
+
+    def enqueue(self, cmd: ControlCommandRecord) -> int:
+        self._guard(cmd)
+        if cmd.status is not ControlCommandStatus.PENDING:
+            raise ValueError("new commands must be PENDING")
+        return _insert(self.db, "control_commands", cmd.to_row(exclude={"id"}))
+
+    def get(self, command_id: int) -> ControlCommandRecord | None:
+        row = self.db.query_one("SELECT * FROM control_commands WHERE mode = ? AND id = ?",
+                                (self.mode.value, int(command_id)))
+        return ControlCommandRecord.from_row(row) if row else None
+
+    def pending(self, limit: int = 50) -> list[ControlCommandRecord]:
+        rows = self.db.query("SELECT * FROM control_commands WHERE mode = ? AND status = 'PENDING' ORDER BY id LIMIT ?",
+                             (self.mode.value, int(limit)))
+        return [ControlCommandRecord.from_row(r) for r in rows]
+
+    def recent(self, limit: int = 50) -> list[ControlCommandRecord]:
+        rows = self.db.query("SELECT * FROM control_commands WHERE mode = ? ORDER BY id DESC LIMIT ?",
+                             (self.mode.value, int(limit)))
+        return [ControlCommandRecord.from_row(r) for r in rows]
+
+    def complete(self, command_id: int, status: ControlCommandStatus, message: str, *, at: datetime,
+                 result: dict[str, Any] | None = None) -> bool:
+        """Finalise a PENDING command. Returns False if it was already processed."""
+        status = ControlCommandStatus(status)
+        if status is ControlCommandStatus.PENDING:
+            raise ValueError("cannot complete a command as PENDING")
+        cur = self.db.execute(
+            "UPDATE control_commands SET status = ?, result_message = ?, result_json = ?, processed_at = ? "
+            "WHERE mode = ? AND id = ? AND status = 'PENDING'",
+            (status.value, message[:2000], json.dumps(result or {}, default=str), at.isoformat(), self.mode.value,
+             int(command_id)),
+        )
+        return int(cur.rowcount) == 1
+
+
+class RuntimeStateRepository(_ModeScoped):
+    """The bot's latest published state snapshot (one row per mode)."""
+
+    def publish(self, state: dict[str, Any], *, at: datetime) -> None:
+        self.db.execute(
+            "INSERT INTO runtime_state(mode, state_json, published_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(mode) DO UPDATE SET state_json = excluded.state_json, published_at = excluded.published_at",
+            (self.mode.value, json.dumps(state, default=str), at.isoformat()),
+        )
+
+    def latest(self) -> tuple[dict[str, Any], datetime] | None:
+        row = self.db.query_one("SELECT state_json, published_at FROM runtime_state WHERE mode = ?",
+                                (self.mode.value,))
+        if row is None:
+            return None
+        return json.loads(row["state_json"]), ensure_ist(datetime.fromisoformat(row["published_at"]))
+
+
 class Repositories:
     """All repositories for one trading mode, sharing one Database."""
 
@@ -497,6 +567,8 @@ class Repositories:
         self.feature_snapshots = FeatureSnapshotRepository(db, self.mode)
         self.model_runs = ModelRunRepository(db)
         self.learning_events = LearningEventRepository(db)
+        self.commands = ControlCommandRepository(db, self.mode)
+        self.runtime_state = RuntimeStateRepository(db, self.mode)
 
 
 __all__: Sequence[str] = (

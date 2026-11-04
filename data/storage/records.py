@@ -15,6 +15,8 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validat
 
 from core.clock import ensure_ist, now_ist
 from core.enums import (
+    ControlCommandStatus,
+    ControlCommandType,
     LearningStage,
     ModelRunStatus,
     ModelType,
@@ -338,3 +340,32 @@ class LearningEventRecord(Record):
     outcome: str | None = None
     approved_by: str | None = None
     created_at: ISTDatetime = Field(default_factory=_now)
+
+
+class ControlCommandRecord(Record):
+    """An operator command queued by the dashboard. ``operator`` is the
+    authenticated dashboard user; ``expires_at`` None never expires."""
+
+    json_fields: ClassVar[tuple[str, ...]] = ("payload_json", "result_json")
+
+    id: int | None = None
+    mode: TradingMode
+    command: ControlCommandType
+    strategy_id: StrategyId | None = None
+    target: str | None = None
+    payload_json: dict[str, Any] = Field(default_factory=dict)
+    operator: str = Field(min_length=1)
+    note: str = ""
+    status: ControlCommandStatus = ControlCommandStatus.PENDING
+    result_message: str | None = None
+    result_json: dict[str, Any] = Field(default_factory=dict)
+    requested_at: ISTDatetime = Field(default_factory=_now)
+    expires_at: ISTDatetime | None = None
+    processed_at: ISTDatetime | None = None
+
+    @field_validator("operator")
+    @classmethod
+    def _named(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("operator must be a named person")
+        return v.strip()

@@ -164,3 +164,26 @@ def test_instrument_lot_size_has_no_default() -> None:
 
     field = Instrument.model_fields["lot_size"]
     assert field.is_required()  # must always be supplied from the instrument list
+
+
+def _imported_modules(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            out.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            out.add(node.module)
+    return out
+
+
+def test_dashboard_is_ui_only() -> None:
+    """The dashboard reads state and queues commands; it never imports the
+    broker, the execution / risk services or the runtime that acts."""
+    forbidden = {"broker", "execution", "risk", "runtime"}
+    for path in _py_files("dashboard"):
+        mods = _imported_modules(path)
+        tops = {m.split(".")[0] for m in mods}
+        assert not (tops & forbidden), f"{path.relative_to(PROJECT_ROOT)} imports {tops & forbidden}"
+        strategies = {m for m in mods if m.startswith("strategies")}
+        assert strategies <= {"strategies.indicators"}, f"{path.relative_to(PROJECT_ROOT)} imports {strategies}"
