@@ -101,6 +101,13 @@ execution:
   reconcile_debounce_seconds: 2    # after order updates
   square_off_check_seconds: 5
 
+ml:
+  # Models registered in the trading database (trained on HISTORICAL data only).
+  artifact_dir: models
+  # SYNTHETIC / research training runs and their separate registry database.
+  research_dir: data/dev/ml
+  min_seeds: 5                   # every ML experiment runs >= 5 seeds
+
 logging:
   level: INFO
   directory: logs

@@ -27,6 +27,7 @@ Data source (SYNTHETIC / HISTORICAL) is carried through from the dataset.
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 from collections import Counter
 from collections.abc import Iterable, Sequence
@@ -172,18 +173,22 @@ class OptionHistory:
         self._options = [i for i in dataset.instruments if i.option_type is not None and i.expiry is not None
                          and i.strike is not None]
         self._by: dict[tuple[date, float, OptionType], Instrument] = {}
+        strikes: dict[tuple[date, OptionType], set[float]] = {}
         for i in self._options:
             assert i.expiry is not None and i.strike is not None and i.option_type is not None
             self._by[(i.expiry, i.strike, i.option_type)] = i
+            strikes.setdefault((i.expiry, i.option_type), set()).add(i.strike)
+        self._strikes = {k: sorted(v) for k, v in strikes.items()}
+        self._expiries = sorted({k[0] for k in self._strikes})
         self._bars: dict[str, Bars] = {}
 
     def expiry_for(self, day: date) -> date | None:
         """Nearest expiry on/after ``day`` (what the bot trades)."""
-        exps = sorted({i.expiry for i in self._options if i.expiry is not None and i.expiry >= day})
-        return exps[0] if exps else None
+        i = bisect.bisect_left(self._expiries, day)
+        return self._expiries[i] if i < len(self._expiries) else None
 
     def select(self, spot: float, opt: OptionType, rules: StrikeSelection, expiry: date) -> Instrument | None:
-        strikes = sorted({k[1] for k in self._by if k[0] == expiry and k[2] is opt})
+        strikes = self._strikes.get((expiry, opt), [])
         if not strikes:
             return None
         target = round(spot / rules.strike_step) * rules.strike_step

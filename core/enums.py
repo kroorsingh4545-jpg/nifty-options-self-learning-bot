@@ -112,6 +112,20 @@ class ModelRunStatus(StrEnum):
     ARCHIVED = "ARCHIVED"
 
 
+class ModelDataSource(StrEnum):
+    """What a model was trained on. Only HISTORICAL (real market data) models
+    can be validated or promoted (enforced in the schema)."""
+
+    SYNTHETIC = "SYNTHETIC"
+    HISTORICAL = "HISTORICAL"
+    UNKNOWN = "UNKNOWN"
+
+
+#: Statuses a model may only reach when trained on HISTORICAL data.
+REAL_DATA_ONLY_STATUSES = frozenset({ModelRunStatus.VALIDATED, ModelRunStatus.PAPER_READY,
+                                     ModelRunStatus.LIVE_CANDIDATE, ModelRunStatus.LIVE_APPROVED})
+
+
 class LearningStage(StrEnum):
     LOG = "LOG"
     REFLECT = "REFLECT"

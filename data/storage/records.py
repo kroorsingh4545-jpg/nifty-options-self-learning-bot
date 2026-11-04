@@ -15,9 +15,11 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validat
 
 from core.clock import ensure_ist, now_ist
 from core.enums import (
+    REAL_DATA_ONLY_STATUSES,
     ControlCommandStatus,
     ControlCommandType,
     LearningStage,
+    ModelDataSource,
     ModelRunStatus,
     ModelType,
     OptionType,
@@ -327,9 +329,12 @@ class ModelRunRecord(Record):
     approved_by: str | None = None
     created_at: ISTDatetime = Field(default_factory=_now)
     updated_at: ISTDatetime = Field(default_factory=_now)
+    data_source: ModelDataSource = ModelDataSource.UNKNOWN
 
     @model_validator(mode="after")
     def _check(self) -> ModelRunRecord:
+        if self.status in REAL_DATA_ONLY_STATUSES and self.data_source is not ModelDataSource.HISTORICAL:
+            raise ValueError(f"{self.status.value} requires a model trained on HISTORICAL data")
         if self.training_start >= self.training_end:
             raise ValueError("training_start must be before training_end")
         if self.status is ModelRunStatus.LIVE_APPROVED and not self.approved_by:

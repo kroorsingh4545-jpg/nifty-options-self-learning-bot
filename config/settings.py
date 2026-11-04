@@ -194,6 +194,17 @@ class ExecutionSection(_Frozen):
     square_off_check_seconds: PositiveFloat = 5.0
 
 
+class MLSection(_Frozen):
+    """Where model artefacts live. ``artifact_dir`` holds models registered
+    in the trading database (HISTORICAL data only); ``research_dir`` holds
+    SYNTHETIC / research runs and their own registry database, which is
+    never the trading database."""
+
+    artifact_dir: Path = Path("models")
+    research_dir: Path = Path("data/dev/ml")
+    min_seeds: int = Field(default=5, ge=5, le=50)
+
+
 class AppSettings(_Frozen):
     app: AppSection = AppSection()
     market_session: MarketSession = MarketSession()
@@ -205,6 +216,7 @@ class AppSettings(_Frozen):
     costs: CostsSection = CostsSection()
     execution: ExecutionSection = ExecutionSection()
     logging: LoggingSection = LoggingSection()
+    ml: MLSection = MLSection()
 
 
 # --------------------------------------------------------------------------- #

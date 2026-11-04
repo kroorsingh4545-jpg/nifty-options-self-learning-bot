@@ -23,7 +23,9 @@ from typing import Any, TypeVar
 
 from core.clock import ensure_ist, now_ist
 from core.enums import (
+    REAL_DATA_ONLY_STATUSES,
     ControlCommandStatus,
+    ModelDataSource,
     ModelRunStatus,
     ModelType,
     OrderStatus,
@@ -492,6 +494,11 @@ class ModelRunRepository(_Clocked):
         status = ModelRunStatus(status)
         if status is ModelRunStatus.LIVE_APPROVED and not approved_by:
             raise ValueError("LIVE_APPROVED requires a named human approver")
+        if status in REAL_DATA_ONLY_STATUSES:
+            current = self.get(run_id)
+            if current is not None and current.data_source is not ModelDataSource.HISTORICAL:
+                raise ValueError(f"{status.value} requires a model trained on HISTORICAL data "
+                                 f"(this one: {current.data_source.value})")
         cur = self.db.execute(
             "UPDATE model_runs SET status = ?, approved_by = COALESCE(?, approved_by), updated_at = ? WHERE run_id = ?",
             (status.value, approved_by, self.now().isoformat(), run_id),
