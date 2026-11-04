@@ -239,7 +239,7 @@ async def test_schedule_registers_session_jobs() -> None:
     await sim.bot.prepare()
     sch = sim.bot.schedule()
     assert set(sch.jobs) == {"candle_flush", "expire_entries", "square_off", "reconcile", "recenter",
-                             "start_of_day"}
+                             "control", "start_of_day"}
     assert sch.jobs["reconcile"].every_seconds is not None and sch.jobs["reconcile"].every_seconds <= 300
     await sch.run_now("square_off")
     await sch.run_now("candle_flush")

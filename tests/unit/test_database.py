@@ -342,3 +342,64 @@ def test_json_columns_must_be_valid_json(seeded_db: Database) -> None:
 def test_ml_confidence_bounded(seeded_db: Database) -> None:
     with pytest.raises(sqlite3.IntegrityError):
         _insert(seeded_db, "trades", _trade(ml_confidence=1.5))
+
+
+# --------------------------------------------------------------------------- #
+# open_existing / verify_schema: for processes that are not the bot
+# --------------------------------------------------------------------------- #
+
+
+def _bot_db(path: Path) -> Path:
+    db = Database(path)
+    db.initialize()
+    db.close()
+    return path
+
+
+def _set_version(path: Path, version: int) -> None:
+    raw = sqlite3.connect(path)
+    raw.execute("DELETE FROM schema_version")
+    raw.execute("INSERT INTO schema_version(version, applied_at) VALUES (?, ?)", (version, now_ist().isoformat()))
+    raw.commit()
+    raw.close()
+
+
+def test_open_existing_accepts_the_current_schema(tmp_path: Path) -> None:
+    db = Database.open_existing(_bot_db(tmp_path / "bot.db"))
+    assert db.verify_schema() == SCHEMA_VERSION
+    db.close()
+
+
+def test_open_existing_never_creates_a_file(tmp_path: Path) -> None:
+    path = tmp_path / "sub" / "missing.db"
+    with pytest.raises(DatabaseError, match="does not exist"):
+        Database.open_existing(path)
+    assert not path.exists() and not path.parent.exists()
+
+
+@pytest.mark.parametrize(("version", "msg"), [(SCHEMA_VERSION - 1, "older"), (SCHEMA_VERSION + 1, "newer")])
+def test_open_existing_refuses_other_versions_without_migrating(tmp_path: Path, version: int, msg: str) -> None:
+    path = _bot_db(tmp_path / "bot.db")
+    _set_version(path, version)
+    with pytest.raises(DatabaseError, match=msg):
+        Database.open_existing(path)
+    raw = sqlite3.connect(path)
+    assert [r[0] for r in raw.execute("SELECT version FROM schema_version")] == [version]  # untouched
+    raw.close()
+
+
+def test_open_existing_refuses_a_foreign_or_incomplete_database(tmp_path: Path) -> None:
+    foreign = tmp_path / "foreign.db"
+    raw = sqlite3.connect(foreign)
+    raw.execute("CREATE TABLE x (a INTEGER)")
+    raw.commit()
+    raw.close()
+    with pytest.raises(DatabaseError, match="not created by the bot"):
+        Database.open_existing(foreign)
+    path = _bot_db(tmp_path / "bot.db")
+    raw = sqlite3.connect(path)
+    raw.execute("DROP TABLE runtime_state")
+    raw.commit()
+    raw.close()
+    with pytest.raises(DatabaseError, match="missing tables"):
+        Database.open_existing(path)

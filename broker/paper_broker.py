@@ -17,12 +17,17 @@ reach Upstox. Fill model:
 * Charges: brokerage (once per order), STT, exchange, SEBI, stamp, GST.
 * ``client_order_id`` is an idempotency key: re-sending returns the
           existing order instead of creating a duplicate.
+* Restart: ``restore_book`` rebuilds orders, positions, cash and charges
+          from the persisted PAPER orders and fills, the way a real broker
+          keeps its book while the bot restarts. Without it, every PAPER
+          restart with open positions would look like a reconciliation
+          mismatch.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -75,6 +80,16 @@ class _Position:
     sell_quantity: int = 0
 
 
+@dataclass(frozen=True)
+class BookEntry:
+    """One persisted PAPER order and its fills, for ``restore_book``."""
+
+    request: OrderRequest
+    status: OrderStatus
+    trading_symbol: str
+    fills: Sequence[tuple[int, float, float]] = ()  # (quantity, price, charges), oldest first
+
+
 def _round_to_tick(price: float, tick: float, side: OrderSide) -> float:
     """Round adversely: up for BUY, down for SELL."""
     steps = price / tick
@@ -106,6 +121,35 @@ class PaperBroker(Broker):
         self._listeners: list[OrderUpdateListener] = []
 
     # ------------------------------------------------------------------ #
+    def restore_book(self, entries: Iterable[BookEntry]) -> dict[str, int]:
+        """Rebuild the simulated book after a restart. Only allowed while the
+        book is empty. Working orders (OPEN / PARTIALLY_FILLED) rest again and
+        can fill on later ticks; CREATED / UNKNOWN orders never reached the
+        book and are skipped. Returns the restored net positions."""
+        if self._orders:
+            raise BrokerError("paper book is not empty; restore_book is only allowed at startup")
+        working = (OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED, OrderStatus.SUBMITTED)
+        restored = 0
+        for e in entries:
+            if e.status not in TERMINAL and e.status not in working:
+                continue
+            req = e.request
+            order = _PaperOrder(request=req, paper_order_id=req.paper_order_id or new_paper_order_id(),
+                                quantity=req.quantity, price=req.price, trigger_price=req.trigger_price)
+            for qty, price, charges in e.fills:
+                self._book_fill(order, qty, price, charges, e.trading_symbol)
+            if e.status in TERMINAL:
+                order.status = e.status
+            else:
+                order.status = OrderStatus.PARTIALLY_FILLED if order.filled_quantity else OrderStatus.OPEN
+                order.triggered = order.filled_quantity > 0
+            self._orders[req.client_order_id] = order
+            restored += 1
+        net = {k: p.quantity for k, p in self._positions.items() if p.quantity}
+        log.warning("paper book restored", extra={"orders": restored, "positions": net,
+                                                  "cash": round(self._cash, 2)})
+        return net
+
     def register_instruments(self, instruments: Iterable[Instrument]) -> None:
         for inst in instruments:
             self._instruments[inst.instrument_key] = inst
@@ -392,6 +436,19 @@ class PaperBroker(Broker):
         req = order.request
         first_fill = order.filled_quantity == 0
         charges = self._charges.compute(req.side, qty, price, include_brokerage=first_fill).total
+        fill_id = self._book_fill(order, qty, price, charges, self._instruments[req.instrument_key].trading_symbol)
+        log.info(
+            "paper fill",
+            extra={"order_id": req.client_order_id, "strategy_id": req.strategy_id, "qty": qty, "price": price,
+                   "charges": charges, "status": order.status.value},
+        )
+        self._emit(order, last_fill_quantity=qty, last_fill_price=price, last_fill_charges=charges,
+                   last_fill_slippage=slippage, last_fill_id=fill_id)
+
+    def _book_fill(self, order: _PaperOrder, qty: int, price: float, charges: float, trading_symbol: str) -> str:
+        """Order, position, cash and charges bookkeeping for one fill (shared by
+        live fills and ``restore_book``)."""
+        req = order.request
         prev_value = (order.average_price or 0.0) * order.filled_quantity
         order.filled_quantity += qty
         order.average_price = round((prev_value + qty * price) / order.filled_quantity, 4)
@@ -401,8 +458,7 @@ class PaperBroker(Broker):
         fill_id = new_paper_fill_id()
         order.fills.append(fill_id)
 
-        inst = self._instruments[req.instrument_key]
-        pos = self._positions.setdefault(req.instrument_key, _Position(req.instrument_key, inst.trading_symbol))
+        pos = self._positions.setdefault(req.instrument_key, _Position(req.instrument_key, trading_symbol))
         if req.side is OrderSide.BUY:
             total = pos.quantity * pos.average_price + qty * price
             pos.quantity += qty
@@ -417,10 +473,4 @@ class PaperBroker(Broker):
                 pos.average_price = 0.0
             self._cash += qty * price - charges
         self._charges_paid += charges
-        log.info(
-            "paper fill",
-            extra={"order_id": req.client_order_id, "strategy_id": req.strategy_id, "qty": qty, "price": price,
-                   "charges": charges, "status": order.status.value},
-        )
-        self._emit(order, last_fill_quantity=qty, last_fill_price=price, last_fill_charges=charges,
-                   last_fill_slippage=slippage, last_fill_id=fill_id)
+        return fill_id

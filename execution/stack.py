@@ -26,6 +26,7 @@ from core.clock import now_ist
 from core.enums import RiskSeverity, StrategyStatus
 from data.market_data import MarketDataService
 from data.storage.repositories import Repositories
+from execution.operator_controls import OperatorControls
 from execution.order_manager import OrderManager
 from execution.position_manager import PositionManager
 from execution.reconciliation import Reconciler
@@ -51,6 +52,7 @@ class ExecutionStack:
     reconciler: Reconciler
     square_off: SquareOffManager
     notify: AlertSink | None = None  # fan-out to every sink (memory, log, Telegram)
+    controls: OperatorControls | None = None  # named-operator actions (dashboard)
 
     async def settle(self) -> None:
         """Wait for background tasks (exits, kill handlers, reconciliation)."""
@@ -122,5 +124,7 @@ def build_stack(
         market_data.add_listener(broker.on_tick)
     market_data.add_listener(positions.on_tick)
 
+    controls = OperatorControls(cfg, repos=repos, kill_switch=kill_switch, guard=guard, positions=positions,
+                                reconciler=reconciler, alerts=alerts, now_fn=now_fn)
     return ExecutionStack(cfg, repos, broker, market_data, memory, kill_switch, guard, orders, positions, risk,
-                          reconciler, square_off, notify=alerts)
+                          reconciler, square_off, notify=alerts, controls=controls)

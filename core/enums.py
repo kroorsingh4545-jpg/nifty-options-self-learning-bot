@@ -120,3 +120,25 @@ class LearningStage(StrEnum):
     VERIFY = "VERIFY"
     PROMOTE = "PROMOTE"
     REJECT = "REJECT"
+
+
+class ControlCommandType(StrEnum):
+    """Operator commands the dashboard may queue (executed by the bot)."""
+
+    KILL_SWITCH = "KILL_SWITCH"
+    RESET_KILL_SWITCH = "RESET_KILL_SWITCH"
+    EXIT_POSITION = "EXIT_POSITION"
+    ENGINE_START = "ENGINE_START"
+    ENGINE_PAUSE = "ENGINE_PAUSE"
+    ENGINE_STOP = "ENGINE_STOP"
+    SET_AUTONOMY = "SET_AUTONOMY"
+    REQUEST_LIVE = "REQUEST_LIVE"
+    REQUEST_PAPER = "REQUEST_PAPER"
+
+
+class ControlCommandStatus(StrEnum):
+    PENDING = "PENDING"
+    DONE = "DONE"
+    REJECTED = "REJECTED"
+    FAILED = "FAILED"
+    EXPIRED = "EXPIRED"
