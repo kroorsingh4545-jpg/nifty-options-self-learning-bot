@@ -71,6 +71,13 @@ class VwapEmaStrategy(BaseStrategy):
         self.armed = {OptionType.CE: True, OptionType.PE: True}
         self.last_reason: str | None = None
 
+    def _on_instrument_change(self) -> None:
+        # A new futures contract trades at a different basis: indicators built
+        # on the old contract would mislead, so start them afresh.
+        p: VwapEmaParams = self.params
+        self.ema = EMA(p.ema_period)
+        self._reset_state(self.day or self._now().date())
+
     def warm_up(self, candles: Iterable[Candle]) -> int:
         """Seed the EMA from earlier completed candles (e.g. previous session)."""
         n = 0

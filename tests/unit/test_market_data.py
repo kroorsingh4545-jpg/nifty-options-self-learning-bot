@@ -24,6 +24,9 @@ class FakeSource(MarketDataSource):
     async def get_option_contracts(self, underlying_key: str, expiry: date | None = None) -> list[Instrument]:
         return []
 
+    async def get_instruments(self, underlying_symbols: Sequence[str] = ("NIFTY",)) -> list[Instrument]:
+        return []
+
     async def get_option_chain(self, underlying_key: str, expiry: date) -> dict[str, Any]:
         return {}
 

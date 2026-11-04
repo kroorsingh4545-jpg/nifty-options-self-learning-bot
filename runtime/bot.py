@@ -1,17 +1,22 @@
 """TradingBot — builds and runs the whole PAPER system.
 
 Startup sequence (``prepare``):
- 1. restore daily loss guard, kill switch and open trades from SQLite
- 2. new-day reset (only clears statuses / kill events from PREVIOUS days)
- 3. load NIFTY option contracts -> nearest expiry -> strike universe
- 4. build strategies, resolver, gateway, engine; wire tick -> candle -> engine
- 5. startup reconciliation (a mismatch triggers the kill switch)
+ 1. warn (CRITICAL) if no NSE holidays are configured for the current year
+ 2. load the Upstox instrument list: NIFTY options (nearest expiry -> strike
+    universe), the current-month NIFTY future, and ALL lot sizes
+ 3. restore daily loss guard, kill switch and open trades from SQLite
+ 4. build strategies (NIFTY_FUT strategies get the current-month future),
+    resolver, gateway, engine; wire tick -> candle -> engine
+ 5. subscribe NIFTY index + current future; new-day reset (only clears
+    statuses / kill events from PREVIOUS days)
+ 6. startup reconciliation (a mismatch triggers the kill switch)
 
 Scheduled jobs (``schedule``), all IST:
  * candle flush (1 s)          * stale-entry expiry (5 s)
  * square-off check (5 s)      * strike-universe recenter (30 s)
  * periodic reconciliation (<= 300 s)
- * daily 09:00 new-day reset (Mon–Fri)
+ * daily 09:00 start-of-day (Mon-Fri): refresh the instrument list, roll the
+   futures contract after expiry, new-day reset
 """
 
 from __future__ import annotations
@@ -34,11 +39,12 @@ from core.models import Instrument
 from core.scheduler import TradingScheduler
 from core.state_manager import StateManager
 from data.candle_builder import CandleBuilder
+from data.instruments import InstrumentMaster, build_master
 from data.market_data import MarketDataService
 from data.storage.repositories import Repositories
 from execution.stack import ExecutionStack, build_stack
 from monitoring.json_logger import get_logger
-from runtime.contracts import OptionContractResolver, OptionUniverse, nearest_expiry
+from runtime.contracts import OptionContractResolver, OptionUniverse
 from runtime.gateway import RiskEntryGateway
 from strategies.base_strategy import BaseStrategy
 from strategies.orb_options import OrbOptionsStrategy
@@ -54,7 +60,14 @@ STRATEGY_CLASSES: dict[str, type[BaseStrategy]] = {
 Subscriber = Callable[[set[str], set[str]], Awaitable[None]]  # (add, remove)
 
 
-def build_strategies(cfg: BotConfig, now_fn: Callable[[], datetime] = now_ist) -> list[BaseStrategy]:
+def signal_source(cfg: BotConfig, sid: str) -> str:
+    return str(cfg.strategies.strategies[sid].params.get("signal_instrument", "NIFTY_INDEX"))
+
+
+def build_strategies(cfg: BotConfig, now_fn: Callable[[], datetime] = now_ist, *,
+                     futures_key: str | None = None) -> list[BaseStrategy]:
+    """``futures_key`` is the current-month NIFTY future resolved from the
+    Upstox instrument list; strategies that need it are skipped without it."""
     out: list[BaseStrategy] = []
     inst = cfg.settings.instruments
     for sid, scfg in cfg.strategies.strategies.items():
@@ -62,12 +75,12 @@ def build_strategies(cfg: BotConfig, now_fn: Callable[[], datetime] = now_ist) -
         if cls is None:
             log.critical("no implementation for configured strategy; skipped", extra={"strategy_id": sid})
             continue
-        source = scfg.params.get("signal_instrument", "NIFTY_INDEX")
-        key = inst.nifty_futures_key if source == "NIFTY_FUT" else inst.nifty_index_key
+        source = signal_source(cfg, sid)
+        key = futures_key if source == "NIFTY_FUT" else inst.nifty_index_key
         if not key:
-            log.critical("signal instrument not configured; strategy disabled",
+            log.critical("signal instrument unavailable; strategy disabled",
                          extra={"strategy_id": sid, "signal_instrument": source,
-                                "fix": "set instruments.nifty_futures_key in config/settings.yaml"})
+                                "detail": "no current-month NIFTY future in the Upstox instrument list"})
             continue
         out.append(cls(sid, scfg, signal_instrument_key=key, now_fn=now_fn))
     return out
@@ -111,7 +124,11 @@ class TradingBot:
         self.universe: OptionUniverse | None = None
         self.engine: TradingEngine | None = None
         self.instruments: dict[str, Instrument] = {}
+        self.master: InstrumentMaster | None = None
+        self.futures: Instrument | None = None
+        self.instrument_summary: dict[str, object] = {}
         self.last_reset_day: date | None = None
+        self._resolver: OptionContractResolver | None = None
 
     # ------------------------------------------------------------------ #
     @property
@@ -124,29 +141,46 @@ class TradingBot:
     def market_hours(self, at: datetime) -> bool:
         return self.cfg.settings.market_session.is_open(at)
 
-    async def prepare(self, contracts: Sequence[Instrument] | None = None) -> None:
+    async def load_instruments(self, today: date, instruments: Sequence[Instrument] | None = None) -> None:
+        """Load the Upstox instrument list: the ONLY source of lot sizes, tick
+        sizes, freeze quantities, expiries and the current-month future."""
+        insts = list(instruments) if instruments is not None else await self.source.get_instruments(("NIFTY",))
+        master = build_master(insts, today)
+        self.instrument_summary = master.validate_nifty(today)
+        expiry = master.nearest_option_expiry(today)
+        previous = self.universe.subscribed if self.universe is not None else set()
+        self.universe = OptionUniverse(master.nifty_options(expiry), expiry=expiry,
+                                       band=self.cfg.settings.instruments.strike_band)
+        self.universe.subscribed = set(previous)
+        self.futures = master.current_month_future(today)
+        self.master = master
+        self.instruments = dict(master.by_key)
+        if isinstance(self.broker, PaperBroker):
+            self.broker.register_instruments(master.by_key.values())
+        if self._resolver is not None:
+            self._resolver.universe = self.universe
+        log.info("instrument list ready", extra=self.instrument_summary)
+
+    async def prepare(self, instruments: Sequence[Instrument] | None = None) -> None:
         s = self.stack
+        today = self._now().date()
+        session = self.cfg.settings.market_session
+        if not session.holidays_known_for(today.year):
+            log.critical("no NSE trading holidays configured for this year; the bot cannot tell holidays apart",
+                         extra={"year": today.year, "fix": "add NSE holidays to market_session.holidays"})
+        await self.load_instruments(today, instruments)
+        assert self.universe is not None and self.futures is not None
         s.guard.restore()
         s.kill_switch.restore()
-        today = self._now().date()
-
-        contracts = list(contracts) if contracts is not None else \
-            await self.source.get_option_contracts(self.spot_key)
-        expiry = nearest_expiry(contracts, today)
-        if expiry is None:
-            raise RuntimeError("no upcoming NIFTY option expiry found")
-        self.instruments = {c.instrument_key: c for c in contracts}
-        if isinstance(self.broker, PaperBroker):
-            self.broker.register_instruments(contracts)
-        self.universe = OptionUniverse(contracts, expiry=expiry, band=self.cfg.settings.instruments.strike_band)
 
         unrestorable = s.positions.restore(self.instruments)
         if unrestorable:
             log.critical("open trades could not be restored", extra={"trades": unrestorable})
 
-        self.strategies = build_strategies(self.cfg, self._now)
+        self.strategies = build_strategies(self.cfg, self._now, futures_key=self.futures.instrument_key)
         resolver = OptionContractResolver(universe=self.universe, strategies=dict(self.cfg.strategies.strategies),
                                           spot_fn=self.spot, quote_fn=self.md.get)
+        self._resolver = resolver
         gateway = RiskEntryGateway(self.cfg, s, self.broker)
         strategies: list[StrategyProtocol] = list(self.strategies)
         self.engine = TradingEngine(strategies=strategies, resolver=resolver, gateway=gateway,
@@ -156,10 +190,41 @@ class TradingBot:
         self.md.add_listener(self.candles.on_tick)
         self.md.add_listener(self.engine.on_tick)
         self.candles.add_listener(self.engine.on_candle)
+        await self._subscribe(self.base_keys(), set())
         self.new_day(today)
         await s.reconciler.reconcile("startup")
-        log.info("bot prepared", extra={"expiry": expiry.isoformat(), "strategies": [x.strategy_id for x in
-                                                                                       self.strategies]})
+        log.info("bot prepared", extra={**self.instrument_summary,
+                                        "strategies": [x.strategy_id for x in self.strategies]})
+
+    def base_keys(self) -> set[str]:
+        """Always-subscribed instruments: NIFTY index (+ current future)."""
+        keys = {self.spot_key}
+        if self.futures is not None:
+            keys.add(self.futures.instrument_key)
+        return keys
+
+    async def _subscribe(self, add: set[str], remove: set[str]) -> None:
+        if (add or remove) and self._subscriber is not None:
+            await self._subscriber(add, remove)
+
+    async def start_of_day(self, day: date, instruments: Sequence[Instrument] | None = None) -> None:
+        """Daily pre-open job: refresh the instrument list (lot sizes may be
+        revised; expiries move on), roll NIFTY_FUT strategies to the new
+        current-month future after expiry, then the new-day reset."""
+        old_future = self.futures.instrument_key if self.futures else None
+        await self.load_instruments(day, instruments)
+        assert self.futures is not None
+        new_future = self.futures.instrument_key
+        if old_future != new_future:
+            log.warning("NIFTY futures contract rolled", extra={"from": old_future, "to": new_future,
+                                                                "symbol": self.futures.trading_symbol})
+            for strat in self.strategies:
+                if signal_source(self.cfg, strat.strategy_id) == "NIFTY_FUT":
+                    strat.set_signal_instrument(new_future)
+            held = {t.instrument.instrument_key for t in self.stack.positions.open_trades()}
+            remove = {old_future} - held if old_future else set()
+            await self._subscribe({new_future}, remove)
+        self.new_day(day)
 
     # ------------------------------------------------------------------ #
     def new_day(self, day: date) -> None:
@@ -193,8 +258,7 @@ class TradingBot:
             return
         held = {t.instrument.instrument_key for t in self.stack.positions.open_trades()}
         add, remove = self.universe.recenter(spot, keep=held)
-        if (add or remove) and self._subscriber is not None:
-            await self._subscriber(add, remove)
+        await self._subscribe(add, remove)
 
     def schedule(self) -> TradingScheduler:
         s = self.stack
@@ -205,7 +269,7 @@ class TradingBot:
         sch.every("square_off", ex.square_off_check_seconds, s.square_off.check)
         sch.every("reconcile", ex.reconcile_interval_seconds, lambda: s.reconciler.reconcile("periodic"))
         sch.every("recenter", 30, self.recenter_universe)
-        sch.daily("new_day", time(9, 0), lambda: self.new_day(self._now().date()))
+        sch.daily("start_of_day", time(9, 0), lambda: self.start_of_day(self._now().date()))
         return sch
 
     # ------------------------------------------------------------------ #
@@ -240,4 +304,5 @@ class TradingBot:
             "kill_switch": s.kill_switch.status(),
             "session_phase": s.square_off.phase().value,
             "open_trades": s.positions.open_trade_count(),
+            "instruments": self.instrument_summary,
         }

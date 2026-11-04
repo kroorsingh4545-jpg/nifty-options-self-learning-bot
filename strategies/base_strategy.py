@@ -69,6 +69,15 @@ class BaseStrategy(ABC):
     def timeframes_used(self) -> set[int]:
         return {self.timeframe}
 
+    def set_signal_instrument(self, key: str) -> None:
+        """Switch the signal instrument (e.g. monthly futures roll)."""
+        if key != self.signal_instrument_key:
+            self.signal_instrument_key = key
+            self._on_instrument_change()
+
+    def _on_instrument_change(self) -> None:  # noqa: B027 - optional hook, no-op by default
+        """Hook: drop indicator state tied to the previous contract."""
+
     def in_entry_window(self, t: datetime) -> bool:
         w = self.config.entry_window
         return w.start <= t.time() < w.end

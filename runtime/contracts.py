@@ -12,11 +12,6 @@ from core.models import Instrument, Signal, Tick
 from data.option_chain import LiquidityFilter, OptionQuote
 
 
-def nearest_expiry(contracts: Iterable[Instrument], today: date) -> date | None:
-    exps = sorted({c.expiry for c in contracts if c.expiry is not None and c.expiry >= today})
-    return exps[0] if exps else None
-
-
 class OptionUniverse:
     """The option contracts (nearest expiry, ATM +/- ``band`` strikes, CE and
     PE) kept subscribed on the market feed so a fresh quote is always

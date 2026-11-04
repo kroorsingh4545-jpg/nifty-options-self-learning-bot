@@ -199,7 +199,11 @@ def feed_market_info(status: dict[str, int]) -> bytes:
 # --------------------------------------------------------------------------- #
 
 
-def option_contract(strike: float, opt: str, expiry: str = "2026-11-10", key: str | None = None) -> dict[str, Any]:
+def option_contract(strike: float, opt: str, expiry: str = "2026-11-10", key: str | None = None,
+                    lot: int = 75) -> dict[str, Any]:
+    """SYNTHETIC instrument-list record. ``lot`` defaults to 75 for the
+    original fixtures; production code never assumes it (see the lot-size
+    tests, which use the real current 65 and an arbitrary value)."""
     return {
         "name": "NIFTY",
         "segment": "NSE_FO",
@@ -209,15 +213,26 @@ def option_contract(strike: float, opt: str, expiry: str = "2026-11-10", key: st
         "exchange_token": "1",
         "trading_symbol": f"NIFTY {int(strike)} {opt} 10 NOV 26",
         "tick_size": 5.0,
-        "lot_size": 75,
+        "lot_size": lot,
         "instrument_type": opt,
-        "freeze_quantity": 1800.0,
+        "freeze_quantity": float(lot * 24),
         "underlying_key": "NSE_INDEX|Nifty 50",
         "underlying_type": "INDEX",
         "underlying_symbol": "NIFTY",
         "strike_price": strike,
-        "minimum_lot": 75,
+        "minimum_lot": lot,
         "weekly": True,
+    }
+
+
+def future_contract(expiry: str, key: str, lot: int = 75) -> dict[str, Any]:
+    """SYNTHETIC NIFTY futures record in the Upstox instrument-list shape."""
+    return {
+        "weekly": False, "segment": "NSE_FO", "name": "NIFTY", "exchange": "NSE", "expiry": expiry,
+        "instrument_type": "FUT", "underlying_symbol": "NIFTY", "instrument_key": key, "lot_size": lot,
+        "freeze_quantity": float(lot * 27), "exchange_token": key.split("|")[-1], "minimum_lot": lot,
+        "underlying_key": "NSE_INDEX|Nifty 50", "tick_size": 10.0, "underlying_type": "INDEX",
+        "trading_symbol": f"NIFTY FUT {expiry}", "strike_price": 0.0,
     }
 
 

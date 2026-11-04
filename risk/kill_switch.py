@@ -173,7 +173,9 @@ class KillSwitch:
         try:
             self.repo.insert(RiskEventRecord(mode=self.mode, strategy_id=strategy_id, event_type=event_type,
                                              severity=sev, message=message,
-                                             details_json={"reason": reason, **(extra or {})}))
+                                             details_json={"reason": reason, **(extra or {})},
+                                             # restore()/roll_day() read events back by this clock's date.
+                                             created_at=self._now()))
         except Exception:
             # Persistence failure must not stop the kill switch from acting.
             log.exception("failed to persist kill switch event")

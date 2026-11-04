@@ -24,22 +24,37 @@ from data.storage.database import Database
 from data.storage.repositories import Repositories
 from risk.kill_switch import KillReason
 from runtime.bot import TradingBot, build_strategies
-from tests.fakes import FakeWallClock, option_contract
+from tests.fakes import FakeWallClock, future_contract, option_contract
 from tests.synthetic import FUT, INDEX, at, index_path, tick
 
-CONTRACTS = [parse_instrument(option_contract(k, o, "2026-11-10", key=f"NSE_FO|{k}{o}"))
-             for k in range(24300, 24850, 50) for o in ("CE", "PE")]
+
+def instrument_list(lot: int = 75, fut_expiries: Sequence[tuple[str, str]] = (
+        ("2026-11-23", FUT), ("2026-12-29", "NSE_FO|NIFTYFUT-DEC"))) -> list[Instrument]:
+    """SYNTHETIC Upstox instrument list: NIFTY options + futures."""
+    opts = [parse_instrument(option_contract(k, o, "2026-11-10", key=f"NSE_FO|{k}{o}", lot=lot))
+            for k in range(24300, 24850, 50) for o in ("CE", "PE")]
+    futs = [parse_instrument(future_contract(e, key, lot=lot)) for e, key in fut_expiries]
+    return opts + futs
+
+
+CONTRACTS = instrument_list()
 
 
 def cfg_with_futures() -> BotConfig:
-    base = load_config(use_default_env_file=False)
-    inst = base.settings.instruments.model_copy(update={"nifty_futures_key": FUT})
-    return base.model_copy(update={"settings": base.settings.model_copy(update={"instruments": inst})})
+    return load_config(use_default_env_file=False)
 
 
 class NoSource(MarketDataSource):
+    def __init__(self, instruments: list[Instrument] | None = None) -> None:
+        self.instruments = instruments if instruments is not None else CONTRACTS
+        self.calls = 0
+
     async def get_option_contracts(self, underlying_key: str, expiry: date | None = None) -> list[Instrument]:
-        return CONTRACTS
+        raise AssertionError("the bot must use the instrument list")
+
+    async def get_instruments(self, underlying_symbols: Sequence[str] = ("NIFTY",)) -> list[Instrument]:
+        self.calls += 1
+        return self.instruments
 
     async def get_option_chain(self, underlying_key: str, expiry: date) -> dict[str, Any]:
         return {}
@@ -56,7 +71,8 @@ async def no_sleep(_: float) -> None:
 
 
 class Sim:
-    def __init__(self, start: datetime, cfg: BotConfig | None = None, db: Database | None = None) -> None:
+    def __init__(self, start: datetime, cfg: BotConfig | None = None, db: Database | None = None,
+                 instruments: list[Instrument] | None = None) -> None:
         self.cfg = cfg or cfg_with_futures()
         self.wall = FakeWallClock(start)
         self.db = db or Database(":memory:")
@@ -72,7 +88,8 @@ class Sim:
             self.subs.append((add, remove))
 
         self.bot = TradingBot(self.cfg, repos=self.repos, broker=self.broker, market_data=self.md,
-                              source=NoSource(), subscriber=subscriber, now_fn=self.wall, sleep=no_sleep,
+                              source=NoSource(instruments), subscriber=subscriber, now_fn=self.wall,
+                              sleep=no_sleep,
                               reconcile_confirm_delay=0)
 
     async def step(self, t: datetime, spot: float, premium: float = 100.0) -> None:
@@ -199,10 +216,12 @@ async def test_mid_session_restart_keeps_todays_kill(tmp_path: Any) -> None:
     b.db.close()
 
 
-def test_vwap_disabled_without_futures_key() -> None:
-    cfg = load_config(use_default_env_file=False)  # nifty_futures_key empty by default
-    ids = [s.strategy_id for s in build_strategies(cfg)]
-    assert ids == ["orb_options"]
+def test_vwap_disabled_without_a_current_future() -> None:
+    cfg = load_config(use_default_env_file=False)
+    assert [s.strategy_id for s in build_strategies(cfg, futures_key=None)] == ["orb_options"]
+    both = build_strategies(cfg, futures_key="NSE_FO|X")
+    assert [(s.strategy_id, s.signal_instrument_key) for s in both] == [
+        ("orb_options", "NSE_INDEX|Nifty 50"), ("vwap_ema", "NSE_FO|X")]
 
 
 def test_bot_refuses_non_paper_mode() -> None:
@@ -219,7 +238,8 @@ async def test_schedule_registers_session_jobs() -> None:
     sim = Sim(at(9, 14))
     await sim.bot.prepare()
     sch = sim.bot.schedule()
-    assert set(sch.jobs) == {"candle_flush", "expire_entries", "square_off", "reconcile", "recenter", "new_day"}
+    assert set(sch.jobs) == {"candle_flush", "expire_entries", "square_off", "reconcile", "recenter",
+                             "start_of_day"}
     assert sch.jobs["reconcile"].every_seconds is not None and sch.jobs["reconcile"].every_seconds <= 300
     await sch.run_now("square_off")
     await sch.run_now("candle_flush")

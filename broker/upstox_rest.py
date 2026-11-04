@@ -15,6 +15,8 @@ Guarantees:
 
 from __future__ import annotations
 
+import gzip
+import json
 import random
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, time, timedelta
@@ -92,6 +94,7 @@ class UpstoxRestClient(MarketDataSource):
         mode: TradingMode,
         settings: BrokerSection | None = None,
         http: httpx.AsyncClient | None = None,
+        cdn_http: httpx.AsyncClient | None = None,
         clock: Clock | None = None,
         rng: random.Random | None = None,
         masker: SecretMasker = DEFAULT_MASKER,
@@ -112,6 +115,10 @@ class UpstoxRestClient(MarketDataSource):
             base_url=self.settings.rest_base_url,
             timeout=httpx.Timeout(self.settings.request_timeout_seconds, connect=self.settings.connect_timeout_seconds),
         )
+        # Separate client for the public instrument CDN: it never carries the token.
+        self._owns_cdn = cdn_http is None
+        self._cdn = cdn_http or httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=self.settings.connect_timeout_seconds), follow_redirects=False)
         self.auth_failed: str | None = None
         self.token_expires_at = next_token_expiry(self._now(), self.settings.token_expiry_time)
 
@@ -131,6 +138,8 @@ class UpstoxRestClient(MarketDataSource):
     async def aclose(self) -> None:
         if self._owns_http:
             await self._http.aclose()
+        if self._owns_cdn:
+            await self._cdn.aclose()
 
     # ------------------------------------------------------------------ #
     # Auth state
@@ -249,6 +258,58 @@ class UpstoxRestClient(MarketDataSource):
             params["expiry_date"] = expiry.isoformat()
         data = await self._get("/v2/option/contract", params)
         return [parse_instrument(rec) for rec in data or []]
+
+    async def get_instruments(self, underlying_symbols: Sequence[str] = ("NIFTY",)) -> list[Instrument]:
+        """Download the Upstox NSE instrument list and return F&O contracts
+        (CE / PE / FUT) for ``underlying_symbols``.
+
+        The file is public, so no credentials are sent. The download still
+        passes the central rate limiter (STANDARD budget) and retries like any
+        idempotent GET. Records that fail to parse are skipped and counted.
+        """
+        cfg = self.settings
+        attempt = 0
+        while True:
+            await self.limiter.acquire(ApiCategory.STANDARD)
+            try:
+                resp = await self._cdn.get(cfg.instruments_url, headers={"Accept": "application/gzip"})
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                if attempt < cfg.max_retries:
+                    await self._backoff(attempt, "instruments", type(exc).__name__)
+                    attempt += 1
+                    continue
+                raise BrokerError(f"instrument list download failed: {type(exc).__name__}") from None
+            if resp.status_code == 429:
+                self.limiter.record_429(ApiCategory.STANDARD, _retry_after_seconds(resp))
+                if attempt < cfg.max_retries:
+                    attempt += 1
+                    continue
+                raise RateLimitError("instrument list: HTTP 429")
+            if resp.status_code in RETRYABLE_STATUS and attempt < cfg.max_retries:
+                await self._backoff(attempt, "instruments", f"HTTP {resp.status_code}")
+                attempt += 1
+                continue
+            if resp.status_code != 200:
+                raise BrokerAPIError(resp.status_code, None, "instrument list download failed")
+            self.limiter.record_success(ApiCategory.STANDARD)
+            break
+        try:
+            raw = json.loads(gzip.decompress(resp.content))
+        except (OSError, ValueError) as exc:
+            raise BrokerError(f"instrument list is not valid gzip JSON: {exc}") from None
+        wanted = set(underlying_symbols)
+        out: list[Instrument] = []
+        skipped = 0
+        for rec in raw:
+            if rec.get("segment") != "NSE_FO" or rec.get("underlying_symbol") not in wanted or \
+                    rec.get("instrument_type") not in ("CE", "PE", "FUT"):
+                continue
+            try:
+                out.append(parse_instrument(rec))
+            except (KeyError, ValueError, TypeError):
+                skipped += 1
+        log.info("instrument list loaded", extra={"records": len(raw), "kept": len(out), "skipped": skipped})
+        return out
 
     async def get_option_chain(self, underlying_key: str, expiry: date) -> dict[str, Any]:
         params = {"instrument_key": underlying_key, "expiry_date": expiry.isoformat()}

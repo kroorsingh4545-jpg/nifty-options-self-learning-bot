@@ -11,15 +11,35 @@ app:
 market_session:
   market_open: "09:15"
   market_close: "15:30"
-  # NSE trading holidays (YYYY-MM-DD). Keep this list current each year.
-  holidays: []
+  # NSE trading holidays (weekday closures) for the Equity Derivatives segment.
+  # Source: NSE trading-holiday circular for calendar year 2026, plus NSE's
+  # 12 Jan 2026 notice adding 15 Jan (Maharashtra municipal elections).
+  # Add next year's dates as soon as NSE publishes them (usually December):
+  # the bot logs CRITICAL at startup if the current year has no entries.
+  # Quoted so YAML keeps them as strings.
+  holidays:
+    - "2026-01-15"   # Municipal Corporation Elections - Maharashtra
+    - "2026-01-26"   # Republic Day
+    - "2026-03-03"   # Holi
+    - "2026-03-26"   # Shri Ram Navami
+    - "2026-03-31"   # Shri Mahavir Jayanti
+    - "2026-04-03"   # Good Friday
+    - "2026-04-14"   # Dr. Baba Saheb Ambedkar Jayanti
+    - "2026-05-01"   # Maharashtra Day
+    - "2026-05-28"   # Bakri Id
+    - "2026-06-26"   # Muharram
+    - "2026-09-14"   # Ganesh Chaturthi
+    - "2026-10-02"   # Mahatma Gandhi Jayanti
+    - "2026-10-20"   # Dussehra
+    - "2026-11-10"   # Diwali - Balipratipada
+    - "2026-11-24"   # Prakash Gurpurb Sri Guru Nanak Dev
+    - "2026-12-25"   # Christmas
 
 instruments:
   nifty_index_key: "NSE_INDEX|Nifty 50"
-  # Near-month NIFTY futures key (NSE_FO|<token>) from the Upstox instrument
-  # master. Required by strategies whose signal_instrument is NIFTY_FUT; if
-  # empty those strategies are disabled at startup (with a CRITICAL log).
-  nifty_futures_key: ""
+  # The current-month NIFTY futures contract (for NIFTY_FUT signal
+  # instruments) and all lot sizes are taken from the Upstox instrument list
+  # every trading day - never configured here.
   strike_band: 3                 # subscribe ATM +/- N strikes (CE and PE) of the nearest expiry
 
 database:

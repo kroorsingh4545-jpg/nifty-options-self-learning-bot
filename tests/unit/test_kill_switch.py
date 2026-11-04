@@ -120,6 +120,17 @@ def test_restore_respects_reset_and_day(paper: Repositories) -> None:
     assert not tomorrow.active  # yesterday's trigger does not carry over
 
 
+def test_events_are_stamped_with_the_kill_switch_clock(paper: Repositories) -> None:
+    clock = FakeWallClock(datetime(2031, 3, 5, 10, 0, tzinfo=IST))  # far from the real date
+    ks, _ = make(paper, clock)
+    ks.trigger(KillReason.MANUAL, "x", strategy_id="vwap_ema")
+    (e,) = paper.risk_events.recent()
+    assert e.created_at == clock()
+    ks2, _ = make(paper, clock)
+    ks2.restore()
+    assert ks2.is_blocked("vwap_ema")
+
+
 def test_trigger_without_loop_still_blocks() -> None:
     ks, _ = make()
 

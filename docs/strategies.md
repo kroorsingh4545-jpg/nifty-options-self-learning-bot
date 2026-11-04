@@ -48,8 +48,15 @@ Upstox WebSocket tick
 ## Strategy 2: VWAP + EMA momentum (`strategies/vwap_ema.py`)
 
 The signal instrument is **NIFTY futures**, because the index has no traded volume and VWAP needs volume.
-Set `instruments.nifty_futures_key` in `config/settings.yaml`. If it is empty, this strategy is disabled at
-startup with a CRITICAL log.
+The bot picks the **current-month NIFTY future** from the Upstox instrument list at startup (the unexpired
+contract with the nearest expiry; on expiry day that is still the expiring contract). The 09:00 start-of-day
+job re-downloads the list every trading day. After expiry it rolls the strategy to the next contract,
+restarts its indicators (the new contract trades at a different basis) and switches the feed subscription.
+Nothing is configured by hand. Lot sizes, for options and futures alike, also come only from the instrument
+list, so an NSE lot-size revision takes effect the next trading day.
+
+NSE trading holidays live in `market_session.holidays` in `config/settings.yaml` (2026 is loaded). If the
+current year has no entries the bot logs CRITICAL at startup, so add next year's list when NSE publishes it.
 
 ```
 each completed 5-min (or 3-min) futures candle
