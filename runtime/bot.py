@@ -58,15 +58,9 @@ from runtime.contracts import OptionContractResolver, OptionUniverse
 from runtime.control import ControlService
 from runtime.gateway import RiskEntryGateway
 from strategies.base_strategy import BaseStrategy
-from strategies.orb_options import OrbOptionsStrategy
-from strategies.vwap_ema import VwapEmaStrategy
+from strategies.registry import STRATEGY_CLASSES
 
 log = get_logger(__name__)
-
-STRATEGY_CLASSES: dict[str, type[BaseStrategy]] = {
-    "orb_options": OrbOptionsStrategy,
-    "vwap_ema": VwapEmaStrategy,
-}
 
 Subscriber = Callable[[set[str], set[str]], Awaitable[None]]  # (add, remove)
 
