@@ -1,4 +1,8 @@
-"""Dashboard login.
+"""Dashboard login and network exposure.
+
+The dashboard listens only on 127.0.0.1 by default (``.streamlit/config.toml``)
+and refuses to run on any other address unless started with
+``--allow-remote`` (then put it behind a TLS reverse proxy).
 
 Credentials come only from ``DASHBOARD_USERNAME`` / ``DASHBOARD_PASSWORD``
 (``.env`` or environment, validated by ``config``). Without them the
@@ -19,6 +23,15 @@ from pydantic import SecretStr
 
 MAX_FAILURES = 5
 LOCKOUT_SECONDS = 300.0
+
+
+LOOPBACK = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def bind_is_local(address: str | None) -> bool:
+    """True only for an explicit loopback address. Unset or empty means
+    Streamlit listens on every interface, which is not local."""
+    return bool(address) and str(address).strip().lower() in LOOPBACK
 
 
 @dataclass(frozen=True)

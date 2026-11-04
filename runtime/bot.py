@@ -379,6 +379,7 @@ class TradingBot:
         for _ in range(3):
             if self.engine is not None:
                 await self.engine.drain()
+            await self.control.wait_idle()
             await self.stack.settle()
 
     def snapshot(self) -> dict[str, Any]:

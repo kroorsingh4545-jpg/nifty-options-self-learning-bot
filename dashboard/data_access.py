@@ -37,9 +37,10 @@ def database_path(cfg: BotConfig, override: str | None = None) -> Path:
 
 
 def open_repositories(cfg: BotConfig, path: Path) -> Repositories:
-    db = Database(path)
-    db.initialize()  # creates / upgrades tables; never touches trading rows
-    return Repositories(db, cfg.mode)
+    """Open the bot's database. The dashboard never creates or migrates the
+    schema (only the bot does): a missing file or any schema-version
+    mismatch raises ``DatabaseError``."""
+    return Repositories(Database.open_existing(path), cfg.mode)
 
 
 @dataclass(frozen=True)

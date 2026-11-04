@@ -3,6 +3,11 @@
 Run:   streamlit run dashboard/app.py            (uses database.path from config)
        streamlit run dashboard/app.py -- --db PATH
 
+It listens only on 127.0.0.1 (``.streamlit/config.toml``) and refuses to run
+on any other address unless started with ``-- --allow-remote`` (then put it
+behind a TLS reverse proxy). It never creates or migrates the database: the
+bot does; on a schema-version mismatch the dashboard refuses to run.
+
 It reads the bot's published state and the SQLite history, and sends
 commands by queueing them for the bot (``dashboard.commands``). It never
 talks to the broker, and it holds no trading or risk logic. PAPER is the
@@ -22,7 +27,7 @@ import streamlit as st
 from config.loader import load_config
 from config.settings import BotConfig
 from core.clock import now_ist
-from dashboard.auth import LoginGate, credentials_from, require_login
+from dashboard.auth import LoginGate, bind_is_local, credentials_from, require_login
 from dashboard.commands import CommandClient
 from dashboard.components import charts, control_bar, learning, logs, overview, positions, risk_panel
 from dashboard.data_access import (
@@ -40,16 +45,30 @@ from dashboard.data_access import (
     runtime_view,
     trades_on,
 )
+from data.storage.database import DatabaseError
 from data.storage.repositories import Repositories
 
 LIVE_TOGGLE = "live_toggle"
 
 
-def _cli_db() -> str | None:
+def _cli() -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--db")
+    parser.add_argument("--allow-remote", action="store_true")
     args, _ = parser.parse_known_args(sys.argv[1:])
-    return str(args.db) if args.db else None
+    return args
+
+
+def guard_network(allow_remote: bool) -> None:
+    """Refuse to serve the controls on a non-loopback address by default."""
+    address = st.get_option("server.address")
+    if bind_is_local(address) or allow_remote:
+        return
+    shown = address or "all interfaces"
+    st.error(f"Refusing to run: the dashboard is listening on {shown}. It must listen only on 127.0.0.1 "
+             "(see .streamlit/config.toml, or pass --server.address 127.0.0.1). For remote access, put it "
+             "behind a TLS reverse proxy and start it with `-- --allow-remote`.")
+    st.stop()
 
 
 @st.cache_resource
@@ -113,11 +132,19 @@ def live(cfg: BotConfig, repos: Repositories, client: CommandClient) -> None:
 
 def main() -> None:
     st.set_page_config(page_title="NIFTY Options Bot", page_icon="📈", layout="wide")
+    cli = _cli()
+    guard_network(bool(cli.allow_remote))
     cfg = _config()
     user = require_login(st, credentials_from(cfg.env.dashboard_username, cfg.env.dashboard_password))
-    override: Any = st.session_state.get("db_override") or _cli_db()
+    override: Any = st.session_state.get("db_override") or cli.db
     path = database_path(cfg, override)
-    repos = _repositories(str(path))
+    try:
+        repos = _repositories(str(path))
+        repos.db.verify_schema()  # every run: the bot may have been upgraded meanwhile
+    except DatabaseError as exc:
+        st.error(f"Refusing to start: {exc}")
+        st.stop()
+        raise  # pragma: no cover - st.stop() raises
     client = CommandClient(repos, user)
     st.session_state.setdefault(LIVE_TOGGLE, False)  # PAPER on every new session
 

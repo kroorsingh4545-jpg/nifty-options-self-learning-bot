@@ -187,3 +187,13 @@ def test_dashboard_is_ui_only() -> None:
         assert not (tops & forbidden), f"{path.relative_to(PROJECT_ROOT)} imports {tops & forbidden}"
         strategies = {m for m in mods if m.startswith("strategies")}
         assert strategies <= {"strategies.indicators"}, f"{path.relative_to(PROJECT_ROOT)} imports {strategies}"
+
+
+def test_only_the_bot_migrates_the_schema() -> None:
+    """The dashboard opens the bot's database with Database.open_existing; it
+    never calls initialize() or the bootstrap module."""
+    for path in _py_files("dashboard"):
+        text = path.read_text(encoding="utf-8")
+        assert ".initialize(" not in text, f"{path.relative_to(PROJECT_ROOT)} migrates the schema"
+        assert "data.storage.bootstrap" not in _imported_modules(path)
+    assert "Database.open_existing(" in (PROJECT_ROOT / "dashboard" / "data_access.py").read_text(encoding="utf-8")

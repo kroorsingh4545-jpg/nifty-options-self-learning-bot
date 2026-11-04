@@ -4,6 +4,9 @@ bot control service, closing the loop UI -> queue -> bot -> state -> UI."""
 
 from __future__ import annotations
 
+import sqlite3
+import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +15,8 @@ import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from core.enums import ControlCommandStatus, ControlCommandType
-from data.storage.database import Database
+from dashboard.auth import bind_is_local
+from data.storage.database import SCHEMA_VERSION, Database
 from tests.synthetic import at
 from tests.unit.test_bot_integration import ORB_DAY, Sim
 
@@ -203,8 +207,93 @@ async def test_manual_exit_with_confirmation(env: None, bot: Sim) -> None:
     assert len(positions_df(t)) == 0
 
 
+def bot_created_db(path: Path) -> Path:
+    db = Database(path)
+    db.initialize()  # what the bot does at startup (the dashboard never does)
+    db.close()
+    return path
+
+
 def test_offline_bot_is_obvious(env: None, tmp_path: Path) -> None:
-    t = app(tmp_path / "empty.db")
+    t = app(bot_created_db(tmp_path / "idle.db"))
     assert not t.exception, t.exception
     text = page_text(t)
     assert "PAPER MODE" in text and "OFFLINE" in text and "not publishing state" in text
+
+
+# --------------------------------------------------------------------------- #
+# Only the bot migrates; the dashboard refuses on any schema mismatch
+# --------------------------------------------------------------------------- #
+
+
+def refused(t: AppTest) -> str:
+    return " ".join(e.value for e in t.error if "Refusing to start" in e.value)
+
+
+def test_missing_database_is_refused_and_not_created(env: None, tmp_path: Path) -> None:
+    path = tmp_path / "nothing.db"
+    t = app(path)
+    assert "does not exist" in refused(t) and "start the bot first" in refused(t)
+    assert not path.exists()  # the dashboard created nothing
+    assert "PAPER MODE" not in page_text(t)
+
+
+@pytest.mark.parametrize(("version", "msg"), [(SCHEMA_VERSION - 1, "older than this code"),
+                                             (SCHEMA_VERSION + 1, "newer than this code")])
+def test_schema_version_mismatch_is_refused(env: None, tmp_path: Path, version: int, msg: str) -> None:
+    path = bot_created_db(tmp_path / "bot.db")
+    raw = sqlite3.connect(path)
+    raw.execute("DELETE FROM schema_version")
+    raw.execute("INSERT INTO schema_version(version, applied_at) VALUES (?, '2026-11-04T09:00:00+05:30')",
+                (version,))
+    raw.commit()
+    raw.close()
+    t = app(path)
+    assert msg in refused(t)
+    raw = sqlite3.connect(path)
+    assert raw.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == version  # not migrated
+    raw.close()
+
+
+def test_schema_upgraded_under_a_running_dashboard_is_caught(env: None, tmp_path: Path) -> None:
+    path = bot_created_db(tmp_path / "bot.db")
+    t = app(path)
+    assert not refused(t)
+    raw = sqlite3.connect(path)
+    raw.execute("INSERT INTO schema_version(version, applied_at) VALUES (?, '2026-11-04T09:00:00+05:30')",
+                (SCHEMA_VERSION + 1,))
+    raw.commit()
+    raw.close()
+    assert "newer than this code" in refused(t.run())
+
+
+# --------------------------------------------------------------------------- #
+# Network exposure: loopback only unless explicitly allowed
+# --------------------------------------------------------------------------- #
+
+
+def test_shipped_streamlit_config_binds_loopback() -> None:
+    cfg = tomllib.loads((APP.parents[1] / ".streamlit" / "config.toml").read_text(encoding="utf-8"))
+    assert cfg["server"]["address"] == "127.0.0.1"
+
+
+@pytest.mark.parametrize(("address", "local"), [("127.0.0.1", True), ("localhost", True), ("::1", True),
+                                                ("0.0.0.0", False), ("192.168.1.20", False), ("", False),  # noqa: S104
+                                                (None, False)])
+def test_bind_is_local(address: str | None, local: bool) -> None:
+    assert bind_is_local(address) is local
+
+
+@pytest.mark.parametrize("address", ["0.0.0.0", ""])  # noqa: S104 - checking that it is refused
+def test_non_loopback_bind_is_refused(env: None, bot: Sim, monkeypatch: pytest.MonkeyPatch, address: str) -> None:
+    monkeypatch.setattr(st, "get_option", lambda key: address if key == "server.address" else None)
+    t = app(bot.db.path)
+    assert any("Refusing to run" in e.value and "127.0.0.1" in e.value for e in t.error)
+    assert "PAPER MODE" not in page_text(t) and not any(b.label == "🛑 EMERGENCY KILL SWITCH" for b in t.button)
+
+
+def test_remote_bind_needs_explicit_opt_in(env: None, bot: Sim, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(st, "get_option", lambda key: "0.0.0.0" if key == "server.address" else None)  # noqa: S104
+    monkeypatch.setattr(sys, "argv", [*sys.argv, "--allow-remote"])
+    t = app(bot.db.path)
+    assert "PAPER MODE" in page_text(t)

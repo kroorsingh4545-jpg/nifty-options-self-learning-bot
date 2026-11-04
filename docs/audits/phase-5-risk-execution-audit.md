@@ -1,4 +1,10 @@
-# Risk & Execution Audit Report (Phase 5)
+# Phase 5 Risk & Execution Audits
+
+This file holds two audits of the same branch, in order: the initial audit (PASS WITH WARNINGS) and the re-audit after the fixes for warnings 1, 2 and 4 (**FAIL**), appended at the end.
+
+---
+
+# Risk & Execution Audit Report (Phase 5, initial)
 
 Date: 2026-11-04
 Scope (files / PR): branch `phase-5-dashboard`, covering:
@@ -61,3 +67,64 @@ None.
 2. The dashboard's bind address, or a startup check for it (after warning 2 is fixed).
 3. `restore_book` with a cancelled, partially filled order. The shared fill accounting covers it, but no dedicated test does.
 4. Bot and dashboard writing to SQLite at the same time under load. The current tests run sequentially.
+
+---
+
+# Risk & Execution Audit Report (Phase 5 re-audit after fixes for warnings 1, 2, 4)
+
+Date: 2026-11-04
+Scope (files / PR): branch `phase-5-dashboard`, covering:
+- `runtime/control.py` (kill priority, background exits, in-flight tracking)
+- `dashboard/app.py`, `dashboard/auth.py`, `.streamlit/config.toml` (loopback-only bind guard)
+- `data/storage/database.py` (`open_existing`, `verify_schema`) and `dashboard/data_access.py` (the dashboard never migrates)
+- `runtime/bot.py`, plus all other Phase 5 code
+
+Mode audited: PAPER
+Tests: 630 passed; ruff and mypy (strict) clean; a real Streamlit server started from the project root listens only on `127.0.0.1`.
+Verdict: **FAIL**
+
+## Results
+
+| # | Area | Status | Evidence (file:line, test) | Notes |
+|---|---|---|---|---|
+| 1 | Entry logic | OK | Unchanged since the initial Phase 5 audit | |
+| 2 | Exit logic | OK | `runtime/control.py:109`, `:116-129` (manual exit in the background); `runtime/bot.py:382` (settle waits for it). Test: `test_kill_is_not_delayed_by_a_stuck_exit` | An in-flight exit is neither started twice nor expired. |
+| 3 | Stop-loss logic | OK | Unchanged | |
+| 4 | Take-profit logic | OK | Unchanged | |
+| 5 | Trailing-stop logic | OK | Unchanged | |
+| 6 | Position sizing | OK | Unchanged | |
+| 7 | Daily loss limits | OK | Unchanged (an intraday daily-loss reset is still refused) | |
+| 8 | Global loss limits | OK | Unchanged | |
+| 9 | Margin checks | OK | Unchanged | |
+| 10 | Order lifecycle handling | OK | Unchanged | |
+| 11 | Partial fills | OK | Unchanged | |
+| 12 | Order rejection handling | OK | Unchanged | |
+| 13 | Reconciliation | OK | Unchanged (a reset still reconciles first) | |
+| 14 | Square-off logic | OK | Unchanged | |
+| 15 | Kill-switch behavior | **FAIL** | `runtime/control.py:100` (kills sorted ahead of everything) together with `risk/kill_switch.py:141` (a trigger while already active is a no-op); reproduced with an audit probe outside the repo | A RESET queued before a KILL now runs after it and undoes it (blocking issue 1). The other part of warning 1 (a kill not delayed by a stuck exit) is fixed and tested. |
+| 16 | API rate-limit compliance | WARN | `runtime/control.py:183`: funds read every second | Carried over (initial warning 5). |
+| 17 | PAPER/LIVE isolation | OK | Unchanged | |
+| 18 | Restart recovery | OK | Unchanged. An exit in flight during a crash stays PENDING; after a restart it runs once if it has not expired, otherwise it is marked EXPIRED. | |
+| 19 | Logging and audit trail | OK | `dashboard/app.py:62-73` (loopback guard before login), `.streamlit/config.toml` (`127.0.0.1`), `data/storage/database.py:122-155` + `dashboard/app.py:143` (no migration; version checked every run). Tests: `test_non_loopback_bind_is_refused`, `test_remote_bind_needs_explicit_opt_in`, `test_shipped_streamlit_config_binds_loopback`, `test_missing_database_is_refused_and_not_created`, `test_schema_version_mismatch_is_refused`, `test_schema_upgraded_under_a_running_dashboard_is_caught`, `test_open_existing_*`, `test_only_the_bot_migrates_the_schema` | Initial warnings 2 and 4 are fixed. |
+
+## Blocking issues
+
+1. **A RESET queued before a KILL now runs after it and undoes it.** `process_pending` sorts every queued kill ahead of everything else (`runtime/control.py:100`). Suppose a kill is already active, an operator queues a RESET, and a new KILL arrives before the next tick:
+   - The KILL runs first. The kill switch is already active, so the trigger is a no-op (`kill_switch.py:141`), records nothing, and the command is marked DONE.
+   - The earlier RESET then runs, clears the kill switch, and re-activates every strategy.
+
+   The emergency stop, the operator's most recent intent, is silently lost. The audit probe ended with the kill switch inactive and both strategies ACTIVE; under the previous first-in-first-out order the same commands ended killed. This is a regression introduced by the warning 1 fix and falls in area 15, so it is automatically blocking. **`phase-5-dashboard` must not be merged until this is fixed and re-audited.** Fix direction: when a batch contains a kill, reject every RESET queued before that kill as "superseded by a later kill switch".
+
+## Warnings
+
+1. Funds are read every second (carried over; cache them before a real broker).
+2. There is one shared dashboard account (carried over; per-user accounts are needed before LIVE).
+3. A reset can re-activate strategies that still have open positions in scope (carried over; the reset form should list them).
+4. `--allow-remote` trusts the operator to provide TLS; the app cannot verify that a proxy is in front of it.
+5. Carried over from Phase 4: real-clock timestamps and the instrument list parsed on the event loop.
+
+## Required tests missing
+
+1. A RESET queued before a KILL in the same batch must be rejected, and the kill must remain active (the regression test for blocking issue 1).
+2. A RESET queued after a KILL in the same batch must still run (the kill does not suppress later resets).
+3. Concurrent SQLite writes from the bot and the dashboard under load (carried over).

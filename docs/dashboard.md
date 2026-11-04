@@ -9,9 +9,18 @@ never talks to the broker, holds no trading or risk logic, and cannot enable LIV
 # 1. Set dashboard credentials in .env (required; the dashboard refuses to run without them)
 #    DASHBOARD_USERNAME=...   DASHBOARD_PASSWORD=...   (8+ characters)
 # 2. Start the dashboard against the bot's database (database.path in config/settings.yaml)
-streamlit run dashboard/app.py
+streamlit run dashboard/app.py                               # run from the project root
 streamlit run dashboard/app.py -- --db path/to/trading.db     # another database
 ```
+
+* **Loopback only.** `.streamlit/config.toml` binds the server to `127.0.0.1`. The app checks the address
+  itself and refuses to run on anything else (including "all interfaces", which is what you get when
+  Streamlit is started from a directory without that config file). For remote access, put it behind a TLS
+  reverse proxy and start it with `-- --allow-remote`.
+* **The bot owns the database.** Only the bot creates and migrates the schema. The dashboard opens the
+  existing database with `Database.open_existing` and refuses to start if the file is missing or its
+  schema version differs from the code's. It re-checks the version on every page run, so a bot upgraded
+  while the dashboard is open is caught as well.
 
 The bot publishes its state every second while it runs (`control` job in `runtime/bot.py`). If no bot is
 running, the dashboard says **OFFLINE**. Commands still queue: a kill switch is applied when the bot starts,
@@ -46,6 +55,9 @@ streamlit run dashboard/app.py -- --db /tmp/qa.db
 * **Operator = signed-in user.** Commands carry the authenticated dashboard username, never free text.
 * **A processed command is final** (database trigger). Commands expire after 60 s, except the kill switch,
   which never expires: acting late on an emergency stop is still safe.
+* **Kills first.** Queued kill-switch commands run before every other queued command. Manual exits run in
+  the background, so an exit that keeps retrying (up to ~30 s) never delays a later kill or the heartbeat.
+  An exit that is still running is not started twice and does not expire.
 * **Stop means no new entries.** Start, Pause and Stop only change the engine. Stops, square-off and
   reconciliation always keep running.
 * The dashboard may import `config`, `core`, `data.storage` and `strategies.indicators` (chart overlays)
@@ -86,6 +98,7 @@ streamlit run dashboard/app.py -- --db /tmp/qa.db
 
 ## Security
 
+* Listens on `127.0.0.1` only, unless explicitly started with `--allow-remote` (see above).
 * Login with `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD`. The comparison is constant-time, and 5 failed
   attempts lock the session for 5 minutes. The password is never shown, logged or kept in session state.
 * Streamlit reconnects the **same browser tab** to its session after a quick reload. A new tab or browser
@@ -109,6 +122,11 @@ streamlit run dashboard/app.py -- --db /tmp/qa.db
 | Every required metric renders; no secret on the page; no console errors | pass |
 
 ## Known limitations
+
+* There is one dashboard account: the "named operator" is the configured username. Per-user accounts are
+  needed before LIVE.
+* The state snapshot reads funds from the broker every second. That is free for the paper broker; cache it
+  before a real Upstox client is wired in.
 
 * There is no production PAPER runner yet that connects Upstox market data to the bot. Until it exists, use
   the synthetic bot to exercise the dashboard. Connection and rate-limit status show "not connected" or

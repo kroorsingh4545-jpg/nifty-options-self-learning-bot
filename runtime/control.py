@@ -11,8 +11,13 @@ uses the wall clock (``wall_fn``) for heartbeats and command expiry, so it
 works the same while the trading clock is simulated.
 
 Command rules:
-* Commands expire (the dashboard sets ``expires_at``); a KILL_SWITCH never
-  expires, because acting late on an emergency stop is still safe.
+* KILL_SWITCH commands run before every other queued command, and a
+  KILL_SWITCH never expires (acting late on an emergency stop is still safe).
+* EXIT_POSITION runs as a background task, so a slow or failing exit (up to
+  ~30 s of retries) never delays a later kill or the heartbeat. While it runs
+  the command stays PENDING in the database but is tracked in memory, so it
+  is neither started twice nor expired.
+* Other commands expire (the dashboard sets ``expires_at``).
 * ENGINE_STOP stops NEW entries only. Square-off, stops and reconciliation
   keep running (the scheduler is never stopped from the dashboard).
 * REQUEST_LIVE is evaluated against every precondition and refused while
@@ -21,6 +26,7 @@ Command rules:
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime
@@ -67,6 +73,8 @@ class ControlService:
         self._channels = alert_channels
         self.candles: dict[str, deque[list[Any]]] = {}
         self.last_live_request: dict[str, Any] | None = None
+        self.in_flight: set[int] = set()
+        self._tasks: set[asyncio.Task[None]] = set()
         bot.candles.add_listener(self._on_candle)
 
     # ------------------------------------------------------------------ #
@@ -87,27 +95,57 @@ class ControlService:
     # ------------------------------------------------------------------ #
     async def process_pending(self) -> int:
         repo = self.bot.repos.commands
-        done = 0
-        for cmd in repo.pending():
+        queue = [c for c in repo.pending() if c.id not in self.in_flight]
+        # Emergency stops first, whatever their position in the queue.
+        queue.sort(key=lambda c: (c.command is not ControlCommandType.KILL_SWITCH, c.id or 0))
+        started = 0
+        for cmd in queue:
             assert cmd.id is not None
             now = self._wall()
             expired = cmd.expires_at is not None and cmd.expires_at < now
             if expired and cmd.command is not ControlCommandType.KILL_SWITCH:
                 repo.complete(cmd.id, ControlCommandStatus.EXPIRED, "expired before the bot processed it", at=now)
                 continue
+            if cmd.command is ControlCommandType.EXIT_POSITION:
+                self._run_in_background(cmd)
+            else:
+                await self._execute(cmd)
+            started += 1
+        return started
+
+    def _run_in_background(self, cmd: ControlCommandRecord) -> None:
+        assert cmd.id is not None
+        cid = cmd.id
+        self.in_flight.add(cid)
+
+        async def runner() -> None:
             try:
-                result = await self._run(cmd)
-                status = ControlCommandStatus.DONE if result.ok else ControlCommandStatus.REJECTED
-            except Exception as exc:
-                log.exception("control command failed", extra={"command": cmd.command.value, "id": cmd.id})
-                result = ControlResult(False, DEFAULT_MASKER.mask_text(f"{type(exc).__name__}: {exc}"))
-                status = ControlCommandStatus.FAILED
-            repo.complete(cmd.id, status, result.message, at=self._wall(), result=result.details)
-            log.warning("control command processed",
-                        extra={"command": cmd.command.value, "id": cmd.id, "operator": cmd.operator,
-                               "strategy_id": cmd.strategy_id, "status": status.value, "result": result.message})
-            done += 1
-        return done
+                await self._execute(cmd)
+            finally:
+                self.in_flight.discard(cid)
+
+        task = asyncio.get_running_loop().create_task(runner())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def wait_idle(self) -> None:
+        """Await background commands (tests / orderly shutdown)."""
+        while self._tasks:
+            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+
+    async def _execute(self, cmd: ControlCommandRecord) -> None:
+        assert cmd.id is not None
+        try:
+            result = await self._run(cmd)
+            status = ControlCommandStatus.DONE if result.ok else ControlCommandStatus.REJECTED
+        except Exception as exc:
+            log.exception("control command failed", extra={"command": cmd.command.value, "id": cmd.id})
+            result = ControlResult(False, DEFAULT_MASKER.mask_text(f"{type(exc).__name__}: {exc}"))
+            status = ControlCommandStatus.FAILED
+        self.bot.repos.commands.complete(cmd.id, status, result.message, at=self._wall(), result=result.details)
+        log.warning("control command processed",
+                    extra={"command": cmd.command.value, "id": cmd.id, "operator": cmd.operator,
+                           "strategy_id": cmd.strategy_id, "status": status.value, "result": result.message})
 
     async def _run(self, cmd: ControlCommandRecord) -> ControlResult:
         bot = self.bot

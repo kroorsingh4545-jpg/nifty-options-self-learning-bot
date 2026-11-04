@@ -337,3 +337,71 @@ async def test_published_state_has_every_dashboard_field_and_no_secrets() -> Non
     assert orb["open_trades"] == 1 and orb["last_signal"] is not None and orb["allocated_capital"] == 100_000
     assert any(k.startswith("NSE_INDEX|Nifty 50|") for k in state["candles"])
     assert state["capital"]["deployed"] > 0
+
+
+# --------------------------------------------------------------------------- #
+# Kill priority: a kill is never delayed by queued or running exits
+# --------------------------------------------------------------------------- #
+
+
+async def test_kill_runs_before_commands_queued_ahead_of_it() -> None:
+    sim = await traded_sim()
+    order: list[ControlCommandType] = []
+    real_run = sim.bot.control._run
+
+    async def spy(cmd: ControlCommandRecord) -> Any:
+        order.append(cmd.command)
+        return await real_run(cmd)
+
+    sim.bot.control._run = spy  # type: ignore[method-assign]
+    enqueue(sim, ControlCommandType.ENGINE_PAUSE)
+    enqueue(sim, ControlCommandType.SET_AUTONOMY, payload={"level": "OBSERVE_ONLY"})
+    kill = enqueue(sim, ControlCommandType.KILL_SWITCH, note="emergency")
+    await sim.bot.control.process_pending()
+    await sim.bot.settle()
+    assert order[0] is ControlCommandType.KILL_SWITCH
+    assert sim.repos.commands.get(kill).status is ControlCommandStatus.DONE  # type: ignore[union-attr]
+
+
+async def test_kill_is_not_delayed_by_a_stuck_exit() -> None:
+    import asyncio
+
+    from execution.operator_controls import ControlResult
+
+    sim = await traded_sim()
+    (t,) = sim.bot.stack.positions.open_trades("orb_options")
+    release = asyncio.Event()
+    calls = 0
+
+    async def stuck_exit(operator: str, trade_uid: str, note: str = "") -> ControlResult:
+        nonlocal calls
+        calls += 1
+        await release.wait()  # e.g. an exit retrying against a rejecting exchange
+        return ControlResult(False, "exit did not complete")
+
+    controls = sim.bot.stack.controls
+    assert controls is not None
+    controls.exit_position = stuck_exit  # type: ignore[method-assign]
+    exit_id = enqueue(sim, ControlCommandType.EXIT_POSITION, target=t.trade_uid)
+    await asyncio.wait_for(sim.bot.control.process_pending(), timeout=1.0)  # returns at once
+    assert exit_id in sim.bot.control.in_flight
+    assert sim.repos.commands.get(exit_id).status is ControlCommandStatus.PENDING  # type: ignore[union-attr]
+
+    # a kill queued now is processed on the next tick, while the exit is still stuck
+    kill = enqueue(sim, ControlCommandType.KILL_SWITCH, note="emergency")
+    await asyncio.wait_for(sim.bot.control.tick(), timeout=1.0)  # commands + heartbeat
+    assert sim.repos.commands.get(kill).status is ControlCommandStatus.DONE  # type: ignore[union-attr]
+    assert sim.bot.stack.kill_switch.active
+    assert sim.repos.runtime_state.latest() is not None  # heartbeat kept publishing
+    assert calls == 1  # the in-flight exit was not started a second time
+
+    wall: Any = sim.bot.control._wall
+    wall.now = WALL + timedelta(minutes=10)  # well past its expiry: an in-flight exit is not expired
+    await sim.bot.control.process_pending()
+    assert sim.repos.commands.get(exit_id).status is ControlCommandStatus.PENDING  # type: ignore[union-attr]
+
+    release.set()
+    await sim.bot.settle()
+    done = sim.repos.commands.get(exit_id)
+    assert done is not None and done.status is ControlCommandStatus.REJECTED
+    assert exit_id not in sim.bot.control.in_flight

@@ -118,8 +118,42 @@ class Database:
         row = self.query_one("SELECT MAX(version) AS v FROM schema_version")
         return None if row is None or row["v"] is None else int(row["v"])
 
+    @classmethod
+    def open_existing(cls, path: Path | str) -> Database:
+        """Open a database created by the bot, without creating or migrating
+        anything. For processes that are not the bot (e.g. the dashboard):
+        only the bot runs ``initialize``. Raises ``DatabaseError`` unless the
+        file exists and its schema is exactly ``SCHEMA_VERSION``."""
+        db = cls(path)
+        try:
+            db.verify_schema()
+        except BaseException:
+            db.close()
+            raise
+        return db
+
+    def verify_schema(self) -> int:
+        """Check (read-only) that the schema matches this code exactly."""
+        if not self.is_memory and not Path(self.path).is_file():
+            raise DatabaseError(f"database {self.path} does not exist: start the bot first "
+                                "(only the bot creates and migrates the schema)")
+        found = self.current_schema_version()
+        if found is None:
+            raise DatabaseError(f"{self.path} has no schema version: it was not created by the bot")
+        if found < SCHEMA_VERSION:
+            raise DatabaseError(f"database schema v{found} is older than this code (v{SCHEMA_VERSION}): "
+                                "start the updated bot so it migrates the database, then retry")
+        if found > SCHEMA_VERSION:
+            raise DatabaseError(f"database schema v{found} is newer than this code (v{SCHEMA_VERSION}): "
+                                "update this code to match the bot")
+        missing = set(REQUIRED_TABLES) - set(self.tables())
+        if missing:
+            raise DatabaseError(f"database schema v{found} is missing tables: {sorted(missing)}")
+        return found
+
     def initialize(self) -> None:
-        """Create all tables, indexes, views and triggers (idempotent)."""
+        """Create all tables, indexes, views and triggers (idempotent).
+        Only the bot calls this: it is the one process that migrates."""
         with self._lock:
             existing = self.current_schema_version()
             if existing is not None and existing > SCHEMA_VERSION:

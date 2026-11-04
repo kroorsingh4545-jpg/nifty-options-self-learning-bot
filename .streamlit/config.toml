@@ -1,0 +1,10 @@
+# Dashboard server settings. Streamlit reads this file when it is started from
+# the project root (`streamlit run dashboard/app.py`).
+[server]
+# Listen on loopback only. The app also refuses any other address unless it is
+# started with `-- --allow-remote` (then put it behind a TLS reverse proxy).
+address = "127.0.0.1"
+headless = true
+
+[browser]
+gatherUsageStats = false
