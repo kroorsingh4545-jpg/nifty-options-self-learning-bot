@@ -104,6 +104,14 @@ class BaseStrategy(ABC):
         if approved:
             self.entries[signal.option_type] += 1
 
+    def restore_entries(self, day: date, counts: dict[OptionType, int]) -> None:
+        """After a restart: re-apply today's approved entries per direction
+        (from persisted trades) so per-direction caps survive the restart."""
+        if day != self.day:
+            self.reset_day(day)
+        for opt, n in counts.items():
+            self.entries[opt] = max(self.entries[opt], int(n))
+
     def make_signal(self, opt: OptionType, candle: Candle, reason: str, features: dict[str, float]) -> Signal:
         self.signals_today += 1
         return Signal(

@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 import pytest
 
-from broker.errors import BrokerError
+from broker.errors import BrokerAPIError, BrokerError, RateLimitError
 from broker.upstox_mapping import parse_instrument
 from broker.upstox_rate_limiter import UpstoxRateLimiter
 from broker.upstox_rest import UpstoxRestClient
@@ -168,6 +168,40 @@ async def test_instrument_download_retries_then_fails_cleanly() -> None:
     c2, _, _ = client(lambda r: httpx.Response(200, content=b"not gzip"))
     with pytest.raises(BrokerError, match="gzip"):
         await c2.get_instruments()
+
+
+async def test_instrument_download_429_is_reported_to_limiter_then_retried() -> None:
+    responses = [httpx.Response(429, headers={"Retry-After": "1"}), httpx.Response(200, content=gz([REAL_FUT_RECORD]))]
+    c, limiter, seen = client(lambda r: responses.pop(0))
+    assert len(await c.get_instruments()) == 1 and len(seen) == 2
+    usage = limiter.usage()["standard_api"]
+    assert usage["granted"] == 2  # the retry went through the limiter again
+    assert usage["total_429"] == 1
+
+
+async def test_instrument_download_persistent_429_raises_rate_limit_error() -> None:
+    c, _, seen = client(lambda r: httpx.Response(429))
+    with pytest.raises(RateLimitError):
+        await c.get_instruments()
+    assert 1 <= len(seen) <= BrokerSection().max_retries + 1  # never more than the retry budget
+
+
+async def test_instrument_download_exhausted_timeouts_fail_cleanly() -> None:
+    def timeout(_: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("cdn unreachable")
+
+    c, _, seen = client(timeout)
+    with pytest.raises(BrokerError, match="instrument list download failed: ConnectTimeout"):
+        await c.get_instruments()
+    assert len(seen) == BrokerSection().max_retries + 1
+
+
+@pytest.mark.parametrize("status", [403, 404])
+async def test_instrument_download_non_200_is_not_retried(status: int) -> None:
+    c, _, seen = client(lambda r: httpx.Response(status))
+    with pytest.raises(BrokerAPIError):
+        await c.get_instruments()
+    assert len(seen) == 1
 
 
 def test_instruments_url_is_official_only() -> None:

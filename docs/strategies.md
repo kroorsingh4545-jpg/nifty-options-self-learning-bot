@@ -55,8 +55,10 @@ restarts its indicators (the new contract trades at a different basis) and switc
 Nothing is configured by hand. Lot sizes, for options and futures alike, also come only from the instrument
 list, so an NSE lot-size revision takes effect the next trading day.
 
-NSE trading holidays live in `market_session.holidays` in `config/settings.yaml` (2026 is loaded). If the
-current year has no entries the bot logs CRITICAL at startup, so add next year's list when NSE publishes it.
+NSE trading holidays live in `market_session.holidays` in `config/settings.yaml` (2026 is loaded). The risk
+gate rejects entries on a configured holiday. If the current year has no entries at all, the bot logs CRITICAL
+at startup and the risk gate blocks **every** new entry, so add next year's list when NSE publishes it
+(usually in December).
 
 ```
 each completed 5-min (or 3-min) futures candle

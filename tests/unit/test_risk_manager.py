@@ -38,6 +38,28 @@ async def test_time_rules(now: object, sid: str, reason: str) -> None:
     assert not d.approved and any(reason in r for r in d.reasons), d.reasons
 
 
+async def test_holiday_blocks_entries_in_the_risk_gate() -> None:
+    from datetime import datetime
+
+    from core.clock import IST
+
+    h = Harness(datetime(2026, 11, 10, 10, 0, tzinfo=IST))  # Diwali Balipratipada (NSE holiday), a Tuesday
+    h.tick(CE.instrument_key, 100.0)
+    d = await h.decide("vwap_ema")
+    assert not d.approved and any("not an NSE trading day" in r for r in d.reasons), d.reasons
+
+
+async def test_missing_holiday_calendar_for_the_year_blocks_entries() -> None:
+    from datetime import datetime
+
+    from core.clock import IST
+
+    h = Harness(datetime(2027, 1, 5, 10, 0, tzinfo=IST))  # a Tuesday; no 2027 holidays configured
+    h.tick(CE.instrument_key, 100.0)
+    d = await h.decide("vwap_ema")
+    assert not d.approved and any("no NSE holiday calendar configured for 2027" in r for r in d.reasons), d.reasons
+
+
 async def test_kill_switch_blocks_entries() -> None:
     h = Harness()
     h.tick(CE.instrument_key, 100.0)
@@ -52,7 +74,7 @@ async def test_kill_switch_blocks_entries() -> None:
 async def test_strategy_status_must_be_active() -> None:
     h = Harness()
     h.tick(CE.instrument_key, 100.0)
-    h.repos.strategies.set_status("orb_options", StrategyStatus.PAUSED)
+    h.repos.strategies.set_status("orb_options", StrategyStatus.PAUSED, at=h.wall())
     d = await h.decide()
     assert not d.approved and any("PAUSED" in r for r in d.reasons)
 

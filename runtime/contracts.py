@@ -87,13 +87,18 @@ class OptionContractResolver:
         strategies: dict[str, StrategyConfig],
         spot_fn: Callable[[], float | None],
         quote_fn: Callable[[str], Tick | None],
+        block_fn: Callable[[], str | None] | None = None,
     ) -> None:
         self.universe = universe
         self.strategies = strategies
         self._spot = spot_fn
         self._quote = quote_fn
+        self._block = block_fn  # returns a reason while contract data cannot be trusted
 
     def resolve(self, signal: Signal) -> ContractChoice:
+        blocked = self._block() if self._block is not None else None
+        if blocked:
+            return ContractChoice(None, (blocked,))
         scfg = self.strategies[signal.strategy_id]
         spot = self._spot()
         if spot is None:

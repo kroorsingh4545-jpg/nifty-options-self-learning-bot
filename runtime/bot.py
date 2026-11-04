@@ -1,22 +1,26 @@
 """TradingBot — builds and runs the whole PAPER system.
 
 Startup sequence (``prepare``):
- 1. warn (CRITICAL) if no NSE holidays are configured for the current year
+ 1. CRITICAL if no NSE holidays are configured for the current year (the
+    risk gate then blocks every new entry)
  2. load the Upstox instrument list: NIFTY options (nearest expiry -> strike
     universe), the current-month NIFTY future, and ALL lot sizes
  3. restore daily loss guard, kill switch and open trades from SQLite
- 4. build strategies (NIFTY_FUT strategies get the current-month future),
-    resolver, gateway, engine; wire tick -> candle -> engine
- 5. subscribe NIFTY index + current future; new-day reset (only clears
-    statuses / kill events from PREVIOUS days)
+ 4. build strategies (NIFTY_FUT strategies get the current-month future) and
+    re-apply today's per-direction entry counts; resolver, gateway, engine;
+    wire tick -> candle -> engine
+ 5. subscribe NIFTY index + current future; new-day reset (clears only
+    day-scoped blocks from PREVIOUS days; persistent kills stay)
  6. startup reconciliation (a mismatch triggers the kill switch)
 
 Scheduled jobs (``schedule``), all IST:
  * candle flush (1 s)          * stale-entry expiry (5 s)
  * square-off check (5 s)      * strike-universe recenter (30 s)
  * periodic reconciliation (<= 300 s)
- * daily 09:00 start-of-day (Mon-Fri): refresh the instrument list, roll the
-   futures contract after expiry, new-day reset
+ * daily 09:00 start-of-day (Mon-Fri): refresh the instrument list (with
+   retries; on failure a CRITICAL alert, and new entries stay blocked until a
+   list for today is loaded), roll the futures contract after expiry, new-day
+   reset, reconciliation
 """
 
 from __future__ import annotations
@@ -28,10 +32,11 @@ from typing import Any
 
 from broker.broker_interface import Broker, MarketDataSource
 from broker.paper_broker import PaperBroker
+from broker.upstox_rate_limiter import backoff_delay
 from config.settings import BotConfig
 from core.clock import now_ist
 from core.engine import TradingEngine
-from core.enums import StrategyStatus, TradingMode
+from core.enums import OptionType, RiskSeverity, StrategyStatus, TradingMode
 from core.event_bus import EventBus
 from core.interfaces import PassThroughFilter, SignalFilter, StrategyProtocol
 from core.mode_controller import ModeController
@@ -43,6 +48,7 @@ from data.instruments import InstrumentMaster, build_master
 from data.market_data import MarketDataService
 from data.storage.repositories import Repositories
 from execution.stack import ExecutionStack, build_stack
+from monitoring.alerts import Alert
 from monitoring.json_logger import get_logger
 from runtime.contracts import OptionContractResolver, OptionUniverse
 from runtime.gateway import RiskEntryGateway
@@ -101,6 +107,8 @@ class TradingBot:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         scheduler: TradingScheduler | None = None,
         reconcile_confirm_delay: float = 1.0,
+        instrument_refresh_attempts: int = 5,
+        instrument_retry_seconds: float = 30.0,
     ) -> None:
         if cfg.mode is not TradingMode.PAPER:
             raise RuntimeError("only PAPER mode can run in this build")
@@ -111,6 +119,9 @@ class TradingBot:
         self.source = source
         self._subscriber = subscriber
         self._now = now_fn
+        self._sleep = sleep
+        self._refresh_attempts = max(1, instrument_refresh_attempts)
+        self._retry_seconds = instrument_retry_seconds
         self.bus = EventBus()
         self.stack: ExecutionStack = build_stack(cfg, repos=repos, broker=broker, market_data=market_data,
                                                  now_fn=now_fn, sleep=sleep,
@@ -166,7 +177,7 @@ class TradingBot:
         today = self._now().date()
         session = self.cfg.settings.market_session
         if not session.holidays_known_for(today.year):
-            log.critical("no NSE trading holidays configured for this year; the bot cannot tell holidays apart",
+            log.critical("no NSE trading holidays configured for this year; ALL new entries are blocked",
                          extra={"year": today.year, "fix": "add NSE holidays to market_session.holidays"})
         await self.load_instruments(today, instruments)
         assert self.universe is not None and self.futures is not None
@@ -179,7 +190,8 @@ class TradingBot:
 
         self.strategies = build_strategies(self.cfg, self._now, futures_key=self.futures.instrument_key)
         resolver = OptionContractResolver(universe=self.universe, strategies=dict(self.cfg.strategies.strategies),
-                                          spot_fn=self.spot, quote_fn=self.md.get)
+                                          spot_fn=self.spot, quote_fn=self.md.get,
+                                          block_fn=self.instrument_block_reason)
         self._resolver = resolver
         gateway = RiskEntryGateway(self.cfg, s, self.broker)
         strategies: list[StrategyProtocol] = list(self.strategies)
@@ -192,9 +204,17 @@ class TradingBot:
         self.candles.add_listener(self.engine.on_candle)
         await self._subscribe(self.base_keys(), set())
         self.new_day(today)
+        self._restore_entry_counts(today)  # after new_day: it resets strategy day state
         await s.reconciler.reconcile("startup")
         log.info("bot prepared", extra={**self.instrument_summary,
                                         "strategies": [x.strategy_id for x in self.strategies]})
+
+    def _restore_entry_counts(self, today: date) -> None:
+        for strat in self.strategies:
+            counts = self.repos.trades.count_created_by_option_type(strat.strategy_id, today)
+            if counts:
+                strat.restore_entries(today, {OptionType(k): n for k, n in counts.items()})
+                log.info("strategy entry counts restored", extra={"strategy_id": strat.strategy_id, **counts})
 
     def base_keys(self) -> set[str]:
         """Always-subscribed instruments: NIFTY index (+ current future)."""
@@ -207,12 +227,47 @@ class TradingBot:
         if (add or remove) and self._subscriber is not None:
             await self._subscriber(add, remove)
 
+    def instrument_block_reason(self) -> str | None:
+        """Entries need today's instrument list (expiries, lot sizes, the
+        current future); a stale or missing list blocks them."""
+        today = self._now().date()
+        if self.master is None or self.master.loaded_for != today:
+            loaded = self.master.loaded_for.isoformat() if self.master else None
+            return f"instrument list not loaded for {today} (last loaded {loaded}): new entries blocked"
+        return None
+
+    async def _refresh_instruments(self, day: date, instruments: Sequence[Instrument] | None) -> bool:
+        last = ""
+        for attempt in range(self._refresh_attempts):
+            try:
+                await self.load_instruments(day, instruments)
+                return True
+            except Exception as exc:
+                last = f"{type(exc).__name__}: {exc}"
+                log.error("instrument list refresh failed", extra={"attempt": attempt + 1, "error": last})
+                if attempt + 1 < self._refresh_attempts:
+                    await self._sleep(backoff_delay(attempt, self._retry_seconds, 4 * self._retry_seconds))
+        msg = (f"instrument list for {day} could not be loaded after {self._refresh_attempts} attempts ({last}); "
+               "new entries are blocked until it loads - restart the bot once the Upstox list is reachable")
+        log.critical("instrument list refresh FAILED", extra={"day": day.isoformat(), "error": last})
+        if self.stack.notify is not None:
+            self.stack.notify.send(Alert(RiskSeverity.CRITICAL, "Instrument list refresh failed", msg))
+        return False
+
     async def start_of_day(self, day: date, instruments: Sequence[Instrument] | None = None) -> None:
         """Daily pre-open job: refresh the instrument list (lot sizes may be
         revised; expiries move on), roll NIFTY_FUT strategies to the new
-        current-month future after expiry, then the new-day reset."""
+        current-month future after expiry, then the new-day reset and a
+        reconciliation, so a position carried over from yesterday is checked
+        against the broker before the open. If the list cannot be loaded the
+        day still rolls, but entries stay blocked (``instrument_block_reason``)."""
         old_future = self.futures.instrument_key if self.futures else None
-        await self.load_instruments(day, instruments)
+        if await self._refresh_instruments(day, instruments):
+            await self._roll_future(old_future)
+        self.new_day(day)
+        await self.stack.reconciler.reconcile("start_of_day")
+
+    async def _roll_future(self, old_future: str | None) -> None:
         assert self.futures is not None
         new_future = self.futures.instrument_key
         if old_future != new_future:
@@ -224,27 +279,34 @@ class TradingBot:
             held = {t.instrument.instrument_key for t in self.stack.positions.open_trades()}
             remove = {old_future} - held if old_future else set()
             await self._subscribe({new_future}, remove)
-        self.new_day(day)
 
     # ------------------------------------------------------------------ #
     def new_day(self, day: date) -> None:
-        """New trading day. Clears only what belongs to PREVIOUS days: kill
-        events, and PAUSED/KILLED strategy statuses last changed before today.
-        Today's breaches (e.g. after a mid-session restart) stay in force."""
+        """New trading day. Clears only what belongs to PREVIOUS days:
+        day-scoped (daily-loss) kill events, and PAUSED/KILLED strategy
+        statuses last changed before today - unless a persistent kill still
+        blocks that strategy (those need a named human reset). Today's
+        breaches (e.g. after a mid-session restart) stay in force."""
         if self.last_reset_day == day:
             return
         s = self.stack
         s.guard.roll_day_if_needed()
         s.kill_switch.roll_day(day)
+        now = self._now()
         for rec in self.repos.strategies.list_all():
             scfg = self.cfg.strategies.strategies.get(rec.strategy_id)
             if scfg is None:
                 continue
             if not scfg.enabled:
                 if rec.status is not StrategyStatus.DISABLED:
-                    self.repos.strategies.set_status(rec.strategy_id, StrategyStatus.DISABLED)
+                    self.repos.strategies.set_status(rec.strategy_id, StrategyStatus.DISABLED, at=now)
             elif rec.status in (StrategyStatus.PAUSED, StrategyStatus.KILLED) and rec.updated_at.date() < day:
-                self.repos.strategies.set_status(rec.strategy_id, StrategyStatus.ACTIVE)
+                if s.kill_switch.is_blocked(rec.strategy_id):
+                    log.critical("strategy stays KILLED: persistent kill switch needs a named human reset",
+                                 extra={"strategy_id": rec.strategy_id,
+                                        "reason": s.kill_switch.block_reason(rec.strategy_id)})
+                    continue
+                self.repos.strategies.set_status(rec.strategy_id, StrategyStatus.ACTIVE, at=now)
                 log.info("strategy re-activated for new day", extra={"strategy_id": rec.strategy_id})
         if self.engine is not None:
             self.engine.new_day(day)
