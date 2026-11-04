@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
-from datetime import date
+from datetime import date, datetime
 from typing import Any, TypeVar
 
 from core.clock import now_ist
@@ -135,10 +135,12 @@ class StrategyRepository:
     def list_all(self) -> list[StrategyRecord]:
         return [StrategyRecord.from_row(r) for r in self.db.query("SELECT * FROM strategies ORDER BY strategy_id")]
 
-    def set_status(self, strategy_id: str, status: StrategyStatus) -> None:
+    def set_status(self, strategy_id: str, status: StrategyStatus, *, at: datetime) -> None:
+        """``at`` is the caller's clock: the new-day reset compares it with the
+        same clock, so simulated time (backtests) stays consistent."""
         cur = self.db.execute(
             "UPDATE strategies SET status = ?, updated_at = ? WHERE strategy_id = ?",
-            (StrategyStatus(status).value, now_ist().isoformat(), strategy_id),
+            (StrategyStatus(status).value, at.isoformat(), strategy_id),
         )
         if cur.rowcount == 0:
             raise NotFoundError(f"strategy {strategy_id!r} not found")
@@ -317,6 +319,16 @@ class TradeRepository(_ModeScoped):
         )
         return int(row["n"]) if row else 0
 
+    def count_created_by_option_type(self, strategy_id: str, day: date) -> dict[str, int]:
+        """Trades the strategy opened on ``day`` (by creation time, whether or
+        not the entry filled), per option type: an approved entry counts."""
+        rows = self.db.query(
+            "SELECT option_type, COUNT(*) AS n FROM trades WHERE mode = ? AND strategy_id = ? "
+            "AND substr(created_at, 1, 10) = ? GROUP BY option_type",
+            (self.mode.value, strategy_id, day.isoformat()),
+        )
+        return {str(r["option_type"]): int(r["n"]) for r in rows}
+
     def close(
         self,
         trade_uid: str,
@@ -388,6 +400,16 @@ class RiskEventRepository(_ModeScoped):
         sql += " ORDER BY id DESC LIMIT ?"
         params.append(int(limit))
         return [RiskEventRecord.from_row(r) for r in self.db.query(sql, params)]
+
+    def list_by_types(self, event_types: Sequence[str]) -> list[RiskEventRecord]:
+        """Every event of the given types for this mode, oldest first."""
+        types = list(event_types)
+        if not types:
+            return []
+        marks = ",".join("?" * len(types))
+        rows = self.db.query(f"SELECT * FROM risk_events WHERE mode = ? AND event_type IN ({marks}) ORDER BY id",  # noqa: S608
+                             [self.mode.value, *types])
+        return [RiskEventRecord.from_row(r) for r in rows]
 
 
 class FeatureSnapshotRepository(_ModeScoped):

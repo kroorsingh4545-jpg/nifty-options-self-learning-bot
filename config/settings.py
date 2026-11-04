@@ -8,7 +8,7 @@ checked against ``config.hard_limits`` and may only be made stricter.
 from __future__ import annotations
 
 import math
-from datetime import datetime, time
+from datetime import date, datetime, time
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -68,12 +68,48 @@ class AppSection(_Frozen):
 class MarketSession(_Frozen):
     market_open: HHMM = time(9, 15)
     market_close: HHMM = time(15, 30)
+    holidays: tuple[date, ...] = ()
 
     @model_validator(mode="after")
     def _order(self) -> MarketSession:
         if not self.market_open < self.market_close:
             raise ValueError("market_open must be before market_close")
         return self
+
+    @field_validator("holidays", mode="before")
+    @classmethod
+    def _parse_holidays(cls, v: Any) -> Any:
+        if v is None:
+            return ()
+        out = []
+        for item in v:
+            if isinstance(item, date):
+                out.append(item)
+            else:
+                try:
+                    out.append(date.fromisoformat(str(item)))
+                except ValueError as exc:
+                    raise ValueError(f"invalid holiday {item!r}; expected 'YYYY-MM-DD'") from exc
+        if len(set(out)) != len(out):
+            raise ValueError("duplicate holiday dates")
+        weekend = [d.isoformat() for d in out if d.weekday() >= 5]
+        if weekend:
+            raise ValueError(f"holidays must be weekdays (weekends are always closed): {weekend}")
+        return tuple(sorted(out))
+
+    def holidays_known_for(self, year: int) -> bool:
+        return any(d.year == year for d in self.holidays)
+
+    def is_trading_day(self, d: date) -> bool:
+        return d.weekday() < 5 and d not in self.holidays
+
+    def is_open(self, at: datetime) -> bool:
+        return self.is_trading_day(at.date()) and self.market_open <= at.time() < self.market_close
+
+
+class InstrumentsSection(_Frozen):
+    nifty_index_key: str = "NSE_INDEX|Nifty 50"
+    strike_band: int = Field(default=3, ge=0, le=10)
 
 
 class DatabaseSection(_Frozen):
@@ -97,6 +133,10 @@ class CircuitBreakerSection(_Frozen):
 
 class BrokerSection(_Frozen):
     rest_base_url: Literal["https://api.upstox.com"] = "https://api.upstox.com"
+    # Official Upstox instrument list (public CDN; no credentials are sent there).
+    instruments_url: Literal["https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"] = (
+        "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+    )
     connect_timeout_seconds: PositiveFloat = 5.0
     request_timeout_seconds: PositiveFloat = 10.0
     max_retries: int = Field(default=3, ge=0, le=5)
@@ -157,6 +197,7 @@ class ExecutionSection(_Frozen):
 class AppSettings(_Frozen):
     app: AppSection = AppSection()
     market_session: MarketSession = MarketSession()
+    instruments: InstrumentsSection = InstrumentsSection()
     database: DatabaseSection = DatabaseSection()
     broker: BrokerSection = BrokerSection()
     websocket: WebSocketSection = WebSocketSection()

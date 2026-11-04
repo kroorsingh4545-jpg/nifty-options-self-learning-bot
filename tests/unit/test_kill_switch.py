@@ -11,7 +11,7 @@ from core.clock import IST
 from core.enums import TradingMode
 from data.storage.repositories import Repositories
 from monitoring.alerts import MemoryAlertSink
-from risk.kill_switch import RESET_EVENT, TRIGGER_EVENT, KillEvent, KillReason, KillSwitch
+from risk.kill_switch import DAY_SCOPED_REASONS, RESET_EVENT, TRIGGER_EVENT, KillEvent, KillReason, KillSwitch
 from tests.fakes import FakeWallClock
 
 NOW = datetime(2026, 11, 3, 11, 0, tzinfo=IST)
@@ -114,10 +114,117 @@ def test_restore_respects_reset_and_day(paper: Repositories) -> None:
     ks2, _ = make(paper)
     ks2.restore()
     assert not ks2.is_blocked("vwap_ema")
-    ks.trigger(KillReason.MANUAL, "y")
-    tomorrow, _ = make(paper, FakeWallClock(datetime(2026, 11, 4, 9, 0, tzinfo=IST)))
+    ks.trigger(KillReason.GLOBAL_DAILY_LOSS, "y")
+    tomorrow, _ = make(paper, FakeWallClock(TOMORROW))
     tomorrow.restore()
-    assert not tomorrow.active  # yesterday's trigger does not carry over
+    assert not tomorrow.active  # yesterday's daily-loss trigger does not carry over
+
+
+TOMORROW = datetime(2026, 11, 4, 9, 0, tzinfo=IST)
+PERSISTENT = [r for r in KillReason if r not in DAY_SCOPED_REASONS]
+
+
+def test_only_daily_loss_reasons_are_day_scoped() -> None:
+    assert {KillReason.STRATEGY_DAILY_LOSS, KillReason.GLOBAL_DAILY_LOSS} == DAY_SCOPED_REASONS
+    assert {KillReason.EXIT_FAILURE, KillReason.SQUARE_OFF_INCOMPLETE, KillReason.RECONCILIATION_MISMATCH,
+            KillReason.MANUAL} <= set(PERSISTENT)
+
+
+@pytest.mark.parametrize("reason", PERSISTENT)
+def test_roll_day_keeps_persistent_reasons_until_named_reset(paper: Repositories, reason: KillReason) -> None:
+    wall = FakeWallClock(NOW)
+    ks, alerts = make(paper, wall)
+    ks.trigger(reason, "stuck")
+    wall.now = TOMORROW
+    assert ks.roll_day(TOMORROW.date()) == []
+    assert ks.active and ks.global_event is not None and ks.global_event.reason is reason
+    assert alerts.alerts[-1].title.startswith("Kill switch still active")
+    # a restart on the next day restores it too
+    restarted, _ = make(paper, FakeWallClock(TOMORROW))
+    restarted.restore()
+    assert restarted.active and restarted.global_event is not None and restarted.global_event.reason is reason
+    # only a named human clears it
+    with pytest.raises(ValueError):
+        restarted.reset(operator=" ", note="x")
+    assert restarted.reset(operator="ops.lead", note="verified flat at broker")
+    again, _ = make(paper, FakeWallClock(TOMORROW))
+    again.restore()
+    assert not again.active
+
+
+def test_roll_day_clears_only_daily_loss_scopes(paper: Repositories) -> None:
+    wall = FakeWallClock(NOW)
+    ks, _ = make(paper, wall)
+    ks.trigger(KillReason.STRATEGY_DAILY_LOSS, "loss", strategy_id="orb_options")
+    ks.trigger(KillReason.RECONCILIATION_MISMATCH, "qty", strategy_id="vwap_ema")
+    wall.now = TOMORROW
+    assert ks.roll_day(TOMORROW.date()) == ["orb_options"]
+    assert not ks.is_blocked("orb_options") and ks.is_blocked("vwap_ema")
+    assert ks.roll_day(NOW.date()) == []  # never clears anything from "today"
+
+
+def test_persistent_reason_escalates_an_active_daily_loss_kill(paper: Repositories) -> None:
+    """Daily-loss flatten fails to exit -> EXIT_FAILURE must not be swallowed
+    by the already-active day-scoped kill (it would expire overnight)."""
+    wall = FakeWallClock(NOW)
+    ks, alerts = make(paper, wall)
+    ran: list[KillEvent] = []
+
+    async def handler(ev: KillEvent) -> None:
+        ran.append(ev)
+
+    ks.add_handler(handler)
+
+    async def scenario() -> None:
+        ks.trigger(KillReason.GLOBAL_DAILY_LOSS, "loss")
+        ev = ks.trigger(KillReason.EXIT_FAILURE, "could not exit")
+        assert ev is not None and ks.global_event is ev
+        assert ks.trigger(KillReason.GLOBAL_DAILY_LOSS, "again") is None  # no downgrade
+        await ks.wait_idle()
+
+    asyncio.run(scenario())
+    assert [e.reason for e in ran] == [KillReason.GLOBAL_DAILY_LOSS]  # escalation does not re-run handlers
+    assert alerts.alerts[-1].title == "Kill switch escalated (GLOBAL)"
+    wall.now = TOMORROW
+    ks.roll_day(TOMORROW.date())
+    assert ks.active and ks.global_event is not None and ks.global_event.reason is KillReason.EXIT_FAILURE
+    restarted, _ = make(paper, FakeWallClock(TOMORROW))
+    restarted.restore()
+    assert restarted.active
+
+
+def test_strategy_persistent_reason_kept_under_day_scoped_global(paper: Repositories) -> None:
+    wall = FakeWallClock(NOW)
+    ks, _ = make(paper, wall)
+    ks.trigger(KillReason.GLOBAL_DAILY_LOSS, "loss")
+    assert ks.trigger(KillReason.STRATEGY_DAILY_LOSS, "s", strategy_id="orb_options") is None
+    assert ks.trigger(KillReason.RECONCILIATION_MISMATCH, "qty", strategy_id="vwap_ema") is not None
+    wall.now = TOMORROW
+    ks.roll_day(TOMORROW.date())
+    assert not ks.active and not ks.is_blocked("orb_options") and ks.is_blocked("vwap_ema")
+
+
+def test_restore_unknown_reason_is_treated_as_persistent(paper: Repositories) -> None:
+    from core.enums import RiskSeverity
+    from data.storage.records import RiskEventRecord
+
+    paper.risk_events.insert(RiskEventRecord(mode=TradingMode.PAPER, strategy_id=None, event_type=TRIGGER_EVENT,
+                                             severity=RiskSeverity.CRITICAL, message="old build",
+                                             details_json={"reason": "SOMETHING_NEW"}, created_at=NOW))
+    ks, _ = make(paper, FakeWallClock(TOMORROW))
+    ks.restore()
+    assert ks.active and ks.global_event is not None and ks.global_event.reason is KillReason.MANUAL
+
+
+def test_events_are_stamped_with_the_kill_switch_clock(paper: Repositories) -> None:
+    clock = FakeWallClock(datetime(2031, 3, 5, 10, 0, tzinfo=IST))  # far from the real date
+    ks, _ = make(paper, clock)
+    ks.trigger(KillReason.MANUAL, "x", strategy_id="vwap_ema")
+    (e,) = paper.risk_events.recent()
+    assert e.created_at == clock()
+    ks2, _ = make(paper, clock)
+    ks2.restore()
+    assert ks2.is_blocked("vwap_ema")
 
 
 def test_trigger_without_loop_still_blocks() -> None:

@@ -133,9 +133,9 @@ class SquareOffManager:
         sid = ev.strategy_id
         if sid is None:
             for s in self.repos.strategies.list_all():
-                self.repos.strategies.set_status(s.strategy_id, StrategyStatus.KILLED)
+                self.repos.strategies.set_status(s.strategy_id, StrategyStatus.KILLED, at=self._now())
         else:
-            self.repos.strategies.set_status(sid, StrategyStatus.KILLED)
+            self.repos.strategies.set_status(sid, StrategyStatus.KILLED, at=self._now())
         flat = await self.flatten(strategy_id=sid, reason=ExitReason.KILL_SWITCH)
         log.critical("kill switch flatten finished", extra={"strategy_id": sid, "flat": flat})
         if not flat:

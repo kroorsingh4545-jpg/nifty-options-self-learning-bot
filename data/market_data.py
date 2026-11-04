@@ -33,12 +33,12 @@ class MarketDataService:
         self._now = now_fn
         self._latest: dict[str, Tick] = {}
         self._stale: set[str] = set()
-        self._listeners: list[Callable[[Tick], None]] = []
+        self._listeners: list[Callable[[Tick], object]] = []
         self._coalescer = RequestCoalescer(snapshot_debounce_seconds)
         self.ticks_received = 0
         self.out_of_order = 0
 
-    def add_listener(self, fn: Callable[[Tick], None]) -> None:
+    def add_listener(self, fn: Callable[[Tick], object]) -> None:
         self._listeners.append(fn)
 
     # Ingest --------------------------------------------------------------

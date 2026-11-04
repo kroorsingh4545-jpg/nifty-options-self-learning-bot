@@ -117,6 +117,27 @@ class Instrument(_Model):
 
 
 # --------------------------------------------------------------------------- #
+# Signals
+# --------------------------------------------------------------------------- #
+
+
+class Signal(_Model):
+    """A strategy's request to enter. It names a direction, not a contract or
+    size: contract selection, ML filtering, risk and sizing happen downstream."""
+
+    signal_id: str
+    strategy_id: str
+    strategy_version: str
+    option_type: OptionType  # CE = bullish, PE = bearish (long options only)
+    generated_at: ISTDatetime
+    candle_end: ISTDatetime  # as-of time of the data used (point-in-time)
+    underlying_key: str
+    underlying_price: float
+    reason: str
+    features: dict[str, float] = Field(default_factory=dict)
+
+
+# --------------------------------------------------------------------------- #
 # Orders / account
 # --------------------------------------------------------------------------- #
 

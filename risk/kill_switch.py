@@ -7,12 +7,23 @@ When triggered:
 4. Registered async action handlers run (execution: cancel pending orders,
    exit positions, disable strategies).
 
-It stays active for the rest of the day unless a named human resets it.
+How long it stays active depends on the reason:
+
+* Daily-loss reasons (``DAY_SCOPED_REASONS``) mean "disabled for the day": they
+  are cleared automatically by ``roll_day`` on the next trading day (audited).
+* Every other reason (exit failure, incomplete square-off, reconciliation
+  mismatch, API / auth failure, manual, ...) stays active, across days and
+  restarts, until a named human resets it.
+
+A persistent reason arriving while only a day-scoped kill is active for that
+scope is still recorded (escalation), so it cannot be lost when the day-scoped
+kill expires.
+
 ML/RL/learning components receive no reference to this object; only risk,
 execution and the dashboard (manual trigger) hold it.
 
-After a restart, ``restore()`` re-arms any trigger recorded today that was not
-followed by a reset.
+After a restart, ``restore()`` re-arms every trigger not followed by a reset,
+except day-scoped ones from previous days.
 """
 
 from __future__ import annotations
@@ -20,7 +31,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
 from core.clock import now_ist
@@ -51,12 +62,26 @@ class KillReason(StrEnum):
     MANUAL = "MANUAL"
 
 
+# Cleared automatically on the next trading day. Consecutive losses never use
+# the kill switch: they PAUSE the strategy (strategy status), which the bot's
+# new-day reset clears.
+DAY_SCOPED_REASONS: frozenset[KillReason] = frozenset({KillReason.STRATEGY_DAILY_LOSS,
+                                                       KillReason.GLOBAL_DAILY_LOSS})
+
+
 @dataclass(frozen=True)
 class KillEvent:
     reason: KillReason
     message: str
     strategy_id: str | None  # None = global
     at: datetime
+
+    @property
+    def day_scoped(self) -> bool:
+        return self.reason in DAY_SCOPED_REASONS
+
+    def expired_on(self, today: date) -> bool:
+        return self.day_scoped and self.at.date() < today
 
 
 # handler(event) -> awaitable; e.g. flatten positions for the scope.
@@ -103,25 +128,40 @@ class KillSwitch:
 
     # ------------------------------------------------------------------ #
     def trigger(self, reason: KillReason, message: str, *, strategy_id: str | None = None) -> KillEvent | None:
-        """Activate (idempotent per scope). Returns the event, or None if that
-        scope was already active."""
-        if strategy_id is None and self.global_event is not None:
+        """Activate (idempotent per scope). Returns the event, or None if the
+        scope was already covered by an equally long-lived kill.
+
+        A persistent reason arriving while the scope is blocked only by a
+        day-scoped kill is recorded as an escalation: it replaces the
+        day-scoped event so it survives the next day's roll-over. Escalations
+        do not re-run the action handlers (the scope is already flattened)."""
+        reason = KillReason(reason)
+        persistent = reason not in DAY_SCOPED_REASONS
+        current = self.global_event if strategy_id is None else self.strategy_events.get(strategy_id)
+        if current is not None and not (persistent and current.day_scoped):
             return None
-        if strategy_id is not None and (strategy_id in self.strategy_events or self.global_event is not None):
+        g = self.global_event
+        if strategy_id is not None and g is not None and not (persistent and g.day_scoped):
             return None
-        ev = KillEvent(reason=KillReason(reason), message=message, strategy_id=strategy_id, at=self._now())
+        escalation = self.is_blocked(strategy_id)
+        ev = KillEvent(reason=reason, message=message, strategy_id=strategy_id, at=self._now())
         if strategy_id is None:
             self.global_event = ev
         else:
             self.strategy_events[strategy_id] = ev
         self.history.append(ev)
         scope = strategy_id or "GLOBAL"
-        log.critical("KILL SWITCH TRIGGERED", extra={"strategy_id": strategy_id, "scope": scope,
-                                                     "reason": ev.reason.value, "detail": message})
-        self._record(TRIGGER_EVENT, RiskSeverity.CRITICAL, ev.reason.value, message, strategy_id)
-        self.alerts.send(Alert(RiskSeverity.CRITICAL, f"Kill switch triggered ({scope})",
-                               f"{ev.reason.value}: {message}", strategy_id=strategy_id))
-        self._run_handlers(ev)
+        title = "KILL SWITCH ESCALATED" if escalation else "KILL SWITCH TRIGGERED"
+        log.critical(title, extra={"strategy_id": strategy_id, "scope": scope, "reason": ev.reason.value,
+                                   "detail": message, "persistent": persistent})
+        self._record(TRIGGER_EVENT, RiskSeverity.CRITICAL, ev.reason.value, message, strategy_id,
+                     {"escalation": "true"} if escalation else None)
+        until = "until a named human resets it" if persistent else "for the rest of the trading day"
+        self.alerts.send(Alert(RiskSeverity.CRITICAL, f"Kill switch {'escalated' if escalation else 'triggered'} "
+                               f"({scope})", f"{ev.reason.value}: {message} - active {until}",
+                               strategy_id=strategy_id))
+        if not escalation:
+            self._run_handlers(ev)
         return ev
 
     def _run_handlers(self, ev: KillEvent) -> None:
@@ -173,31 +213,69 @@ class KillSwitch:
         try:
             self.repo.insert(RiskEventRecord(mode=self.mode, strategy_id=strategy_id, event_type=event_type,
                                              severity=sev, message=message,
-                                             details_json={"reason": reason, **(extra or {})}))
+                                             details_json={"reason": reason, **(extra or {})},
+                                             # restore()/roll_day() read events back by this clock's date.
+                                             created_at=self._now()))
         except Exception:
             # Persistence failure must not stop the kill switch from acting.
             log.exception("failed to persist kill switch event")
 
     def restore(self) -> None:
-        """Re-activate scopes triggered today and not reset since (restart recovery)."""
+        """Re-activate every scope whose last kill event is a trigger (restart
+        recovery), on any day, except day-scoped triggers from previous days."""
         if self.repo is None:
             return
         today = self._now().date()
-        events = [e for e in reversed(self.repo.recent(limit=1000)) if e.created_at.date() == today
-                  and e.event_type in (TRIGGER_EVENT, RESET_EVENT)]
         state: dict[str | None, RiskEventRecord | None] = {}
-        for e in events:
+        for e in self.repo.list_by_types((TRIGGER_EVENT, RESET_EVENT)):
             state[e.strategy_id] = e if e.event_type == TRIGGER_EVENT else None
         for sid, last in state.items():
             if last is None:
                 continue
-            ev = KillEvent(KillReason(last.details_json.get("reason", "MANUAL")), f"restored: {last.message}", sid,
-                           last.created_at)
+            try:
+                reason = KillReason(last.details_json.get("reason", "MANUAL"))
+            except ValueError:
+                reason = KillReason.MANUAL  # unknown reason: treat as persistent
+            ev = KillEvent(reason, f"restored: {last.message}", sid, last.created_at)
+            if ev.expired_on(today):
+                continue
             if sid is None:
                 self.global_event = ev
             else:
                 self.strategy_events[sid] = ev
-            log.critical("kill switch restored as ACTIVE after restart", extra={"strategy_id": sid})
+            log.critical("kill switch restored as ACTIVE after restart",
+                         extra={"strategy_id": sid, "reason": reason.value, "since": last.created_at.isoformat()})
+
+    def roll_day(self, today: date) -> list[str]:
+        """New trading day: clear day-scoped (daily-loss) kill events from
+        PREVIOUS days. Every other reason stays active until a named human
+        resets it. Returns the scopes cleared; each is audited."""
+        cleared: list[str] = []
+        if self.global_event is not None and self.global_event.expired_on(today):
+            self.global_event = None
+            cleared.append("GLOBAL")
+        for sid, ev in list(self.strategy_events.items()):
+            if ev.expired_on(today):
+                del self.strategy_events[sid]
+                cleared.append(sid)
+        for scope in cleared:
+            scope_sid: str | None = None if scope == "GLOBAL" else scope
+            log.warning("kill switch cleared for new trading day", extra={"strategy_id": scope_sid,
+                                                                          "day": str(today)})
+            self._record(RESET_EVENT, RiskSeverity.INFO, "NEW_DAY", f"auto-cleared for trading day {today}",
+                         scope_sid, {"operator": "system:new_day"})
+        remaining = ([self.global_event] if self.global_event else []) + list(self.strategy_events.values())
+        for ev in remaining:
+            if ev.at.date() < today:
+                scope = ev.strategy_id or "GLOBAL"
+                log.critical("kill switch still active on new trading day; a named human must reset it",
+                             extra={"strategy_id": ev.strategy_id, "reason": ev.reason.value,
+                                    "since": ev.at.isoformat()})
+                self.alerts.send(Alert(RiskSeverity.CRITICAL, f"Kill switch still active ({scope})",
+                                       f"{ev.reason.value} since {ev.at:%Y-%m-%d %H:%M}: {ev.message} - "
+                                       "new entries stay blocked until a named human resets it",
+                                       strategy_id=ev.strategy_id))
+        return cleared
 
     def status(self) -> dict[str, object]:
         return {

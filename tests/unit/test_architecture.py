@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 PACKAGES = (
     "backtest", "broker", "config", "core", "dashboard", "data", "data.storage", "execution",
-    "learning", "ml", "monitoring", "options", "risk", "strategies",
+    "learning", "ml", "monitoring", "options", "risk", "runtime", "strategies",
 )  # fmt: skip
 PROJECT_TOP_LEVEL = {p.split(".")[0] for p in PACKAGES}
 
@@ -117,3 +117,50 @@ def test_gitignore_protects_secrets_and_databases() -> None:
     gi = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     for required in (".env", "*.db", "logs/"):
         assert required in gi
+
+
+def test_strategies_never_import_broker_or_execution() -> None:
+    for path in _py_files("strategies"):
+        bad = _imported_top_levels(path) & {"broker", "execution", "runtime", "data"}
+        assert not bad, f"{path.relative_to(PROJECT_ROOT)} imports {bad}"
+
+
+def test_only_entry_points_import_runtime() -> None:
+    for pkg in PROJECT_TOP_LEVEL - {"runtime", "dashboard"}:
+        for path in _py_files(pkg):
+            assert "runtime" not in _imported_top_levels(path), f"{path.relative_to(PROJECT_ROOT)} imports runtime"
+
+
+LOT_LITERAL = re.compile(
+    r"\b(?i:lot(?:_size)?)\b\s*(?::\s*int\s*)?[=:]\s*\d+"  # lot_size = 75 / lot: int = 75 / YAML lot_size: 65
+    r"|\b(?i:lots)\b\s*[=:]\s*\d{2,}"                      # lots = 75
+    r"|\bLOT_SIZE\b\s*=(?!=)"                              # a LOT_SIZE constant (case-sensitive)
+)
+
+
+@pytest.mark.parametrize(("line", "flagged"), [
+    ("LOT_SIZE = 65", True), ("lot_size = 75", True), ("def f(lot: int = 75)", True), ("lot_size: 65", True),
+    ("Lot_Size=50", True), ("lots = 75", True),
+    ("risk(lot_size=p.instrument.lot_size)", False), ("lot_size=int(rec['lot_size'])", False),
+    ("lots = depth // inst.lot_size", False), ("lots = 1", False), ("if LOT_SIZE == x:", False),
+])
+def test_lot_literal_pattern(line: str, flagged: bool) -> None:
+    assert bool(LOT_LITERAL.search(line)) is flagged
+
+
+def test_no_hardcoded_lot_sizes_in_production_code() -> None:
+    """Lot sizes must come from the Upstox instrument list, never a constant."""
+    for pkg in PROJECT_TOP_LEVEL:
+        for path in list((PROJECT_ROOT / pkg).rglob("*.py")) + list((PROJECT_ROOT / pkg).rglob("*.yaml")):
+            if "proto" in path.parts:
+                continue
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                code = line.split("#", 1)[0]
+                assert not LOT_LITERAL.search(code), f"hard-coded lot size at {path.relative_to(PROJECT_ROOT)}:{n}"
+
+
+def test_instrument_lot_size_has_no_default() -> None:
+    from core.models import Instrument
+
+    field = Instrument.model_fields["lot_size"]
+    assert field.is_required()  # must always be supplied from the instrument list

@@ -23,6 +23,9 @@ strategies:
       breakout_confirmation: candle_close_beyond_level
       breakout_buffer_points: 5
       max_entries_per_direction_per_day: 1
+      min_range_points: 10           # skip days with a degenerate opening range
+      max_range_pct: 1.5             # skip extreme gap/volatility opening ranges
+      signal_instrument: NIFTY_INDEX
     strike_selection:
       mode: ATM                    # ATM | ITM | OTM
       offset_steps: 0
@@ -74,6 +77,8 @@ strategies:
       chop_filter: vwap_cross_count
       max_vwap_crosses: 4          # in lookback window
       chop_lookback_bars: 12
+      max_entries_per_direction_per_day: 2
+      signal_instrument: NIFTY_FUT   # VWAP needs volume; the index has none
     strike_selection:
       mode: ATM
       offset_steps: 0

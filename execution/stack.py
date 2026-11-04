@@ -50,6 +50,7 @@ class ExecutionStack:
     risk: RiskManager
     reconciler: Reconciler
     square_off: SquareOffManager
+    notify: AlertSink | None = None  # fan-out to every sink (memory, log, Telegram)
 
     async def settle(self) -> None:
         """Wait for background tasks (exits, kill handlers, reconciliation)."""
@@ -88,7 +89,7 @@ def build_stack(
                             f"global daily loss {loss:.2f} reached limit {cfg.risk.global_.max_daily_loss:.0f}")
 
     def on_pause(sid: str, reason: str) -> None:
-        repos.strategies.set_status(sid, StrategyStatus.PAUSED)
+        repos.strategies.set_status(sid, StrategyStatus.PAUSED, at=now_fn())
         alerts.send(Alert(RiskSeverity.WARNING, "Strategy paused", reason, strategy_id=sid))
 
     guard = DailyLossGuard(cfg.risk, strategy_limits, mode=cfg.mode, repo=repos.daily_pnl, now_fn=now_fn,
@@ -122,4 +123,4 @@ def build_stack(
     market_data.add_listener(positions.on_tick)
 
     return ExecutionStack(cfg, repos, broker, market_data, memory, kill_switch, guard, orders, positions, risk,
-                          reconciler, square_off)
+                          reconciler, square_off, notify=alerts)

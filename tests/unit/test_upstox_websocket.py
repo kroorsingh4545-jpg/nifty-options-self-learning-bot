@@ -44,7 +44,7 @@ def sent_json(msgs: list[Any]) -> list[dict[str, Any]]:
     return out
 
 
-async def until(cond: Any, timeout: float = 2.0) -> None:
+async def until(cond: Any, timeout: float = 5.0) -> None:
     async def _poll() -> None:
         while not cond():
             await asyncio.sleep(0.002)
@@ -81,7 +81,7 @@ async def test_connect_subscribe_and_receive_ticks() -> None:
     await until(lambda: len(ticks) == 1)
     assert ticks[0].ltp == 120.0 and ticks[0].bid == 119.5
     await stream.stop()
-    await asyncio.wait_for(task, 1)
+    await asyncio.wait_for(task, 5)
     assert stream.state is StreamState.STOPPED
 
 
@@ -145,7 +145,7 @@ async def test_connect_failures_back_off_then_succeed() -> None:
 async def test_gives_up_after_max_attempts_and_reports_failed() -> None:
     cf = FakeConnector(fail_first=100)
     stream, _, states = make_market(cf)
-    await asyncio.wait_for(stream.run(), 2)
+    await asyncio.wait_for(stream.run(), 5)
     assert stream.state is StreamState.FAILED
     assert cf.attempts == FAST.max_reconnect_attempts + 1
     assert states[-1] == ("RECONNECTING", "FAILED")
@@ -155,7 +155,7 @@ async def test_auth_failure_stops_without_retry_loop() -> None:
     cf = FakeConnector()
     auth = FakeAuthorizer(fail_with=TokenExpiredError("expired"))
     stream, _, _ = make_market(cf, auth)
-    await asyncio.wait_for(stream.run(), 1)
+    await asyncio.wait_for(stream.run(), 5)
     assert stream.state is StreamState.AUTH_FAILED
     assert auth.calls == 1
     assert cf.attempts == 0

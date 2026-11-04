@@ -192,7 +192,8 @@ class LiquidityFilter:
 
 
 class OptionChainFetcher:
-    """Fetches contracts (cached per day) and option chains via REST."""
+    """Option chains via REST. Contracts and lot sizes come from the Upstox
+    instrument list (cached per day), never from a fixed number."""
 
     def __init__(
         self,
@@ -210,7 +211,9 @@ class OptionChainFetcher:
     async def contracts(self, *, refresh: bool = False) -> list[Instrument]:
         today = self._today()
         if refresh or self._contracts is None or self._contracts_day != today:
-            self._contracts = await self.source.get_option_contracts(self.underlying_key)
+            instruments = await self.source.get_instruments(("NIFTY",))
+            self._contracts = [i for i in instruments if i.option_type is not None
+                               and i.underlying_key == self.underlying_key]
             self._contracts_day = today
         return self._contracts
 

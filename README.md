@@ -2,10 +2,11 @@
 
 A NIFTY weekly options intraday trading bot for Indian markets, using the Upstox Developer API.
 
-> **Status: Phase 3 (risk + execution) complete.** On top of Phases 1–2: position sizing,
-> SL/TP/trailing stops, daily loss guards, kill switch, order lifecycle, reconciliation and
-> square-off, all in PAPER mode. **No real orders can be placed.** Strategies, the dashboard, ML
-> and RL come later. Roadmap: [`docs/build-plan.md`](docs/build-plan.md). Latest audit:
+> **Status: Phase 4 (strategies + engine) complete.** On top of Phases 1–3: the Opening Range Breakout and
+> VWAP+EMA strategies, the core engine, the event bus, the state manager, the mode controller (PAPER only),
+> and the APScheduler session jobs, all running end to end in PAPER mode. **No real orders can be placed.**
+> The dashboard, backtesting, ML and RL come next. Roadmap: [`docs/build-plan.md`](docs/build-plan.md).
+> Strategies and engine: [`docs/strategies.md`](docs/strategies.md). Risk audit:
 > [`docs/audits/phase-3-risk-execution-audit.md`](docs/audits/phase-3-risk-execution-audit.md).
 
 ## Risk & execution (Phase 3)
@@ -140,6 +141,7 @@ read or write LIVE rows, and the reverse is also true.
 | `backtest/` | Backtesting and walk-forward |
 | `dashboard/` | Streamlit UI |
 | `monitoring/` | Logs, metrics, alerts |
+| `runtime/` | Composition root: wires everything; imported only by entry points |
 | `tests/` | Tests |
 | `docs/` | Safety policy, MCP setup |
 

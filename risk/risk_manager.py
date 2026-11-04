@@ -5,7 +5,9 @@ order, it checks:
 
  1. kill switch (global / strategy)
  2. strategy enabled & active
- 3. session time: market open, strategy entry window, no entries after
+ 3. session: an NSE trading day (weekday, not a configured holiday), the
+    holiday calendar loaded for the current year (otherwise every entry is
+    blocked), market open, strategy entry window, no entries after
     ``no_new_entries_after`` (14:45), never inside the square-off window
  4. daily guard: loss limits, trade cap, cooldown, consecutive-loss pause
  5. open-trade caps: per strategy (2) and total (4), pending entries included
@@ -28,7 +30,7 @@ import asyncio
 import contextlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, time
+from datetime import datetime
 
 from config.settings import BotConfig, StrategyConfig, TrailingConfig
 from core.clock import now_ist
@@ -111,10 +113,15 @@ class RiskManager:
     # ------------------------------------------------------------------ #
     # Session time
     # ------------------------------------------------------------------ #
-    def entries_allowed_at(self, t: time, strategy: StrategyConfig) -> list[str]:
+    def entries_allowed_at(self, at: datetime, strategy: StrategyConfig) -> list[str]:
         rules = self.cfg.risk.time_rules
         session = self.cfg.settings.market_session
         reasons = []
+        t = at.time()
+        if not session.holidays_known_for(at.year):
+            reasons.append(f"no NSE holiday calendar configured for {at.year}: new entries blocked")
+        elif not session.is_trading_day(at.date()):
+            reasons.append(f"{at.date()} is not an NSE trading day")
         if not session.market_open <= t < session.market_close:
             reasons.append("market closed")
         if t >= rules.no_new_entries_after:
@@ -146,7 +153,7 @@ class RiskManager:
         if status is not StrategyStatus.ACTIVE:
             reasons.append(f"strategy status {status.value}")
         now = self._now()
-        reasons += self.entries_allowed_at(now.time(), scfg)
+        reasons += self.entries_allowed_at(now, scfg)
         ok, guard_reasons = self.guard.can_enter(sid)
         reasons += guard_reasons
         per_strategy_cap = min(scfg.risk.max_open_trades, self.cfg.risk.per_strategy.max_open_trades)

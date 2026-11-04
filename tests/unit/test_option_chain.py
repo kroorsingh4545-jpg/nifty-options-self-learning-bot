@@ -14,7 +14,7 @@ from config.settings import LiquidityFilter as LiquidityConfig
 from core.enums import OptionType
 from core.models import Candle, Instrument
 from data.option_chain import LiquidityFilter, OptionChainFetcher, OptionQuote, parse_option_chain
-from tests.fakes import chain_row, option_contract
+from tests.fakes import chain_row, future_contract, option_contract
 
 EXP = date(2026, 11, 10)
 
@@ -100,11 +100,15 @@ class Source(MarketDataSource):
         self.chain_expiry: date | None = None
 
     async def get_option_contracts(self, underlying_key: str, expiry: date | None = None) -> list[Instrument]:
+        raise AssertionError("contracts must come from the instrument list")
+
+    async def get_instruments(self, underlying_symbols: Sequence[str] = ("NIFTY",)) -> list[Instrument]:
         self.contract_calls += 1
-        return [parse_instrument(option_contract(24500, "CE", "2026-11-03")),
-                parse_instrument(option_contract(24500, "CE", "2026-11-10")),
-                parse_instrument(option_contract(24500, "PE", "2026-11-17")),
-                parse_instrument(option_contract(24500, "PE", "2026-10-27"))]  # expired
+        return [parse_instrument(option_contract(24500, "CE", "2026-11-03", lot=65)),
+                parse_instrument(option_contract(24500, "CE", "2026-11-10", lot=65)),
+                parse_instrument(option_contract(24500, "PE", "2026-11-17", lot=65)),
+                parse_instrument(option_contract(24500, "PE", "2026-10-27", lot=65)),  # expired
+                parse_instrument(future_contract("2026-11-23", "NSE_FO|FUT1", lot=65))]  # not an option
 
     async def get_option_chain(self, underlying_key: str, expiry: date) -> dict[str, Any]:
         self.chain_expiry = expiry
@@ -124,7 +128,7 @@ async def test_fetcher_expiry_lot_size_and_cache() -> None:
     f = OptionChainFetcher(src, today_fn=lambda: today["d"])
     assert await f.nearest_expiry() == date(2026, 11, 10)
     assert await f.expiries() == [date(2026, 11, 10), date(2026, 11, 17)]
-    assert await f.lot_size() == 75
+    assert await f.lot_size() == 65  # from the instrument list
     oc = await f.fetch()
     assert src.chain_expiry == date(2026, 11, 10) and oc.get(24500, OptionType.PE) is not None
     assert src.contract_calls == 1  # cached within the day

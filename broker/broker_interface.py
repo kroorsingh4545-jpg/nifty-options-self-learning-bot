@@ -35,6 +35,11 @@ class MarketDataSource(ABC):
     async def get_option_chain(self, underlying_key: str, expiry: date) -> dict[str, Any]: ...
 
     @abstractmethod
+    async def get_instruments(self, underlying_symbols: Sequence[str] = ("NIFTY",)) -> list[Instrument]:
+        """F&O contracts (options + futures) for the given underlyings from the
+        Upstox instrument list — the source of lot sizes."""
+
+    @abstractmethod
     async def get_ltp(self, instrument_keys: Sequence[str]) -> dict[str, float]: ...
 
     @abstractmethod

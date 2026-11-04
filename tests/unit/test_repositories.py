@@ -355,7 +355,7 @@ def test_initialize_database_syncs_strategies(config_dir: Path, edit_yaml: objec
         assert repos.mode is TradingMode.PAPER
 
         # Intraday PAUSED status survives a restart; config disable wins.
-        repos.strategies.set_status("orb_options", StrategyStatus.PAUSED)
+        repos.strategies.set_status("orb_options", StrategyStatus.PAUSED, at=now_ist())
         repos.db.close()
         repos = initialize_database(cfg)
         assert repos.strategies.get("orb_options").status is StrategyStatus.PAUSED  # type: ignore[union-attr]
