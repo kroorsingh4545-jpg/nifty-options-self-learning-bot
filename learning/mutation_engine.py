@@ -172,6 +172,27 @@ def never_mutable(path: str) -> bool:
 # --------------------------------------------------------------------------- #
 
 
+_SECONDS_TIME = re.compile(r"^(\d{2}:\d{2}):00$")
+
+
+def canonical(data: Any) -> Any:
+    """JSON-safe config with times as 'HH:MM' (the form the YAML loader accepts)."""
+    if isinstance(data, Mapping):
+        return {str(k): canonical(v) for k, v in data.items()}
+    if isinstance(data, list | tuple):
+        return [canonical(v) for v in data]
+    if isinstance(data, time):
+        return data.strftime("%H:%M")
+    if isinstance(data, str) and (m := _SECONDS_TIME.match(data)):
+        return m.group(1)
+    return data
+
+
+def dump_strategy(scfg: StrategyConfig) -> dict[str, Any]:
+    out: dict[str, Any] = canonical(scfg.model_dump(mode="json"))
+    return out
+
+
 def get_path(data: Mapping[str, Any], path: str | None) -> Any:
     if path is None:
         return None
@@ -260,7 +281,7 @@ class Candidate:
 
     @property
     def config_json(self) -> dict[str, Any]:
-        return self.config.model_dump(mode="json")
+        return dump_strategy(self.config)
 
     def describe(self) -> str:
         return ", ".join(f"{m.path} {m.old} -> {m.new}" for m in self.mutations)
@@ -332,8 +353,8 @@ class MutationEngine:
         return round(x, 6)
 
     def _validated(self, strategy_id: str, data: dict[str, Any]) -> tuple[StrategyConfig, BotConfig]:
-        all_data = {sid: s.model_dump(mode="json") for sid, s in self.cfg.strategies.strategies.items()}
-        all_data[strategy_id] = data
+        all_data = {sid: dump_strategy(s) for sid, s in self.cfg.strategies.strategies.items()}
+        all_data[strategy_id] = canonical(data)
         try:
             strategies = StrategyDefaults.model_validate({"strategies": all_data})
             bot_cfg = BotConfig(project_root=self.cfg.project_root, settings=self.cfg.settings, risk=self.cfg.risk,
@@ -363,7 +384,7 @@ class MutationEngine:
             raise MutationRefused(f"unknown strategy {strategy_id!r}")
         if not changes:
             raise MutationRefused("a candidate needs at least one change")
-        base = base_cfg.model_dump(mode="json")
+        base = dump_strategy(base_cfg)
         mutations = [self.check_value(strategy_id, base, path, value) for path, value in changes.items()]
         data = json.loads(json.dumps(base))
         for m in mutations:
@@ -374,7 +395,7 @@ class MutationEngine:
             raise MutationRefused(f"version {new_version} already exists for {strategy_id}")
         data["version"] = new_version
         scfg, bot_cfg = self._validated(strategy_id, data)
-        self._guard_diff(base, scfg.model_dump(mode="json"), [m.path for m in mutations])
+        self._guard_diff(base, dump_strategy(scfg), [m.path for m in mutations])
         return Candidate(strategy_id, base_cfg.version, new_version, tuple(mutations), scfg, bot_cfg)
 
     def apply_overlay(self, strategy_id: str, config_json: Mapping[str, Any]) -> BotConfig:
@@ -384,7 +405,8 @@ class MutationEngine:
         base_cfg = self.cfg.strategies.strategies.get(strategy_id)
         if base_cfg is None:
             raise MutationRefused(f"unknown strategy {strategy_id!r}")
-        base = base_cfg.model_dump(mode="json")
+        base = dump_strategy(base_cfg)
+        config_json = canonical(config_json)
         changed = [k for k in diff(base, config_json) if k != "version"]
         self._guard_diff(base, config_json, changed)
         for leaf in changed:
@@ -403,7 +425,7 @@ class MutationEngine:
 
     def mutable_parameters(self, strategy_id: str) -> list[ParamSpec]:
         scfg = self.cfg.strategies.strategies[strategy_id]
-        data = scfg.model_dump(mode="json")
+        data = dump_strategy(scfg)
         return [s for s in WHITELIST.values() if s.applies_to(strategy_id, data) and get_path(data, s.path) is not None]
 
 
@@ -418,5 +440,6 @@ def describe_whitelist() -> list[dict[str, Any]]:
 
 
 __all__: Sequence[str] = ("CATEGORIES", "NEVER_MUTABLE", "WHITELIST", "Candidate", "Mutation", "MutationEngine",
-                          "MutationRefused", "ParamSpec", "bump_patch", "describe_whitelist", "diff", "flatten",
+                          "MutationRefused", "ParamSpec", "bump_patch", "canonical", "dump_strategy",
+                          "describe_whitelist", "diff", "flatten",
                           "get_path", "never_mutable", "set_path")

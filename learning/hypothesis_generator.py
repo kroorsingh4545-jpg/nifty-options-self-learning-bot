@@ -26,7 +26,7 @@ from typing import Any
 
 from config.settings import BotConfig
 from core.ids import new_uid
-from learning.mutation_engine import WHITELIST, MutationEngine, MutationRefused, get_path
+from learning.mutation_engine import WHITELIST, MutationEngine, MutationRefused, dump_strategy, get_path
 from learning.reflection_engine import StrategyReflection
 
 #: The gates every candidate must pass (learning.validation_engine).
@@ -292,7 +292,7 @@ class HypothesisGenerator:
         if scfg is None:
             out.skipped.append(f"unknown strategy {sid}")
             return out
-        data = scfg.model_dump(mode="json")
+        data = dump_strategy(scfg)
         min_n = max(3, int(math.ceil(self.learning.min_sample_trades / 10)))  # evidence floor per bucket
         proposals: list[Proposal] = []
         for rule in RULES:
