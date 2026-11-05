@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 from core.models import Candle, Instrument, Signal, Tick
@@ -59,6 +60,86 @@ class FilterDecision:
 
 class SignalFilter(Protocol):
     def evaluate(self, signal: Signal) -> FilterDecision: ...
+
+
+class ChainedFilter:
+    """Several filters in order: every one must allow; size multipliers
+    multiply (each is in [0, 1], so the chain can only shrink). The first
+    filter's score / regime are reported. A filter that raises vetoes."""
+
+    def __init__(self, *filters: SignalFilter) -> None:
+        if not filters:
+            raise ValueError("a chain needs at least one filter")
+        self.filters = filters
+
+    def evaluate(self, signal: Signal) -> FilterDecision:
+        score: float | None = None
+        regime: str | None = None
+        mult = 1.0
+        reasons: list[str] = []
+        for i, f in enumerate(self.filters):
+            try:
+                d = f.evaluate(signal)
+            except Exception as exc:  # fail closed
+                return FilterDecision(allow=False, score=score, size_multiplier=0.0,
+                                      reason=f"filter {i} error: {type(exc).__name__}", regime=regime)
+            if i == 0 or score is None:
+                score = d.score
+            regime = regime or d.regime
+            reasons.append(d.reason)
+            if not d.allow or d.size_multiplier <= 0:
+                return FilterDecision(allow=False, score=score, size_multiplier=0.0, reason=" | ".join(reasons),
+                                      regime=regime)
+            mult *= d.size_multiplier
+        return FilterDecision(allow=True, score=score, size_multiplier=min(1.0, max(0.0, mult)),
+                              reason=" | ".join(reasons), regime=regime)
+
+
+class TradeAdviceAction(StrEnum):
+    """What a trade manager (the RL agent) may ask for an OPEN trade. There is
+    no action for limits, exposure, the kill switch or square-off timing."""
+
+    HOLD = "HOLD"
+    TIGHTEN_STOP = "TIGHTEN_STOP"
+    MOVE_STOP_TO_BREAKEVEN = "MOVE_STOP_TO_BREAKEVEN"
+    TRAIL_STOP = "TRAIL_STOP"
+    TAKE_PARTIAL_PROFIT = "TAKE_PARTIAL_PROFIT"
+    EXIT_FULL = "EXIT_FULL"
+
+
+STOP_ADVICE = frozenset({TradeAdviceAction.TIGHTEN_STOP, TradeAdviceAction.MOVE_STOP_TO_BREAKEVEN,
+                         TradeAdviceAction.TRAIL_STOP})
+
+
+@dataclass(frozen=True)
+class TradeAdvice:
+    """A proposal for one open trade. ``execution`` re-validates it against
+    the live trade (stops only tighten and stay below the market; a partial
+    exit keeps at least one lot) before acting; anything else is refused."""
+
+    trade_uid: str
+    strategy_id: str
+    action: TradeAdviceAction
+    new_stop: float | None = None
+    exit_lots: int = 0
+    reason: str = ""
+    confidence: float | None = None
+    model_version: str | None = None
+
+    def __post_init__(self) -> None:
+        a = TradeAdviceAction(self.action)
+        if a in STOP_ADVICE:
+            if self.new_stop is None or not self.new_stop > 0:
+                raise ValueError(f"{a.value} needs a positive new_stop")
+        elif self.new_stop is not None:
+            raise ValueError(f"{a.value} cannot carry a stop")
+        if a is TradeAdviceAction.TAKE_PARTIAL_PROFIT:
+            if self.exit_lots < 1:
+                raise ValueError("TAKE_PARTIAL_PROFIT needs exit_lots >= 1")
+        elif self.exit_lots != 0:
+            raise ValueError(f"{a.value} cannot carry exit_lots")
+        if self.confidence is not None and not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("confidence must be within [0, 1]")
 
 
 class PassThroughFilter:

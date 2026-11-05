@@ -10,6 +10,15 @@ For every trade:
 * EXIT fills reduce the position; when flat the trade closes with gross P&L,
   charges, net P&L and R-multiple, and the daily loss guard is updated.
 
+Trade-manager advice (Phase 8, ``apply_advice``): the RL agent may ask to
+tighten the stop, take a partial profit or exit an OPEN trade of its own
+strategy. Every request is re-validated here against the live trade: stops
+only tighten (``tighten_stop``) and stay strictly below the market, a partial
+exit keeps at least one lot and only happens in profit, nothing is accepted
+for a trade that is exiting, or at/after the square-off start (the square-off
+manager owns the end of the day). Limits, exposure and the kill switch are
+not reachable from advice at all.
+
 Strategy isolation: trades and positions are keyed by strategy; a strategy
 can never exit or modify another strategy's trade.
 """
@@ -34,6 +43,7 @@ from core.enums import (
     TradingMode,
 )
 from core.ids import new_trade_uid
+from core.interfaces import STOP_ADVICE, TradeAdvice, TradeAdviceAction
 from core.models import Instrument, OrderUpdate, Tick
 from data.storage.records import OrderRecord, PositionRecord, TradeRecord
 from data.storage.repositories import Repositories
@@ -41,7 +51,15 @@ from execution.order_manager import TERMINAL, EntryBlockedError, OrderIntent, Or
 from monitoring.json_logger import get_logger
 from risk.daily_loss_guard import DailyLossGuard
 from risk.risk_manager import OpenTradeCounter, RiskDecision
-from risk.stop_loss_manager import ExitReason, ProtectiveLevels, check_exit, r_multiple
+from risk.stop_loss_manager import (
+    ExitReason,
+    ProtectiveLevels,
+    StopWideningError,
+    _ceil_tick,
+    check_exit,
+    r_multiple,
+    tighten_stop,
+)
 from risk.trailing_stop_manager import TrailingState, TrailingStopManager
 
 log = get_logger(__name__)
@@ -55,7 +73,14 @@ EXIT_PURPOSE = {
     ExitReason.KILL_SWITCH: OrderPurpose.KILL_SWITCH,
     ExitReason.MANUAL: OrderPurpose.EXIT,
     ExitReason.STRATEGY: OrderPurpose.EXIT,
+    ExitReason.TRADE_MANAGER: OrderPurpose.EXIT,
 }
+
+
+@dataclass(frozen=True)
+class AdviceResult:
+    applied: bool
+    reason: str
 
 
 @dataclass
@@ -80,6 +105,10 @@ class ManagedTrade:
     exit_in_progress: bool = False
     exit_reason: ExitReason | None = None
     last_price: float | None = None
+    entry_time: datetime | None = None
+    partial_in_progress: bool = False
+    partial_exits: int = 0
+    escalate_exit: ExitReason | None = None  # stop/target hit while a partial exit was running
     tasks: set[asyncio.Task[None]] = field(default_factory=set)
 
     @property
@@ -223,6 +252,8 @@ class PositionManager(OpenTradeCounter):
         t.avg_entry = total / t.filled_qty
         t.charges += charges
         t.last_price = price
+        if t.entry_time is None:
+            t.entry_time = self._now()
         self.repos.trades.update(t.trade_uid, entry_price=round(t.avg_entry, 4), entry_time=self._now(),
                                  charges=round(t.charges, 2))
         self._sync_position(t)
@@ -330,6 +361,10 @@ class PositionManager(OpenTradeCounter):
             touched.add(t.strategy_id)
             t.last_price = tick.ltp
             if t.exit_in_progress:
+                if t.partial_in_progress:  # protection never pauses during a partial exit
+                    hit = check_exit(tick.ltp, t.stop, t.levels.target)
+                    if hit is not None:
+                        self.request_exit(t, hit)
                 continue
             if t.trailing.update(t.trail, tick.ltp):
                 self.repos.trades.update(t.trade_uid, stop_loss=t.stop)
@@ -364,7 +399,11 @@ class PositionManager(OpenTradeCounter):
     # Exits
     # ------------------------------------------------------------------ #
     def request_exit(self, t: ManagedTrade, reason: ExitReason) -> None:
-        if t.exit_in_progress or t.status is not TradeStatus.OPEN:
+        if t.status is not TradeStatus.OPEN:
+            return
+        if t.exit_in_progress:
+            if t.partial_in_progress and t.escalate_exit is None:
+                t.escalate_exit = reason  # exit the rest as soon as the partial exit finishes
             return
         t.exit_in_progress = True
         self._spawn(t, self._exit(t, reason))
@@ -376,7 +415,11 @@ class PositionManager(OpenTradeCounter):
         if strategy_id is not None and t.strategy_id != strategy_id:
             raise PermissionError("a strategy may only exit its own trades")
         if t.exit_in_progress:
+            partial = t.partial_in_progress
             await self.wait_for(t)
+            if partial and t.status is TradeStatus.OPEN and t.open_qty > 0 and not t.exit_in_progress:
+                t.exit_in_progress = True  # a partial exit finished; now exit the rest
+                return await self._exit(t, reason)
             return t.open_qty == 0
         t.exit_in_progress = True
         return await self._exit(t, reason)
@@ -404,6 +447,104 @@ class PositionManager(OpenTradeCounter):
                     and t.entry_complete:
                 # exit failed: put protection back while humans intervene
                 self._spawn(t, self._place_protective_stop(t))
+
+    # ------------------------------------------------------------------ #
+    # Trade-manager (RL) advice
+    # ------------------------------------------------------------------ #
+    def apply_advice(self, advice: TradeAdvice) -> AdviceResult:
+        """Apply a trade manager's proposal after re-validating it (see the
+        module docstring). Never raises for a refused proposal."""
+        t = self.trades.get(advice.trade_uid)
+        if t is None or t.status is not TradeStatus.OPEN:
+            return self._refuse(advice, "no open trade with this id")
+        if t.strategy_id != advice.strategy_id:
+            return self._refuse(advice, "a strategy may only manage its own trades")
+        scfg = self.cfg.strategies.strategies.get(t.strategy_id)
+        if scfg is None or not scfg.rl.enabled:
+            return self._refuse(advice, "the RL trade manager is not enabled for this strategy")
+        if not t.entry_complete or t.open_qty <= 0 or t.exit_in_progress:
+            return self._refuse(advice, "trade is not idle (entry incomplete, flat or exiting)")
+        if self._now().time() >= self.cfg.risk.time_rules.square_off_start:
+            return self._refuse(advice, "square-off window: the square-off manager owns exits")
+        a = TradeAdviceAction(advice.action)
+        if a is TradeAdviceAction.HOLD:
+            return AdviceResult(True, "hold")
+        tick = t.instrument.tick_size
+        ltp = t.last_price
+        if ltp is None or ltp <= 0:
+            return self._refuse(advice, "no market price for the trade")
+        if a in STOP_ADVICE:
+            assert advice.new_stop is not None
+            new = _ceil_tick(advice.new_stop, tick)
+            if new > ltp - tick + 1e-9:
+                return self._refuse(advice, f"stop {new} is not strictly below the market {ltp}")
+            try:
+                tightened = tighten_stop(t.stop, new)
+            except StopWideningError as exc:
+                return self._refuse(advice, str(exc))
+            if tightened <= t.stop + 1e-9:
+                return self._refuse(advice, "stop would not tighten")
+            old = t.stop
+            t.trail.stop = round(tightened, 2)
+            self.repos.trades.update(t.trade_uid, stop_loss=t.stop)
+            self._sync_position(t)
+            if t.protective_order_id is not None:
+                self._spawn(t, self._move_protective(t))
+            log.info("trade manager tightened stop", extra={"strategy_id": t.strategy_id, "trade": t.trade_uid,
+                                                            "action": a.value, "old": old, "new": t.stop,
+                                                            "model": advice.model_version})
+            return AdviceResult(True, f"stop {old} -> {t.stop}")
+        if a is TradeAdviceAction.EXIT_FULL:
+            log.info("trade manager requested a full exit", extra={"strategy_id": t.strategy_id,
+                                                                   "trade": t.trade_uid, "model": advice.model_version})
+            self.request_exit(t, ExitReason.TRADE_MANAGER)
+            return AdviceResult(True, "full exit requested")
+        # TAKE_PARTIAL_PROFIT
+        lot = t.instrument.lot_size
+        qty = advice.exit_lots * lot
+        if qty >= t.open_qty:
+            return self._refuse(advice, "a partial exit must keep at least one lot")
+        if ltp <= t.avg_entry:
+            return self._refuse(advice, "a partial profit needs the trade to be in profit")
+        if t.partial_exits >= scfg.rl.max_partial_exits:
+            return self._refuse(advice, f"at most {scfg.rl.max_partial_exits} partial exit(s) per trade")
+        t.exit_in_progress = True
+        t.partial_in_progress = True
+        self._spawn(t, self._partial_exit(t, qty))
+        log.info("trade manager partial exit", extra={"strategy_id": t.strategy_id, "trade": t.trade_uid, "qty": qty,
+                                                      "model": advice.model_version})
+        return AdviceResult(True, f"partial exit of {qty}")
+
+    def _refuse(self, advice: TradeAdvice, reason: str) -> AdviceResult:
+        log.warning("trade manager advice refused", extra={"strategy_id": advice.strategy_id,
+                                                           "trade": advice.trade_uid, "action": str(advice.action),
+                                                           "reason": reason})
+        return AdviceResult(False, reason)
+
+    async def _partial_exit(self, t: ManagedTrade, qty: int) -> None:
+        keep = t.open_qty - qty
+        try:
+            if t.protective_order_id is not None:
+                await self.orders.cancel(t.protective_order_id)
+                t.protective_order_id = None
+            ok = await self.orders.exit_position(strategy_id=t.strategy_id, trade_uid=t.trade_uid,
+                                                 instrument=t.instrument,
+                                                 remaining_qty=lambda: max(0, t.open_qty - keep),
+                                                 purpose=OrderPurpose.EXIT)
+            if ok:
+                t.partial_exits += 1
+        finally:
+            t.partial_in_progress = False
+            t.exit_in_progress = False
+            if t.status is TradeStatus.OPEN and t.open_qty > 0:
+                t.exit_reason = None  # partial fills do not label the trade's final exit
+            escalate, t.escalate_exit = t.escalate_exit, None
+            protect = self.cfg.settings.execution.use_exchange_stop_orders
+            if escalate is not None and t.status is TradeStatus.OPEN and t.open_qty > 0:
+                t.exit_in_progress = True
+                await self._exit(t, escalate)  # re-protects itself if the exit fails
+            elif t.status is TradeStatus.OPEN and t.open_qty > 0 and t.protective_order_id is None and protect:
+                await self._place_protective_stop(t)
 
     async def exit_all(self, reason: ExitReason, strategy_id: str | None = None) -> bool:
         trades = self.open_trades(strategy_id)
@@ -455,7 +596,7 @@ class PositionManager(OpenTradeCounter):
             sold = sum(o.filled_quantity for o in orders if o.side is OrderSide.SELL)
             t = ManagedTrade(rec.trade_uid, rec.strategy_id, inst, rec.option_type, levels, mgr, state, rec.quantity,
                              filled_qty=bought, exited_qty=sold, avg_entry=rec.entry_price, charges=rec.charges,
-                             entry_complete=True)
+                             entry_complete=True, entry_time=rec.entry_time)
             for o in orders:
                 self._by_order[o.client_order_id] = rec.trade_uid
                 if o.purpose is OrderPurpose.STOP_LOSS and o.status not in TERMINAL:

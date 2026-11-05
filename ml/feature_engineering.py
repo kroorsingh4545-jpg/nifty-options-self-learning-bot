@@ -521,6 +521,16 @@ class FeatureEngine:
     def last_bar_end(self) -> datetime | None:
         return self._index.candles[-1].end if self._index.candles else None
 
+    def session_open(self, d: date) -> float | None:
+        """Open of the session's first NIFTY index bar."""
+        s = self._index.bars().session(d)
+        return float(s.open[0]) if len(s) else None
+
+    def last_close(self, as_of: datetime) -> float | None:
+        """NIFTY index close of the last bar completed by ``as_of`` (same session)."""
+        b = self._index.bars().upto(as_of).session(ensure_ist(as_of).astimezone(IST).date())
+        return float(b.close[-1]) if len(b) else None
+
     def features(self, as_of: datetime, *, direction: OptionType | None = None, option: OptionContext | None = None,
                  outcomes: Sequence[PastOutcome] = ()) -> dict[str, float]:
         fut = self._futures.bars() if self.futures_key is not None else None

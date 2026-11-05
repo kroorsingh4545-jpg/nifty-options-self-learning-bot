@@ -61,6 +61,7 @@ from data.storage.database import Database
 from data.storage.records import DailyPnlRecord, FillRecord, OrderRecord, RiskEventRecord, TradeRecord
 from data.storage.repositories import Repositories
 from ml.inference_service import StrategyModels
+from ml.model_registry import LoadedModel
 from monitoring.json_logger import get_logger
 from runtime.bot import TradingBot
 
@@ -325,6 +326,20 @@ def with_strategy_overrides(cfg: BotConfig, overrides: Mapping[str, Mapping[str,
         raise BacktestConfigError(f"invalid strategy overrides: {exc}") from exc
 
 
+def with_rl_enabled(cfg: BotConfig, strategy_ids: Sequence[str]) -> BotConfig:
+    """Turn ON the RL trade manager for these strategies (only the
+    ``rl.enabled`` flag; action bounds stay as configured), fully re-validated."""
+    unknown = set(strategy_ids) - set(cfg.strategies.strategies)
+    if unknown:
+        raise BacktestConfigError(f"unknown strategies {sorted(unknown)}")
+    data = {sid: s.model_dump() for sid, s in cfg.strategies.strategies.items()}
+    for sid in strategy_ids:
+        data[sid]["rl"]["enabled"] = True
+    strategies = StrategyDefaults.model_validate({"strategies": data})
+    return BotConfig(project_root=cfg.project_root, settings=cfg.settings, risk=cfg.risk, strategies=strategies,
+                     env=cfg.env)
+
+
 def with_ml_enabled(cfg: BotConfig, strategy_ids: Sequence[str]) -> BotConfig:
     """Turn ON the ML signal filter for these strategies (only the
     ``ml.enabled`` flag; thresholds stay as configured), fully re-validated.
@@ -435,6 +450,12 @@ class BacktestOptions:
     ml_strategies: tuple[str, ...] = ()
     ml_models: Mapping[str, StrategyModels] | None = None
     ml_research: bool = False
+    #: Phase 8: run these strategies with the RL trade manager ON, using
+    #: ``rl_models`` (per strategy). ``rl_research`` allows SYNTHETIC research
+    #: models (backtests only). Empty = the configured ``rl.enabled`` flags.
+    rl_strategies: tuple[str, ...] = ()
+    rl_models: Mapping[str, LoadedModel] | None = None
+    rl_research: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -455,6 +476,8 @@ class Backtester:
                                                 for sid in cfg.strategies.strategies})
         if self.options.ml_strategies:
             cfg = with_ml_enabled(cfg, self.options.ml_strategies)
+        if self.options.rl_strategies:
+            cfg = with_rl_enabled(cfg, self.options.rl_strategies)
         self.cfg = cfg
         self.dataset = dataset
         session = cfg.settings.market_session
@@ -509,7 +532,8 @@ class Backtester:
         bot = TradingBot(cfg, repos=repos, broker=broker, market_data=md, source=HistoricalSource(ds.instruments),
                          subscriber=subscriber, now_fn=clock, sleep=clock.sleep, scheduler=scheduler,
                          reconcile_confirm_delay=0, instrument_refresh_attempts=1, wall_fn=clock,
-                         ml_models=self.options.ml_models, ml_research=self.options.ml_research)
+                         ml_models=self.options.ml_models, ml_research=self.options.ml_research,
+                         rl_models=self.options.rl_models, rl_research=self.options.rl_research)
         raw_fills: list[tuple[OrderUpdate, float]] = []
 
         def on_fill(u: OrderUpdate) -> None:
