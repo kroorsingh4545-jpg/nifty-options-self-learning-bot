@@ -1,5 +1,5 @@
 -- ============================================================================
--- NIFTY options self-learning bot — SQLite schema, version 2
+-- NIFTY options self-learning bot — SQLite schema, version 4
 --
 -- Design rules enforced IN THE DATABASE (not only in Python):
 --   * Every order / fill / position / trade row carries `mode` (PAPER | LIVE).
@@ -12,6 +12,7 @@
 --   * mode / strategy_id / identifiers are immutable after insert.
 --   * Every open, non-flat position and every trade must carry a stop-loss.
 --   * A model can only be LIVE_APPROVED with a recorded human approver.
+--   * A model trained on SYNTHETIC data can never be validated or promoted.
 -- All timestamps are ISO-8601 strings in IST (+05:30).
 -- ============================================================================
 
@@ -260,6 +261,10 @@ CREATE TABLE IF NOT EXISTS model_runs (
     approved_by             TEXT,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL,
+    -- v4: what the model was trained on. Only HISTORICAL (real market data)
+    -- models can ever be VALIDATED or promoted (see triggers below).
+    data_source             TEXT NOT NULL DEFAULT 'UNKNOWN'
+                            CHECK (data_source IN ('SYNTHETIC','HISTORICAL','UNKNOWN')),
     CHECK (training_start < training_end),
     CHECK (status <> 'LIVE_APPROVED' OR (approved_by IS NOT NULL AND length(approved_by) > 0)),
     UNIQUE (model_type, model_version, strategy_id)
@@ -428,6 +433,31 @@ BEGIN
                       WHERE t.trade_uid = NEW.trade_uid
                         AND t.mode = NEW.mode
                         AND t.strategy_id = NEW.strategy_id);
+END;
+
+-- v4: a model trained on SYNTHETIC (or unknown) data can never be validated
+-- or promoted toward production; its data source can never be changed.
+CREATE TRIGGER IF NOT EXISTS trg_model_runs_promotion_needs_real_data_insert
+BEFORE INSERT ON model_runs
+WHEN NEW.status IN ('VALIDATED','PAPER_READY','LIVE_CANDIDATE','LIVE_APPROVED')
+ AND NEW.data_source <> 'HISTORICAL'
+BEGIN
+    SELECT RAISE(ABORT, 'model_runs: only models trained on HISTORICAL data can be validated or promoted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_model_runs_promotion_needs_real_data_update
+BEFORE UPDATE OF status ON model_runs
+WHEN NEW.status IN ('VALIDATED','PAPER_READY','LIVE_CANDIDATE','LIVE_APPROVED')
+ AND NEW.data_source <> 'HISTORICAL'
+BEGIN
+    SELECT RAISE(ABORT, 'model_runs: only models trained on HISTORICAL data can be validated or promoted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_model_runs_data_source_immutable
+BEFORE UPDATE OF data_source ON model_runs
+WHEN NEW.data_source IS NOT OLD.data_source
+BEGIN
+    SELECT RAISE(ABORT, 'immutable: model_runs.data_source cannot change');
 END;
 
 -- Risk events are an append-only audit trail.

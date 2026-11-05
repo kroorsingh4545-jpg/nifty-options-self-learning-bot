@@ -202,6 +202,20 @@ def test_dashboard_is_ui_only() -> None:
         assert strategies <= {"strategies.indicators"}, f"{path.relative_to(PROJECT_ROOT)} imports {strategies}"
 
 
+def test_ml_can_never_reach_orders_or_risk_state() -> None:
+    """ML returns decisions; it never imports the execution / risk services,
+    the runtime that acts, the dashboard, or any broker client (only the pure
+    charge calculator, for cost-adjusted labels)."""
+    for path in _py_files("ml"):
+        mods = _imported_modules(path)
+        rel = path.relative_to(PROJECT_ROOT)
+        tops = {m.split(".")[0] for m in mods}
+        assert not tops & {"execution", "risk", "runtime", "dashboard"}, f"{rel} imports {tops}"
+        assert {m for m in mods if m.startswith("broker")} <= {"broker.charges"}, rel
+        assert {m for m in mods if m.startswith("backtest")} <= {"backtest.data", "backtest.purged_cv",
+                                                                 "backtest.synthetic_data"}, rel
+
+
 def test_only_the_bot_migrates_the_schema() -> None:
     """The dashboard opens the bot's database with Database.open_existing; it
     never calls initialize() or the bootstrap module."""

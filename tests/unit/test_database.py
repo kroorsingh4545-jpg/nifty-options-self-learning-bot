@@ -158,7 +158,7 @@ def test_other_enums_match_schema(seeded_db: Database) -> None:
             "feature_schema_version": "1", "feature_schema_json": "{}", "training_start": "2026-01-01",
             "training_end": "2026-06-01", "artifact_path": "models/x", "status": st.value,
             "approved_by": "a.human" if st is ModelRunStatus.LIVE_APPROVED else None,
-            "created_at": NOW, "updated_at": NOW,
+            "created_at": NOW, "updated_at": NOW, "data_source": "HISTORICAL",
         })
 
 
@@ -328,9 +328,67 @@ def test_closed_trade_requires_exit_details(seeded_db: Database) -> None:
 def test_live_approved_model_requires_approver(seeded_db: Database) -> None:
     row = {"run_id": "R-1", "model_type": "SIGNAL_FILTER", "model_version": "v1", "feature_schema_version": "1",
            "feature_schema_json": "{}", "training_start": "2026-01-01", "training_end": "2026-06-01",
-           "artifact_path": "models/x", "status": "LIVE_APPROVED", "created_at": NOW, "updated_at": NOW}
-    with pytest.raises(sqlite3.IntegrityError):
+           "artifact_path": "models/x", "status": "LIVE_APPROVED", "created_at": NOW, "updated_at": NOW,
+           "data_source": "HISTORICAL"}
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
         _insert(seeded_db, "model_runs", row)
+
+
+MODEL_ROW = {"model_type": "SIGNAL_FILTER", "feature_schema_version": "1", "feature_schema_json": "{}",
+             "training_start": "2026-01-01", "training_end": "2026-06-01", "artifact_path": "models/x",
+             "created_at": NOW, "updated_at": NOW}
+
+
+@pytest.mark.parametrize("source", ["SYNTHETIC", "UNKNOWN"])
+@pytest.mark.parametrize("status", ["VALIDATED", "PAPER_READY", "LIVE_CANDIDATE", "LIVE_APPROVED"])
+def test_synthetic_models_can_never_be_validated_or_promoted(seeded_db: Database, source: str, status: str) -> None:
+    with pytest.raises(sqlite3.IntegrityError, match="HISTORICAL"):
+        _insert(seeded_db, "model_runs", {**MODEL_ROW, "run_id": "R-ins", "model_version": "v1", "status": status,
+                                          "approved_by": "a.human", "data_source": source})
+    _insert(seeded_db, "model_runs", {**MODEL_ROW, "run_id": "R-up", "model_version": "v2", "data_source": source})
+    with pytest.raises(sqlite3.IntegrityError, match="HISTORICAL"):
+        seeded_db.execute("UPDATE model_runs SET status = ?, approved_by = 'a.human' WHERE run_id = 'R-up'", (status,))
+    for ok in ("TRAINED", "REJECTED", "ARCHIVED"):
+        seeded_db.execute("UPDATE model_runs SET status = ? WHERE run_id = 'R-up'", (ok,))
+
+
+def test_model_data_source_is_immutable(seeded_db: Database) -> None:
+    _insert(seeded_db, "model_runs", {**MODEL_ROW, "run_id": "R-1", "model_version": "v1", "data_source": "SYNTHETIC"})
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        seeded_db.execute("UPDATE model_runs SET data_source = 'HISTORICAL' WHERE run_id = 'R-1'")
+    assert seeded_db.query_one("SELECT data_source FROM model_runs")["data_source"] == "SYNTHETIC"  # type: ignore[index]
+
+
+V3_MODEL_RUNS = """CREATE TABLE model_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL UNIQUE, model_type TEXT NOT NULL,
+    model_version TEXT NOT NULL, strategy_id TEXT, feature_schema_version TEXT NOT NULL,
+    feature_schema_json TEXT NOT NULL, training_start TEXT NOT NULL, training_end TEXT NOT NULL,
+    hyperparameters_json TEXT NOT NULL DEFAULT '{}', metrics_json TEXT NOT NULL DEFAULT '{}',
+    seeds_json TEXT NOT NULL DEFAULT '[]', environment_version TEXT, artifact_path TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'TRAINED', approved_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"""
+
+
+def test_v3_database_is_migrated_to_v4(tmp_path: Path) -> None:
+    path = tmp_path / "old.db"
+    raw = sqlite3.connect(path)
+    raw.execute(V3_MODEL_RUNS)
+    raw.execute("INSERT INTO model_runs (run_id, model_type, model_version, feature_schema_version, "
+                "feature_schema_json, training_start, training_end, artifact_path, status, created_at, updated_at) "
+                "VALUES ('OLD', 'SIGNAL_FILTER', 'v0', '1', '{}', '2026-01-01', '2026-02-01', 'm', 'PAPER_READY', "
+                "'2026-02-01', '2026-02-01')")
+    raw.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
+    raw.execute("INSERT INTO schema_version VALUES (3, '2026-02-01')")
+    raw.commit()
+    raw.close()
+    db = Database(path)
+    db.initialize()
+    assert db.current_schema_version() == SCHEMA_VERSION == 4
+    # an existing row of unknown provenance keeps its status but can never be promoted again
+    assert db.query_one("SELECT data_source FROM model_runs WHERE run_id = 'OLD'")["data_source"] == "UNKNOWN"  # type: ignore[index]
+    with pytest.raises(sqlite3.IntegrityError, match="HISTORICAL"):
+        db.execute("UPDATE model_runs SET status = 'LIVE_CANDIDATE' WHERE run_id = 'OLD'")
+    db.initialize()  # idempotent
+    db.close()
 
 
 def test_json_columns_must_be_valid_json(seeded_db: Database) -> None:

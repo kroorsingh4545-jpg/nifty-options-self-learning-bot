@@ -12,7 +12,17 @@ from typing import Any
 
 from core.clock import now_ist
 
-SCHEMA_VERSION = 3  # v2: trades stop-loss tighten-only trigger; v3: control_commands, runtime_state
+#: v2: trades stop-loss tighten-only trigger; v3: control_commands, runtime_state;
+#: v4: model_runs.data_source + only HISTORICAL-trained models can be validated / promoted
+SCHEMA_VERSION = 4
+
+#: Columns added to existing tables after v1, applied before the schema script
+#: on databases created by an older version (CREATE TABLE IF NOT EXISTS does
+#: not add columns). (table, column, column DDL)
+ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("model_runs", "data_source",
+     "TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK (data_source IN ('SYNTHETIC','HISTORICAL','UNKNOWN'))"),
+)
 
 REQUIRED_TABLES = (
     "strategies",
@@ -161,6 +171,7 @@ class Database:
                     f"database schema v{existing} is newer than this code (v{SCHEMA_VERSION}); refusing to start"
                 )
             conn = self.connect()
+            self._add_missing_columns(conn)
             conn.executescript(load_schema_sql())
             conn.execute(
                 "INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (?, ?)",
@@ -172,6 +183,16 @@ class Database:
             missing = set(REQUIRED_TABLES) - set(self.tables())
             if missing:
                 raise DatabaseError(f"schema initialisation incomplete; missing tables: {sorted(missing)}")
+
+    @staticmethod
+    def _add_missing_columns(conn: sqlite3.Connection) -> None:
+        """Migrate tables created by an older schema version (idempotent)."""
+        for table, column, ddl in ADDED_COLUMNS:
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                continue  # created fresh by the schema script
+            cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     def tables(self) -> list[str]:
         rows = self.query(

@@ -116,6 +116,45 @@ def test_naive_timestamps_and_bad_meta_are_refused(small: HistoricalDataset, tmp
         load_dataset(d)
 
 
+def test_missing_meta_is_refused_when_the_source_is_required(small: HistoricalDataset, tmp_path: Path) -> None:
+    d = save_dataset(small.slice(small.days()[:1]), tmp_path / "ds")
+    assert load_dataset(d, require_source=True).source == "SYNTHETIC"
+    (d / "meta.json").unlink()
+    with pytest.raises(BacktestDataError, match="no meta.json"):
+        load_dataset(d, require_source=True)
+    (d / "meta.json").write_text(json.dumps({"description": "no source key"}), encoding="utf-8")
+    with pytest.raises(BacktestDataError, match="no \"source\""):
+        load_dataset(d, require_source=True)
+    (d / "meta.json").write_text(json.dumps(["HISTORICAL"]), encoding="utf-8")
+    with pytest.raises(BacktestDataError, match="JSON object"):
+        load_dataset(d, require_source=True)
+
+
+@pytest.mark.parametrize("meta", [None, {"source": "HISTORICAL"}, {"description": "x"}])
+def test_synth_tagged_instruments_can_never_be_labelled_historical(small: HistoricalDataset, tmp_path: Path,
+                                                                    meta: dict[str, str] | None) -> None:
+    d = save_dataset(small.slice(small.days()[:1]), tmp_path / "ds")
+    if meta is None:
+        (d / "meta.json").unlink()
+    else:
+        (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    # Refused even by the lenient (backtest) loader: HISTORICAL + SYNTH tag.
+    with pytest.raises(BacktestDataError, match="SYNTH tag"):
+        load_dataset(d)
+    with pytest.raises(BacktestDataError):
+        load_dataset(d, require_source=True)
+
+
+def test_dataset_label_is_checked_on_construction(small: HistoricalDataset) -> None:
+    with pytest.raises(BacktestDataError, match="SYNTH tag"):
+        HistoricalDataset(small.instruments, small.candles)  # default source is HISTORICAL
+    with pytest.raises(BacktestDataError, match="SYNTH tag"):
+        HistoricalDataset(small.instruments, small.candles, "HISTORICAL")
+    with pytest.raises(BacktestDataError, match="must be HISTORICAL or SYNTHETIC"):
+        HistoricalDataset(small.instruments, small.candles, "LIVE")  # type: ignore[arg-type]
+    assert HistoricalDataset(small.instruments, small.candles, "SYNTHETIC").is_synthetic
+
+
 @pytest.mark.parametrize(("bad", "match"), [
     ("tf", "1-minute"), ("seconds", "whole minute"), ("session", "outside"), ("order", "strictly increasing"),
     ("unknown", "not in the instrument list"), ("incomplete", "incomplete"),
@@ -128,7 +167,7 @@ def test_validation_rejects_corrupt_candles(small: HistoricalDataset, bad: str, 
               "order": (_c(key, t + timedelta(minutes=1)), _c(key, t)),
               "unknown": (_c(key, t),), "incomplete": (_c(key, t).model_copy(update={"complete": False}),)}[bad]
     candles = {key: series} if bad != "unknown" else {key: series, "NSE_FO|NOPE": (_c("NSE_FO|NOPE", t),)}
-    ds = HistoricalDataset(small.instruments, candles)
+    ds = HistoricalDataset(small.instruments, candles, small.source)
     with pytest.raises(BacktestDataError, match=match):
         ds.validate(session_open=OPEN, session_close=CLOSE, required_keys=(INDEX_KEY,))
 

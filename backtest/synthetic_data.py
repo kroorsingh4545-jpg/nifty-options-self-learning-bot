@@ -29,13 +29,13 @@ import random
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from backtest.data import ONE_MINUTE, HistoricalDataset
+from backtest.data import ONE_MINUTE, SYNTH_TAG, HistoricalDataset
 from config.settings import MarketSession
 from core.clock import IST
 from core.models import Candle, Instrument
+from options.pricing import black_scholes
 
 INDEX_KEY = "NSE_INDEX|Nifty 50"
-SYNTH_TAG = "SYNTH"
 REGIMES = ("TREND_UP", "TREND_DOWN", "RANGE", "HIGH_VOL")
 
 
@@ -61,24 +61,7 @@ class SyntheticSpec:
     option_oi: float = 2_000_000.0
 
 
-# --------------------------------------------------------------------------- #
-# Black-Scholes
-# --------------------------------------------------------------------------- #
-
-
-def _norm_cdf(x: float) -> float:
-    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
-
-def black_scholes(spot: float, strike: float, years: float, vol: float, rate: float, call: bool) -> float:
-    if years <= 0 or vol <= 0:
-        return max(0.0, spot - strike) if call else max(0.0, strike - spot)
-    sq = vol * math.sqrt(years)
-    d1 = (math.log(spot / strike) + (rate + 0.5 * vol * vol) * years) / sq
-    d2 = d1 - sq
-    if call:
-        return spot * _norm_cdf(d1) - strike * math.exp(-rate * years) * _norm_cdf(d2)
-    return strike * math.exp(-rate * years) * _norm_cdf(-d2) - spot * _norm_cdf(-d1)
+# Black-Scholes lives in options/pricing.py (shared with the ML feature pipeline).
 
 
 # --------------------------------------------------------------------------- #

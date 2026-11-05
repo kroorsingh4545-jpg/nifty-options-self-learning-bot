@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from config.loader import load_config
 from core.clock import IST, now_ist
 from core.enums import (
+    ModelDataSource,
     ModelRunStatus,
     ModelType,
     OptionType,
@@ -128,7 +129,30 @@ def test_live_approved_model_record_requires_approver() -> None:
         ModelRunRecord(run_id="r", model_type=ModelType.SIGNAL_FILTER, model_version="v1",
                        feature_schema_version="1", feature_schema_json={},
                        training_start=datetime(2026, 1, 1, tzinfo=IST), training_end=datetime(2026, 6, 1, tzinfo=IST),
-                       artifact_path="m", status=ModelRunStatus.LIVE_APPROVED)
+                       artifact_path="m", status=ModelRunStatus.LIVE_APPROVED,
+                       data_source=ModelDataSource.HISTORICAL)
+
+
+@pytest.mark.parametrize("status", [ModelRunStatus.VALIDATED, ModelRunStatus.PAPER_READY,
+                                    ModelRunStatus.LIVE_CANDIDATE])
+def test_synthetic_model_record_cannot_be_validated_or_promoted(status: ModelRunStatus) -> None:
+    with pytest.raises(ValidationError, match="HISTORICAL"):
+        ModelRunRecord(run_id="r", model_type=ModelType.SIGNAL_FILTER, model_version="v1",
+                       feature_schema_version="1", feature_schema_json={},
+                       training_start=datetime(2026, 1, 1, tzinfo=IST), training_end=datetime(2026, 6, 1, tzinfo=IST),
+                       artifact_path="m", status=status, data_source=ModelDataSource.SYNTHETIC)
+
+
+def test_repository_refuses_promoting_a_synthetic_model(paper: Repositories) -> None:
+    run = ModelRunRecord(run_id="RUN-s", model_type=ModelType.SIGNAL_FILTER, model_version="s1",
+                         feature_schema_version="1", feature_schema_json={},
+                         training_start=datetime(2026, 1, 1, tzinfo=IST), training_end=datetime(2026, 6, 1, tzinfo=IST),
+                         artifact_path="m", data_source=ModelDataSource.SYNTHETIC)
+    paper.model_runs.insert(run)
+    with pytest.raises(ValueError, match="HISTORICAL"):
+        paper.model_runs.set_status("RUN-s", ModelRunStatus.PAPER_READY)
+    paper.model_runs.set_status("RUN-s", ModelRunStatus.REJECTED)
+    assert paper.model_runs.get("RUN-s").status is ModelRunStatus.REJECTED  # type: ignore[union-attr]
 
 
 # --------------------------------------------------------------------------- #
@@ -256,10 +280,12 @@ def test_model_runs(paper: Repositories) -> None:
                          training_start=datetime(2025, 1, 1, tzinfo=IST),
                          training_end=datetime(2025, 12, 31, tzinfo=IST),
                          hyperparameters_json={"num_leaves": 31}, metrics_json={"auc": 0.58},
-                         seeds_json=[1, 2, 3, 4, 5], artifact_path="models/sf/0.1.0")
+                         seeds_json=[1, 2, 3, 4, 5], artifact_path="models/sf/0.1.0",
+                         data_source=ModelDataSource.HISTORICAL)
     paper.model_runs.insert(run)
     got = paper.model_runs.get(run.run_id)
     assert got is not None and got.seeds_json == [1, 2, 3, 4, 5]
+    assert got.data_source is ModelDataSource.HISTORICAL
     with pytest.raises(ValueError, match="approver"):
         paper.model_runs.set_status(run.run_id, ModelRunStatus.LIVE_APPROVED)
     paper.model_runs.set_status(run.run_id, ModelRunStatus.PAPER_READY)

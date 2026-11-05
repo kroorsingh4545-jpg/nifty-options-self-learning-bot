@@ -35,6 +35,9 @@ check FAILS. An example on synthetic data is in [`docs/backtest-example/report.m
 <dir>/meta.json          {"source": "HISTORICAL", "description": "..."}
 ```
 
+* `meta.json` states `"source"` explicitly. Backtests read a missing file as HISTORICAL, but
+  `python -m ml train` refuses a dataset without it. A dataset labelled HISTORICAL that contains
+  `SYNTH`-tagged instruments is always refused.
 * `timestamp` is the candle **start** with a UTC offset (`2026-09-01T09:15:00+05:30`, the shape the Upstox
   historical-candle API returns). Naive timestamps are refused.
 * 1-minute candles only, on whole minutes, inside 09:15–15:30, strictly increasing per instrument.
