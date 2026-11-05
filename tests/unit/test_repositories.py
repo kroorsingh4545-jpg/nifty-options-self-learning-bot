@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from pydantic import ValidationError
 from config.loader import load_config
 from core.clock import IST, now_ist
 from core.enums import (
+    AutonomyLevel,
     ModelDataSource,
     ModelRunStatus,
     ModelType,
@@ -288,8 +290,19 @@ def test_model_runs(paper: Repositories) -> None:
     assert got.data_source is ModelDataSource.HISTORICAL
     with pytest.raises(ValueError, match="approver"):
         paper.model_runs.set_status(run.run_id, ModelRunStatus.LIVE_APPROVED)
-    paper.model_runs.set_status(run.run_id, ModelRunStatus.PAPER_READY)
-    assert paper.model_runs.list(ModelType.SIGNAL_FILTER)[0].status is ModelRunStatus.PAPER_READY
+    # v5: PAPER_READY needs an autonomy level that allows PAPER promotion
+    for level in (None, AutonomyLevel.OBSERVE_ONLY):
+        with pytest.raises(ValueError, match="autonomy"):
+            paper.model_runs.set_status(run.run_id, ModelRunStatus.PAPER_READY, autonomy=level)
+    with pytest.raises(sqlite3.IntegrityError, match="autonomy"):  # the schema refuses it too
+        paper.db.execute("UPDATE model_runs SET status = 'PAPER_READY', promoted_autonomy = 'OBSERVE_ONLY' "
+                         "WHERE run_id = ?", (run.run_id,))
+    paper.model_runs.set_status(run.run_id, ModelRunStatus.PAPER_READY, autonomy=AutonomyLevel.PAPER_AUTO_IMPROVE)
+    got = paper.model_runs.list(ModelType.SIGNAL_FILTER)[0]
+    assert got.status is ModelRunStatus.PAPER_READY and got.promoted_autonomy is AutonomyLevel.PAPER_AUTO_IMPROVE
+    with pytest.raises(ValueError, match="autonomy"):  # LIVE_CANDIDATE needs LIVE_CANDIDATE_APPROVAL
+        paper.model_runs.set_status(run.run_id, ModelRunStatus.LIVE_CANDIDATE,
+                                    autonomy=AutonomyLevel.PAPER_AUTO_IMPROVE)
 
 
 def test_learning_events(paper: Repositories) -> None:

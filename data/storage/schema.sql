@@ -1,5 +1,5 @@
 -- ============================================================================
--- NIFTY options self-learning bot — SQLite schema, version 4
+-- NIFTY options self-learning bot — SQLite schema, version 5
 --
 -- Design rules enforced IN THE DATABASE (not only in Python):
 --   * Every order / fill / position / trade row carries `mode` (PAPER | LIVE).
@@ -13,6 +13,10 @@
 --   * Every open, non-flat position and every trade must carry a stop-loss.
 --   * A model can only be LIVE_APPROVED with a recorded human approver.
 --   * A model trained on SYNTHETIC data can never be validated or promoted.
+--   * v5: promotion to PAPER_READY (models and strategy versions) records the
+--     autonomy level and is refused unless that level allows it; nothing can
+--     be deployed to LIVE (strategy_deployments accepts PAPER rows only).
+--   * v5: every RL decision is persisted (rl_decisions, append-only).
 -- All timestamps are ISO-8601 strings in IST (+05:30).
 -- ============================================================================
 
@@ -265,6 +269,10 @@ CREATE TABLE IF NOT EXISTS model_runs (
     -- models can ever be VALIDATED or promoted (see triggers below).
     data_source             TEXT NOT NULL DEFAULT 'UNKNOWN'
                             CHECK (data_source IN ('SYNTHETIC','HISTORICAL','UNKNOWN')),
+    -- v5: the autonomy level in force when the run was promoted (see triggers).
+    promoted_autonomy       TEXT
+                            CHECK (promoted_autonomy IS NULL OR promoted_autonomy IN
+                                   ('OBSERVE_ONLY','PAPER_AUTO_IMPROVE','LIVE_CANDIDATE_APPROVAL')),
     CHECK (training_start < training_end),
     CHECK (status <> 'LIVE_APPROVED' OR (approved_by IS NOT NULL AND length(approved_by) > 0)),
     UNIQUE (model_type, model_version, strategy_id)
@@ -325,6 +333,141 @@ CREATE TABLE IF NOT EXISTS runtime_state (
     state_json    TEXT NOT NULL CHECK (json_valid(state_json)),
     published_at  TEXT NOT NULL
 );
+
+-- ---------------------------------------------------------------------------
+-- rl_decisions (v5): every decision of the RL trade manager - entry approvals
+-- (ENTER / SKIP / VETO) and open-trade advice (HOLD / tighten / partial /
+-- exit) with what execution did with it. Append-only audit trail.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS rl_decisions (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_uid   TEXT NOT NULL UNIQUE,
+    mode           TEXT NOT NULL CHECK (mode IN ('PAPER','LIVE')),
+    strategy_id    TEXT NOT NULL REFERENCES strategies(strategy_id),
+    kind           TEXT NOT NULL CHECK (kind IN ('ENTRY','MANAGE')),
+    trade_uid      TEXT REFERENCES trades(trade_uid),
+    signal_id      TEXT,
+    action         TEXT NOT NULL CHECK (length(action) > 0),
+    allowed        INTEGER CHECK (allowed IS NULL OR allowed IN (0, 1)),   -- ENTRY: entry approved
+    applied        INTEGER CHECK (applied IS NULL OR applied IN (0, 1)),   -- MANAGE: applied by execution
+    result         TEXT,
+    new_stop       REAL CHECK (new_stop IS NULL OR new_stop >= 0),
+    exit_lots      INTEGER CHECK (exit_lots IS NULL OR exit_lots >= 0),
+    confidence     REAL CHECK (confidence IS NULL OR confidence BETWEEN 0 AND 1),
+    model_version  TEXT,
+    research       INTEGER NOT NULL DEFAULT 0 CHECK (research IN (0, 1)),
+    reason         TEXT NOT NULL DEFAULT '',
+    details_json   TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(details_json)),
+    decided_at     TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    CHECK (kind <> 'MANAGE' OR trade_uid IS NOT NULL),
+    CHECK (kind <> 'ENTRY' OR signal_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS ix_rl_decisions_time ON rl_decisions(mode, strategy_id, decided_at);
+CREATE INDEX IF NOT EXISTS ix_rl_decisions_trade ON rl_decisions(trade_uid);
+
+-- ---------------------------------------------------------------------------
+-- trade_journal (v5): LOG stage of the Reflective Loop. One row per closed
+-- trade with everything reflection needs (version, reasons, contract, prices,
+-- stop / target / trailing settings, P&L, costs, slippage, R, features at
+-- entry and exit, errors, execution quality, RL activity). Append-only.
+-- data_source marks SYNTHETIC evidence, which can never justify a promotion.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS trade_journal (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_uid            TEXT NOT NULL UNIQUE REFERENCES trades(trade_uid),
+    mode                 TEXT NOT NULL CHECK (mode IN ('PAPER','LIVE')),
+    strategy_id          TEXT NOT NULL REFERENCES strategies(strategy_id),
+    strategy_version     TEXT NOT NULL,
+    data_source          TEXT NOT NULL CHECK (data_source IN ('LIVE_FEED','HISTORICAL','SYNTHETIC','UNKNOWN')),
+    instrument_key       TEXT NOT NULL,
+    trading_symbol       TEXT NOT NULL,
+    option_type          TEXT NOT NULL CHECK (option_type IN ('CE','PE')),
+    strike               REAL NOT NULL CHECK (strike > 0),
+    expiry               TEXT NOT NULL,
+    quantity             INTEGER NOT NULL CHECK (quantity > 0),
+    entry_time           TEXT NOT NULL,
+    exit_time            TEXT NOT NULL,
+    entry_price          REAL NOT NULL CHECK (entry_price >= 0),
+    exit_price           REAL NOT NULL CHECK (exit_price >= 0),
+    entry_reason         TEXT,
+    exit_reason          TEXT,
+    ml_confidence        REAL CHECK (ml_confidence IS NULL OR ml_confidence BETWEEN 0 AND 1),
+    regime               TEXT,
+    initial_stop_loss    REAL NOT NULL CHECK (initial_stop_loss >= 0),
+    final_stop_loss      REAL NOT NULL CHECK (final_stop_loss >= 0),
+    target               REAL CHECK (target IS NULL OR target >= 0),
+    risk_config_json     TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(risk_config_json)),
+    gross_pnl            REAL NOT NULL,
+    costs                REAL NOT NULL CHECK (costs >= 0),
+    net_pnl              REAL NOT NULL,
+    slippage             REAL NOT NULL DEFAULT 0 CHECK (slippage >= 0),   -- rupees, all fills
+    r_multiple           REAL,
+    features_entry_json  TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(features_entry_json)),
+    features_exit_json   TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(features_exit_json)),
+    errors_json          TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(errors_json)),
+    execution_json       TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(execution_json)),
+    rl_json              TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(rl_json)),
+    created_at           TEXT NOT NULL,
+    CHECK (substr(trade_uid, 1, length(mode) + 1) = mode || '-'),
+    CHECK (entry_time <= exit_time)
+);
+CREATE INDEX IF NOT EXISTS ix_trade_journal_strategy ON trade_journal(mode, strategy_id, exit_time);
+
+-- ---------------------------------------------------------------------------
+-- strategy_versions (v5): every strategy parameter version the loop knows
+-- (the YAML baseline and each whitelisted mutation), its hypothesis, its full
+-- evaluation, and its promotion state. See the v5 triggers for the rules.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS strategy_versions (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    version_uid      TEXT NOT NULL UNIQUE,
+    strategy_id      TEXT NOT NULL REFERENCES strategies(strategy_id),
+    version          TEXT NOT NULL CHECK (version GLOB '[0-9]*.[0-9]*.[0-9]*'),
+    base_version     TEXT,
+    parent_uid       TEXT REFERENCES strategy_versions(version_uid),
+    status           TEXT NOT NULL
+                     CHECK (status IN ('BASELINE','CANDIDATE','VERIFIED','REJECTED','PAPER_READY','PAPER_ACTIVE',
+                                       'SUPERSEDED','ROLLED_BACK','LIVE_CANDIDATE','LIVE_APPROVED','ARCHIVED')),
+    config_json      TEXT NOT NULL CHECK (json_valid(config_json)),
+    mutation_json    TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(mutation_json)),
+    hypothesis_json  TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(hypothesis_json)),
+    evaluation_json  TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(evaluation_json)),
+    evidence_source  TEXT NOT NULL DEFAULT 'UNKNOWN'
+                     CHECK (evidence_source IN ('LIVE_FEED','HISTORICAL','SYNTHETIC','UNKNOWN')),
+    autonomy_level   TEXT CHECK (autonomy_level IS NULL OR autonomy_level IN
+                                 ('OBSERVE_ONLY','PAPER_AUTO_IMPROVE','LIVE_CANDIDATE_APPROVAL')),
+    approved_by      TEXT,
+    status_reason    TEXT,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    UNIQUE (strategy_id, version),
+    CHECK (status <> 'LIVE_APPROVED' OR (approved_by IS NOT NULL AND length(trim(approved_by)) > 0))
+);
+CREATE INDEX IF NOT EXISTS ix_strategy_versions_strategy ON strategy_versions(strategy_id, status);
+
+-- ---------------------------------------------------------------------------
+-- strategy_deployments (v5): which strategy version runs in PAPER. The newest
+-- row per strategy is in force (version_uid NULL = the YAML baseline).
+-- mode is PAPER only: a LIVE deployment cannot even be recorded.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS strategy_deployments (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    deployment_uid        TEXT NOT NULL UNIQUE,
+    mode                  TEXT NOT NULL CHECK (mode = 'PAPER'),
+    strategy_id           TEXT NOT NULL REFERENCES strategies(strategy_id),
+    action                TEXT NOT NULL CHECK (action IN ('DEPLOY','ROLLBACK','RETIRE')),
+    version_uid           TEXT REFERENCES strategy_versions(version_uid),
+    previous_version_uid  TEXT REFERENCES strategy_versions(version_uid),
+    actor                 TEXT NOT NULL CHECK (length(trim(actor)) > 0),
+    autonomy_level        TEXT NOT NULL
+                          CHECK (autonomy_level IN ('OBSERVE_ONLY','PAPER_AUTO_IMPROVE','LIVE_CANDIDATE_APPROVAL')),
+    reason                TEXT NOT NULL DEFAULT '',
+    created_at            TEXT NOT NULL,
+    CHECK (action <> 'DEPLOY' OR version_uid IS NOT NULL),
+    CHECK (action <> 'RETIRE' OR version_uid IS NULL)
+);
+CREATE INDEX IF NOT EXISTS ix_strategy_deployments_strategy ON strategy_deployments(mode, strategy_id, id);
 
 -- ============================================================================
 -- Isolation / integrity triggers
@@ -471,4 +614,194 @@ CREATE TRIGGER IF NOT EXISTS trg_risk_events_append_only_delete
 BEFORE DELETE ON risk_events
 BEGIN
     SELECT RAISE(ABORT, 'immutable: risk_events are append-only');
+END;
+
+-- ============================================================================
+-- v5: autonomy, Reflective Loop and RL audit triggers
+-- ============================================================================
+
+-- A model can become PAPER_READY only under an autonomy level that allows it,
+-- and LIVE_CANDIDATE / LIVE_APPROVED only under LIVE_CANDIDATE_APPROVAL.
+CREATE TRIGGER IF NOT EXISTS trg_model_runs_autonomy_insert
+BEFORE INSERT ON model_runs
+WHEN NEW.data_source = 'HISTORICAL'
+ AND NOT (NEW.status = 'LIVE_APPROVED' AND (NEW.approved_by IS NULL OR length(NEW.approved_by) = 0))
+ AND ((NEW.status = 'PAPER_READY'
+      AND (NEW.promoted_autonomy IS NULL
+           OR NEW.promoted_autonomy NOT IN ('PAPER_AUTO_IMPROVE','LIVE_CANDIDATE_APPROVAL')))
+  OR (NEW.status IN ('LIVE_CANDIDATE','LIVE_APPROVED')
+      AND (NEW.promoted_autonomy IS NULL OR NEW.promoted_autonomy <> 'LIVE_CANDIDATE_APPROVAL')))
+BEGIN
+    SELECT RAISE(ABORT, 'autonomy: the autonomy level does not allow this model promotion');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_model_runs_autonomy_update
+BEFORE UPDATE OF status ON model_runs
+WHEN NEW.status IS NOT OLD.status
+ AND NEW.data_source = 'HISTORICAL'
+ AND NOT (NEW.status = 'LIVE_APPROVED' AND (NEW.approved_by IS NULL OR length(NEW.approved_by) = 0))
+ AND ((NEW.status = 'PAPER_READY'
+       AND (NEW.promoted_autonomy IS NULL
+            OR NEW.promoted_autonomy NOT IN ('PAPER_AUTO_IMPROVE','LIVE_CANDIDATE_APPROVAL')))
+   OR (NEW.status IN ('LIVE_CANDIDATE','LIVE_APPROVED')
+       AND (NEW.promoted_autonomy IS NULL OR NEW.promoted_autonomy <> 'LIVE_CANDIDATE_APPROVAL')))
+BEGIN
+    SELECT RAISE(ABORT, 'autonomy: the autonomy level does not allow this model promotion');
+END;
+
+-- RL decisions: a linked trade must match mode / strategy; append-only.
+CREATE TRIGGER IF NOT EXISTS trg_rl_decisions_trade_match
+BEFORE INSERT ON rl_decisions
+WHEN NEW.trade_uid IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'isolation: RL decision mode/strategy must match its trade')
+    WHERE NOT EXISTS (SELECT 1 FROM trades t
+                      WHERE t.trade_uid = NEW.trade_uid
+                        AND t.mode = NEW.mode
+                        AND t.strategy_id = NEW.strategy_id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_rl_decisions_append_only_update
+BEFORE UPDATE ON rl_decisions
+BEGIN
+    SELECT RAISE(ABORT, 'immutable: rl_decisions are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_rl_decisions_append_only_delete
+BEFORE DELETE ON rl_decisions
+BEGIN
+    SELECT RAISE(ABORT, 'immutable: rl_decisions are append-only');
+END;
+
+-- Trade journal: must match a CLOSED trade of the same mode / strategy; append-only.
+CREATE TRIGGER IF NOT EXISTS trg_trade_journal_trade_match
+BEFORE INSERT ON trade_journal
+BEGIN
+    SELECT RAISE(ABORT, 'isolation: journal entry must match a CLOSED trade of the same mode/strategy')
+    WHERE NOT EXISTS (SELECT 1 FROM trades t
+                      WHERE t.trade_uid = NEW.trade_uid
+                        AND t.mode = NEW.mode
+                        AND t.strategy_id = NEW.strategy_id
+                        AND t.status = 'CLOSED');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_trade_journal_append_only_update
+BEFORE UPDATE ON trade_journal
+BEGIN
+    SELECT RAISE(ABORT, 'immutable: trade_journal is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_trade_journal_append_only_delete
+BEFORE DELETE ON trade_journal
+BEGIN
+    SELECT RAISE(ABORT, 'immutable: trade_journal is append-only');
+END;
+
+-- Strategy versions start as BASELINE or CANDIDATE.
+CREATE TRIGGER IF NOT EXISTS trg_strategy_versions_insert_status
+BEFORE INSERT ON strategy_versions
+WHEN NEW.status NOT IN ('BASELINE','CANDIDATE')
+BEGIN
+    SELECT RAISE(ABORT, 'strategy_versions: new versions start as BASELINE or CANDIDATE');
+END;
+
+-- Only these status transitions exist.
+CREATE TRIGGER IF NOT EXISTS trg_strategy_versions_transitions
+BEFORE UPDATE OF status ON strategy_versions
+WHEN NEW.status IS NOT OLD.status
+ AND (OLD.status || '>' || NEW.status) NOT IN (
+     'BASELINE>ARCHIVED',
+     'CANDIDATE>VERIFIED', 'CANDIDATE>REJECTED', 'CANDIDATE>ARCHIVED',
+     'VERIFIED>PAPER_READY', 'VERIFIED>REJECTED', 'VERIFIED>ARCHIVED',
+     'PAPER_READY>PAPER_ACTIVE', 'PAPER_READY>REJECTED', 'PAPER_READY>ARCHIVED',
+     'PAPER_ACTIVE>SUPERSEDED', 'PAPER_ACTIVE>ROLLED_BACK', 'PAPER_ACTIVE>LIVE_CANDIDATE',
+     'SUPERSEDED>PAPER_ACTIVE', 'SUPERSEDED>ARCHIVED',
+     'ROLLED_BACK>ARCHIVED',
+     'LIVE_CANDIDATE>LIVE_APPROVED', 'LIVE_CANDIDATE>PAPER_ACTIVE', 'LIVE_CANDIDATE>SUPERSEDED',
+     'LIVE_CANDIDATE>ROLLED_BACK',
+     'LIVE_APPROVED>SUPERSEDED', 'LIVE_APPROVED>ROLLED_BACK',
+     'REJECTED>ARCHIVED')
+BEGIN
+    SELECT RAISE(ABORT, 'strategy_versions: status transition not allowed');
+END;
+
+-- PAPER_READY and beyond need HISTORICAL (real market) verification evidence.
+CREATE TRIGGER IF NOT EXISTS trg_strategy_versions_real_evidence
+BEFORE UPDATE OF status ON strategy_versions
+WHEN NEW.status IN ('PAPER_READY','PAPER_ACTIVE','LIVE_CANDIDATE','LIVE_APPROVED')
+ AND NEW.evidence_source <> 'HISTORICAL'
+BEGIN
+    SELECT RAISE(ABORT, 'strategy_versions: only versions verified on HISTORICAL data can be promoted');
+END;
+
+-- Autonomy: PAPER_READY / PAPER_ACTIVE need a PAPER-promotion level;
+-- LIVE_CANDIDATE needs LIVE_CANDIDATE_APPROVAL.
+CREATE TRIGGER IF NOT EXISTS trg_strategy_versions_autonomy
+BEFORE UPDATE OF status ON strategy_versions
+WHEN NEW.status IS NOT OLD.status
+ AND ((NEW.status IN ('PAPER_READY','PAPER_ACTIVE')
+       AND (NEW.autonomy_level IS NULL
+            OR NEW.autonomy_level NOT IN ('PAPER_AUTO_IMPROVE','LIVE_CANDIDATE_APPROVAL')))
+   OR (NEW.status = 'LIVE_CANDIDATE'
+       AND (NEW.autonomy_level IS NULL OR NEW.autonomy_level <> 'LIVE_CANDIDATE_APPROVAL')))
+BEGIN
+    SELECT RAISE(ABORT, 'autonomy: the autonomy level does not allow this strategy promotion');
+END;
+
+-- The definition of a version never changes; its evidence source is set once.
+CREATE TRIGGER IF NOT EXISTS trg_strategy_versions_immutable
+BEFORE UPDATE OF version_uid, strategy_id, version, base_version, parent_uid, config_json, mutation_json,
+                 hypothesis_json ON strategy_versions
+WHEN NEW.version_uid IS NOT OLD.version_uid
+  OR NEW.strategy_id IS NOT OLD.strategy_id
+  OR NEW.version IS NOT OLD.version
+  OR NEW.base_version IS NOT OLD.base_version
+  OR NEW.parent_uid IS NOT OLD.parent_uid
+  OR NEW.config_json IS NOT OLD.config_json
+  OR NEW.mutation_json IS NOT OLD.mutation_json
+  OR NEW.hypothesis_json IS NOT OLD.hypothesis_json
+BEGIN
+    SELECT RAISE(ABORT, 'immutable: a strategy version definition cannot change');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_strategy_versions_evidence_once
+BEFORE UPDATE OF evidence_source ON strategy_versions
+WHEN OLD.evidence_source <> 'UNKNOWN' AND NEW.evidence_source IS NOT OLD.evidence_source
+BEGIN
+    SELECT RAISE(ABORT, 'immutable: strategy_versions.evidence_source is set once');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_strategy_versions_no_delete
+BEFORE DELETE ON strategy_versions
+BEGIN
+    SELECT RAISE(ABORT, 'immutable: strategy versions are archived, never deleted');
+END;
+
+-- A PAPER deployment must name a HISTORICAL-verified version of the same
+-- strategy that is PAPER_READY (new) or was in PAPER before (rollback), under
+-- an autonomy level that allows PAPER promotion.
+CREATE TRIGGER IF NOT EXISTS trg_strategy_deployments_version_check
+BEFORE INSERT ON strategy_deployments
+WHEN NEW.version_uid IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'deployment: version must be a PAPER_READY or previously deployed HISTORICAL version of the same strategy')
+    WHERE NOT EXISTS (SELECT 1 FROM strategy_versions v
+                      WHERE v.version_uid = NEW.version_uid
+                        AND v.strategy_id = NEW.strategy_id
+                        AND v.evidence_source = 'HISTORICAL'
+                        AND v.status IN ('PAPER_READY','SUPERSEDED','PAPER_ACTIVE','LIVE_CANDIDATE','LIVE_APPROVED'));
+    SELECT RAISE(ABORT, 'autonomy: the autonomy level does not allow PAPER deployment')
+    WHERE NEW.autonomy_level NOT IN ('PAPER_AUTO_IMPROVE','LIVE_CANDIDATE_APPROVAL');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_strategy_deployments_append_only_update
+BEFORE UPDATE ON strategy_deployments
+BEGIN
+    SELECT RAISE(ABORT, 'immutable: strategy_deployments are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_strategy_deployments_append_only_delete
+BEFORE DELETE ON strategy_deployments
+BEGIN
+    SELECT RAISE(ABORT, 'immutable: strategy_deployments are append-only');
 END;

@@ -32,6 +32,14 @@ Phase 8 adds ``RLTradeAdvisor``: the PPO trade manager. It vetoes entries
 (ENTER / SKIP_SETUP) and proposes HOLD / stop tightening / partial profit /
 full exit for open trades, under the same model policy. Its proposals are
 re-validated by ``execution.position_manager.PositionManager.apply_advice``.
+
+Phase 9: every RL decision is persisted to ``rl_decisions``. Entry decisions
+are written here (``RLTradeAdvisor.evaluate``); an ENTER whose record cannot
+be written is turned into a veto (an unaudited approval is never acted on).
+Trade-management decisions are written by ``runtime.rl`` together with what
+execution did with them; a strategy whose decision cannot be written is
+suspended from RL for the session (``RLTradeAdvisor.suspend``): its entries
+are refused and its open trades keep their deterministic stops.
 """
 
 from __future__ import annotations
@@ -45,9 +53,12 @@ from typing import Any
 
 from config.settings import BotConfig
 from core.clock import IST, ensure_ist, now_ist
-from core.enums import ModelType, TradingMode
+from core.enums import ModelType, RLDecisionKind, TradingMode
+from core.ids import new_uid
 from core.interfaces import FilterDecision, TradeAdvice, TradeAdviceAction
 from core.models import Signal
+from data.storage.records import RLDecisionRecord
+from data.storage.repositories import RLDecisionRepository
 from ml.feature_engineering import FeatureEngine, LookaheadError, OptionContext, PastOutcome, feature_vector
 from ml.feature_store import FeatureStore
 from ml.model_registry import RL_KIND, LoadedModel, ModelRegistry, SyntheticModelError
@@ -274,9 +285,13 @@ class RLTradeAdvisor:
     def __init__(self, cfg: BotConfig, *, features: FeatureEngine, models: Mapping[str, LoadedModel],
                  option_context: OptionContextFn, account: AccountFn, outcomes: OutcomesFn,
                  mode: TradingMode = TradingMode.PAPER, research: bool = False,
-                 max_bar_age: timedelta = timedelta(minutes=2), now_fn: Callable[[], datetime] = now_ist) -> None:
+                 max_bar_age: timedelta = timedelta(minutes=2), now_fn: Callable[[], datetime] = now_ist,
+                 decisions: RLDecisionRepository | None = None) -> None:
         if research and TradingMode(mode) is not TradingMode.PAPER:
             raise InferenceConfigError("research (SYNTHETIC) RL models are only allowed in PAPER mode")
+        if decisions is not None and decisions.mode is not TradingMode(mode):
+            raise InferenceConfigError(f"RL decisions repository is bound to {decisions.mode.value}, the advisor "
+                                       f"runs in {TradingMode(mode).value}")
         for sid, m in models.items():
             if m.kind != RL_KIND or m.record.model_type is not ModelType.RL_PPO:
                 raise InferenceConfigError(f"{sid}: expected an {RL_KIND} model, got {m.kind}")
@@ -299,6 +314,64 @@ class RLTradeAdvisor:
         self.envelopes = {sid: RiskEnvelope.from_config(cfg, sid) for sid in self.models}
         self.last: dict[str, dict[str, Any]] = {}  # strategy -> last decision (dashboard / audit)
         self._last_advice: dict[str, datetime] = {}  # trade -> last decision time
+        self.decisions = decisions  # every decision is persisted here (None: not persisted, e.g. offline tools)
+        self.suspended: dict[str, str] = {}  # strategy -> why RL is off for the session (decision log failure)
+        self.record_failures = 0
+
+    # Decision log ----------------------------------------------------------
+    def suspend(self, strategy_id: str, reason: str) -> None:
+        """Turn RL off for this strategy for the rest of the session: its
+        entries are refused and its trades keep their deterministic stops."""
+        if strategy_id not in self.suspended:
+            self.suspended[strategy_id] = reason
+            log.critical("RL suspended for the session: entries refused, trades keep their configured stops",
+                         extra={"strategy_id": strategy_id, "reason": reason})
+
+    def record_decision(self, **fields: Any) -> bool:
+        """Build AND persist one decision inside one guard (``decision_record``
+        fields). Any failure - an invalid record or a failed write - returns
+        False and suspends RL for the strategy; it never raises into the
+        caller (the candle listener / the entry filter)."""
+        sid = str(fields.get("strategy_id", "?"))
+        try:
+            rec = self.decision_record(**fields)
+        except Exception as exc:
+            self.record_failures += 1
+            log.exception("could not build the RL decision record", extra={"strategy_id": sid})
+            self.suspend(sid, f"RL decision record invalid: {type(exc).__name__}")
+            return False
+        return self.record(rec)
+
+    def record(self, rec: RLDecisionRecord) -> bool:
+        """Persist one decision. False (and the strategy suspended) on failure."""
+        if self.decisions is None:
+            return True
+        try:
+            self.decisions.insert(rec)
+            return True
+        except Exception as exc:
+            self.record_failures += 1
+            log.exception("could not persist the RL decision", extra={"strategy_id": rec.strategy_id})
+            self.suspend(rec.strategy_id, f"RL decision log write failed: {type(exc).__name__}")
+            return False
+
+    def decision_record(self, *, kind: RLDecisionKind, strategy_id: str, action: str, decided_at: datetime,
+                        reason: str, trade_uid: str | None = None, signal_id: str | None = None,
+                        allowed: bool | None = None, applied: bool | None = None, result: str | None = None,
+                        new_stop: float | None = None, exit_lots: int | None = None,
+                        confidence: float | None = None, model_version: str | None = None,
+                        details: Mapping[str, Any] | None = None) -> RLDecisionRecord:
+        conf = confidence if confidence is not None and math.isfinite(confidence) and 0 <= confidence <= 1 else None
+        clean = {k: (v if not isinstance(v, float) or math.isfinite(v) else None)
+                 for k, v in (details or {}).items()}
+        if confidence is not None and conf is None:
+            clean["raw_confidence"] = repr(confidence)
+        return RLDecisionRecord(
+            decision_uid=new_uid("RLD"), mode=self.mode, strategy_id=strategy_id, kind=kind, trade_uid=trade_uid,
+            signal_id=signal_id, action=action, allowed=allowed, applied=applied, result=result,
+            new_stop=new_stop, exit_lots=exit_lots, confidence=conf, model_version=model_version,
+            research=self.research, reason=reason[:500], details_json=clean, decided_at=ensure_ist(decided_at),
+            created_at=ensure_ist(decided_at))
 
     def enabled(self, strategy_id: str) -> bool:
         s = self.cfg.strategies.strategies.get(strategy_id)
@@ -332,6 +405,23 @@ class RLTradeAdvisor:
         sid = signal.strategy_id
         if not self.enabled(sid):
             return FilterDecision(allow=True, score=None, size_multiplier=1.0, reason="RL disabled (pass-through)")
+        if sid in self.suspended:
+            decision = self._veto(sid, signal.signal_id, f"RL suspended: {self.suspended[sid]}")
+        else:
+            decision = self._evaluate(signal)
+        info = dict(self.last.get(sid, {}))
+        action = str(info.pop("action", "VETO"))
+        recorded = self.record_decision(
+            kind=RLDecisionKind.ENTRY, strategy_id=sid, signal_id=signal.signal_id, action=action,
+            decided_at=self._now(), allowed=decision.allow, reason=decision.reason,
+            confidence=_float(info.get("confidence")), model_version=_str(info.pop("model", None)),
+            details={k: v for k, v in info.items() if k != "signal_id"})
+        if not recorded and decision.allow:
+            return self._veto(sid, signal.signal_id, "RL decision could not be recorded (fail-closed)")
+        return decision
+
+    def _evaluate(self, signal: Signal) -> FilterDecision:
+        sid = signal.strategy_id
         m = self.models.get(sid)
         if m is None:
             return self._veto(sid, signal.signal_id, "RL enabled but no deployable RL model (fail-closed)")
@@ -374,6 +464,8 @@ class RLTradeAdvisor:
 
         if not self.enabled(sid):
             return hold("RL disabled")
+        if sid in self.suspended:
+            return hold(f"RL suspended: {self.suspended[sid]}")
         m = self.models.get(sid)
         if m is None:
             return hold("no RL model: the trade keeps its configured stop / target / trailing")
@@ -415,6 +507,17 @@ class RLTradeAdvisor:
 
     def forget(self, trade_uid: str) -> None:
         self._last_advice.pop(trade_uid, None)
+
+
+def _float(v: Any) -> float | None:
+    try:
+        return None if v is None else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _str(v: Any) -> str | None:
+    return None if v is None else str(v)
 
 
 __all__ = ["InferenceConfigError", "InferenceService", "RLTradeAdvisor", "StrategyModels", "TradeContext",

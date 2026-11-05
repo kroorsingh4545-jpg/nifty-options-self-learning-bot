@@ -13,8 +13,10 @@ from typing import Any
 from core.clock import now_ist
 
 #: v2: trades stop-loss tighten-only trigger; v3: control_commands, runtime_state;
-#: v4: model_runs.data_source + only HISTORICAL-trained models can be validated / promoted
-SCHEMA_VERSION = 4
+#: v4: model_runs.data_source + only HISTORICAL-trained models can be validated / promoted;
+#: v5: rl_decisions, trade_journal, strategy_versions, strategy_deployments,
+#: model_runs.promoted_autonomy + autonomy / promotion triggers (Phase 9)
+SCHEMA_VERSION = 5
 
 #: Columns added to existing tables after v1, applied before the schema script
 #: on databases created by an older version (CREATE TABLE IF NOT EXISTS does
@@ -22,6 +24,9 @@ SCHEMA_VERSION = 4
 ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("model_runs", "data_source",
      "TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK (data_source IN ('SYNTHETIC','HISTORICAL','UNKNOWN'))"),
+    ("model_runs", "promoted_autonomy",
+     "TEXT CHECK (promoted_autonomy IS NULL OR promoted_autonomy IN "
+     "('OBSERVE_ONLY','PAPER_AUTO_IMPROVE','LIVE_CANDIDATE_APPROVAL'))"),
 )
 
 REQUIRED_TABLES = (
@@ -37,6 +42,10 @@ REQUIRED_TABLES = (
     "learning_events",
     "control_commands",
     "runtime_state",
+    "rl_decisions",
+    "trade_journal",
+    "strategy_versions",
+    "strategy_deployments",
 )
 
 

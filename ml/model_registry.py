@@ -23,7 +23,12 @@ Promotion rules (defence in depth; the schema enforces the same):
   and a registry over the TRADING database refuses to register it at all
   (synthetic runs go to a separate research registry).
 * ``mark_paper_ready`` needs a VALIDATED, HISTORICAL model whose recorded
-  validation gates all passed, and a named approver.
+  validation gates all passed, a named human approver, and the autonomy
+  level in force (Phase 9): it is refused unless that level allows PAPER
+  promotion (``core.autonomy``; OBSERVE_ONLY never does). The level is
+  recorded on the run and re-checked by a schema trigger. The Phase 9
+  promotion gate (``learning.promotion_gate.promote_model_to_paper``) is the
+  caller that reads the live autonomy level.
 * LIVE statuses are not reachable from the ML layer (Phase 9 promotion gate
   + explicit human approval only).
 * ``production_run`` only ever returns HISTORICAL models in a deployable
@@ -46,8 +51,9 @@ import lightgbm
 import numpy as np
 import pandas as pd
 
+from core.autonomy import AutonomyError, is_human_approver, require_paper_promotion
 from core.clock import now_ist
-from core.enums import ModelDataSource, ModelRunStatus, ModelType, TradingMode
+from core.enums import AutonomyLevel, ModelDataSource, ModelRunStatus, ModelType, TradingMode
 from core.ids import new_uid
 from data.storage.records import ModelRunRecord
 from data.storage.repositories import ModelRunRepository
@@ -274,15 +280,21 @@ class ModelRegistry:
             raise RegistryError("the run's validation gates did not all pass")
         self.runs.set_status(run_id, ModelRunStatus.VALIDATED)
 
-    def mark_paper_ready(self, run_id: str, *, approved_by: str) -> None:
+    def mark_paper_ready(self, run_id: str, *, approved_by: str, autonomy: AutonomyLevel) -> None:
+        """VALIDATED -> PAPER_READY. ``autonomy`` is the level in force now;
+        OBSERVE_ONLY (or anything that does not allow PAPER promotion) refuses."""
         rec = self._require(run_id)
         if rec.data_source is not ModelDataSource.HISTORICAL:
             raise SyntheticModelError("a SYNTHETIC-trained model can never be promoted")
         if rec.status is not ModelRunStatus.VALIDATED:
             raise RegistryError(f"only VALIDATED models can become PAPER_READY (is {rec.status.value})")
-        if not approved_by.strip():
-            raise RegistryError("promotion needs a named approver")
-        self.runs.set_status(run_id, ModelRunStatus.PAPER_READY, approved_by=approved_by.strip())
+        if not approved_by.strip() or not is_human_approver(approved_by):
+            raise RegistryError("promotion needs a named human approver")
+        try:
+            level = require_paper_promotion(autonomy)
+        except (AutonomyError, ValueError) as exc:
+            raise RegistryError(str(exc)) from exc
+        self.runs.set_status(run_id, ModelRunStatus.PAPER_READY, approved_by=approved_by.strip(), autonomy=level)
 
     def reject(self, run_id: str) -> None:
         self._require(run_id)

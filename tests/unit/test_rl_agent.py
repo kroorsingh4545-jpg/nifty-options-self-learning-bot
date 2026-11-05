@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 import torch
 
-from core.enums import ModelDataSource, ModelRunStatus, ModelType, TradingMode
+from core.enums import AutonomyLevel, ModelDataSource, ModelRunStatus, ModelType, TradingMode
 from data.storage.bootstrap import sync_strategies
 from data.storage.database import Database
 from data.storage.repositories import Repositories
@@ -208,7 +208,7 @@ def test_synthetic_rl_model_can_never_become_production(trained: Trained, tmp_pa
     with pytest.raises(SyntheticModelError):
         trained.registry.mark_validated(run_id)
     with pytest.raises(SyntheticModelError):
-        trained.registry.mark_paper_ready(run_id, approved_by="someone")
+        trained.registry.mark_paper_ready(run_id, approved_by="someone", autonomy=AutonomyLevel.PAPER_AUTO_IMPROVE)
     with pytest.raises(RegistryError):
         trained.registry.set_status(run_id, ModelRunStatus.LIVE_APPROVED)
     for mode in TradingMode:

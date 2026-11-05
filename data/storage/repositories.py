@@ -21,16 +21,21 @@ from collections.abc import Callable, Iterable, Sequence
 from datetime import date, datetime
 from typing import Any, TypeVar
 
+from core.autonomy import PAPER_PROMOTION_LEVELS
 from core.clock import ensure_ist, now_ist
 from core.enums import (
     REAL_DATA_ONLY_STATUSES,
+    REAL_EVIDENCE_VERSION_STATUSES,
+    AutonomyLevel,
     ControlCommandStatus,
+    EvidenceSource,
     ModelDataSource,
     ModelRunStatus,
     ModelType,
     OrderStatus,
     PositionStatus,
     StrategyStatus,
+    StrategyVersionStatus,
     TradeStatus,
     TradingMode,
 )
@@ -46,7 +51,11 @@ from data.storage.records import (
     PositionRecord,
     Record,
     RiskEventRecord,
+    RLDecisionRecord,
+    StrategyDeploymentRecord,
     StrategyRecord,
+    StrategyVersionRecord,
+    TradeJournalRecord,
     TradeRecord,
 )
 
@@ -442,6 +451,28 @@ class RiskEventRepository(_ModeScoped):
         params.append(int(limit))
         return [RiskEventRecord.from_row(r) for r in self.db.query(sql, params)]
 
+    def mentioning(self, text: str, strategy_id: str | None = None, *, since: datetime | None = None,
+                   until: datetime | None = None) -> list[RiskEventRecord]:
+        """Events whose message or details mention ``text`` (e.g. a trade uid),
+        oldest first. ``since`` / ``until`` (inclusive) bound the search to a
+        time window so the (mode, created_at) index is used instead of a scan
+        of the whole table."""
+        like = "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        sql = "SELECT * FROM risk_events WHERE mode = ?"
+        params: list[Any] = [self.mode.value]
+        if since is not None:
+            sql += " AND created_at >= ?"
+            params.append(ensure_ist(since).isoformat())
+        if until is not None:
+            sql += " AND created_at <= ?"
+            params.append(ensure_ist(until).isoformat())
+        sql += " AND (message LIKE ? ESCAPE '\\' OR details_json LIKE ? ESCAPE '\\')"
+        params += [like, like]
+        if strategy_id is not None:
+            sql += " AND (strategy_id = ? OR strategy_id IS NULL)"
+            params.append(strategy_id)
+        return [RiskEventRecord.from_row(r) for r in self.db.query(sql + " ORDER BY id", params)]
+
     def list_by_types(self, event_types: Sequence[str]) -> list[RiskEventRecord]:
         """Every event of the given types for this mode, oldest first."""
         types = list(event_types)
@@ -490,8 +521,13 @@ class ModelRunRepository(_Clocked):
             params.append(strategy_id)
         return [ModelRunRecord.from_row(r) for r in self.db.query(sql + " ORDER BY id", params)]
 
-    def set_status(self, run_id: str, status: ModelRunStatus, approved_by: str | None = None) -> None:
+    def set_status(self, run_id: str, status: ModelRunStatus, approved_by: str | None = None, *,
+                   autonomy: AutonomyLevel | None = None) -> None:
+        """``autonomy`` is the level in force for a promotion: PAPER_READY needs
+        a PAPER-promotion level, LIVE_CANDIDATE / LIVE_APPROVED need
+        LIVE_CANDIDATE_APPROVAL (also enforced by schema triggers)."""
         status = ModelRunStatus(status)
+        level = AutonomyLevel(autonomy) if autonomy is not None else None
         if status is ModelRunStatus.LIVE_APPROVED and not approved_by:
             raise ValueError("LIVE_APPROVED requires a named human approver")
         if status in REAL_DATA_ONLY_STATUSES:
@@ -499,9 +535,15 @@ class ModelRunRepository(_Clocked):
             if current is not None and current.data_source is not ModelDataSource.HISTORICAL:
                 raise ValueError(f"{status.value} requires a model trained on HISTORICAL data "
                                  f"(this one: {current.data_source.value})")
+        if status is ModelRunStatus.PAPER_READY and level not in PAPER_PROMOTION_LEVELS:
+            raise ValueError(f"PAPER_READY is not allowed at autonomy level {level.value if level else None}")
+        if (status in (ModelRunStatus.LIVE_CANDIDATE, ModelRunStatus.LIVE_APPROVED)
+                and level is not AutonomyLevel.LIVE_CANDIDATE_APPROVAL):
+            raise ValueError(f"{status.value} is not allowed at autonomy level {level.value if level else None}")
         cur = self.db.execute(
-            "UPDATE model_runs SET status = ?, approved_by = COALESCE(?, approved_by), updated_at = ? WHERE run_id = ?",
-            (status.value, approved_by, self.now().isoformat(), run_id),
+            "UPDATE model_runs SET status = ?, approved_by = COALESCE(?, approved_by), "
+            "promoted_autonomy = COALESCE(?, promoted_autonomy), updated_at = ? WHERE run_id = ?",
+            (status.value, approved_by, level.value if level else None, self.now().isoformat(), run_id),
         )
         if cur.rowcount == 0:
             raise NotFoundError(f"model run {run_id!r} not found")
@@ -516,6 +558,161 @@ class LearningEventRepository(_Clocked):
             "SELECT * FROM learning_events WHERE strategy_id = ? ORDER BY created_at, id", (strategy_id,)
         )
         return [LearningEventRecord.from_row(r) for r in rows]
+
+
+# --------------------------------------------------------------------------- #
+# v5: RL decisions, trade journal (mode-scoped), strategy versions and
+# deployments (research / promotion artefacts, PAPER-only deployments)
+# --------------------------------------------------------------------------- #
+
+
+class RLDecisionRepository(_ModeScoped):
+    """Append-only RL decision log."""
+
+    def insert(self, decision: RLDecisionRecord) -> int:
+        self._guard(decision)
+        return _insert(self.db, "rl_decisions", _stamp(decision, self.clock).to_row(exclude={"id"}))
+
+    def list_for_strategy(self, strategy_id: str, *, since: datetime | None = None,
+                          until: datetime | None = None) -> list[RLDecisionRecord]:
+        sql = "SELECT * FROM rl_decisions WHERE mode = ? AND strategy_id = ?"
+        params: list[Any] = [self.mode.value, strategy_id]
+        if since is not None:
+            sql += " AND decided_at >= ?"
+            params.append(ensure_ist(since).isoformat())
+        if until is not None:
+            sql += " AND decided_at < ?"
+            params.append(ensure_ist(until).isoformat())
+        return [RLDecisionRecord.from_row(r) for r in self.db.query(sql + " ORDER BY id", params)]
+
+    def list_for_trade(self, trade_uid: str) -> list[RLDecisionRecord]:
+        rows = self.db.query("SELECT * FROM rl_decisions WHERE mode = ? AND trade_uid = ? ORDER BY id",
+                             (self.mode.value, trade_uid))
+        return [RLDecisionRecord.from_row(r) for r in rows]
+
+    def count(self) -> int:
+        row = self.db.query_one("SELECT COUNT(*) AS n FROM rl_decisions WHERE mode = ?", (self.mode.value,))
+        return int(row["n"]) if row else 0
+
+
+class TradeJournalRepository(_ModeScoped):
+    """Append-only trade journal (one row per closed trade)."""
+
+    def insert(self, entry: TradeJournalRecord) -> bool:
+        """Insert unless the trade is already journaled. True if inserted."""
+        self._guard(entry)
+        if self.get(entry.trade_uid) is not None:
+            return False
+        _insert(self.db, "trade_journal", _stamp(entry, self.clock).to_row(exclude={"id"}))
+        return True
+
+    def get(self, trade_uid: str) -> TradeJournalRecord | None:
+        row = self.db.query_one("SELECT * FROM trade_journal WHERE mode = ? AND trade_uid = ?",
+                                (self.mode.value, trade_uid))
+        return TradeJournalRecord.from_row(row) if row else None
+
+    def list(self, strategy_id: str | None = None, *, since: datetime | None = None,
+             until: datetime | None = None) -> list[TradeJournalRecord]:
+        """Entries by exit time, oldest first; ``until`` is exclusive."""
+        sql = "SELECT * FROM trade_journal WHERE mode = ?"
+        params: list[Any] = [self.mode.value]
+        if strategy_id is not None:
+            sql += " AND strategy_id = ?"
+            params.append(strategy_id)
+        if since is not None:
+            sql += " AND exit_time >= ?"
+            params.append(ensure_ist(since).isoformat())
+        if until is not None:
+            sql += " AND exit_time < ?"
+            params.append(ensure_ist(until).isoformat())
+        return [TradeJournalRecord.from_row(r) for r in self.db.query(sql + " ORDER BY exit_time, id", params)]
+
+    def journaled_uids(self) -> set[str]:
+        return {r["trade_uid"] for r in self.db.query("SELECT trade_uid FROM trade_journal WHERE mode = ?",
+                                                      (self.mode.value,))}
+
+
+class StrategyVersionRepository(_Clocked):
+    def insert(self, version: StrategyVersionRecord) -> int:
+        if version.status not in (StrategyVersionStatus.BASELINE, StrategyVersionStatus.CANDIDATE):
+            raise ValueError("new strategy versions start as BASELINE or CANDIDATE")
+        return _insert(self.db, "strategy_versions", _stamp(version, self.clock).to_row(exclude={"id"}))
+
+    def get(self, version_uid: str) -> StrategyVersionRecord | None:
+        row = self.db.query_one("SELECT * FROM strategy_versions WHERE version_uid = ?", (version_uid,))
+        return StrategyVersionRecord.from_row(row) if row else None
+
+    def find(self, strategy_id: str, version: str) -> StrategyVersionRecord | None:
+        row = self.db.query_one("SELECT * FROM strategy_versions WHERE strategy_id = ? AND version = ?",
+                                (strategy_id, version))
+        return StrategyVersionRecord.from_row(row) if row else None
+
+    def list(self, strategy_id: str | None = None,
+             statuses: Iterable[StrategyVersionStatus] | None = None) -> list[StrategyVersionRecord]:
+        sql = "SELECT * FROM strategy_versions WHERE 1 = 1"
+        params: list[Any] = []
+        if strategy_id is not None:
+            sql += " AND strategy_id = ?"
+            params.append(strategy_id)
+        wanted = [StrategyVersionStatus(x).value for x in statuses] if statuses is not None else None
+        if wanted is not None:
+            if not wanted:
+                return []
+            sql += f" AND status IN ({','.join('?' * len(wanted))})"
+            params.extend(wanted)
+        return [StrategyVersionRecord.from_row(r) for r in self.db.query(sql + " ORDER BY id", params)]
+
+    def versions(self, strategy_id: str) -> Sequence[str]:
+        return [r["version"] for r in self.db.query("SELECT version FROM strategy_versions WHERE strategy_id = ?",
+                                                    (strategy_id,))]
+
+    def set_status(self, version_uid: str, status: StrategyVersionStatus, *, reason: str,
+                   autonomy: AutonomyLevel | None = None, approved_by: str | None = None,
+                   evaluation: dict[str, Any] | None = None, evidence_source: EvidenceSource | None = None) -> None:
+        """Move a version to ``status``. The schema triggers enforce the allowed
+        transitions, HISTORICAL evidence for PAPER_READY and beyond, and the
+        autonomy level; the same rules are checked here first."""
+        status = StrategyVersionStatus(status)
+        current = self.get(version_uid)
+        if current is None:
+            raise NotFoundError(f"strategy version {version_uid!r} not found")
+        evidence = EvidenceSource(evidence_source) if evidence_source is not None else current.evidence_source
+        if status in REAL_EVIDENCE_VERSION_STATUSES and evidence is not EvidenceSource.HISTORICAL:
+            raise ValueError(f"{status.value} requires verification on HISTORICAL data (this one: {evidence.value})")
+        if status is StrategyVersionStatus.LIVE_APPROVED and not (approved_by or current.approved_by or "").strip():
+            raise ValueError("LIVE_APPROVED requires a named human approver")
+        fields: dict[str, Any] = {"status": status.value, "status_reason": reason[:2000],
+                                  "updated_at": self.now().isoformat()}
+        if autonomy is not None:
+            fields["autonomy_level"] = AutonomyLevel(autonomy).value
+        if approved_by is not None:
+            fields["approved_by"] = approved_by.strip()
+        if evaluation is not None:
+            fields["evaluation_json"] = json.dumps(evaluation, sort_keys=True, default=str)
+        if evidence_source is not None:
+            fields["evidence_source"] = evidence.value
+        sets = ", ".join(f"{_ident(k)} = ?" for k in fields)
+        self.db.execute(f"UPDATE strategy_versions SET {sets} WHERE version_uid = ?",  # noqa: S608
+                        (*fields.values(), version_uid))
+
+
+class StrategyDeploymentRepository(_Clocked):
+    """PAPER deployment history; the newest row per strategy is in force."""
+
+    def insert(self, deployment: StrategyDeploymentRecord) -> int:
+        if deployment.mode is not TradingMode.PAPER:
+            raise ValueError("only PAPER deployments can be recorded")
+        return _insert(self.db, "strategy_deployments", _stamp(deployment, self.clock).to_row(exclude={"id"}))
+
+    def current(self, strategy_id: str) -> StrategyDeploymentRecord | None:
+        row = self.db.query_one("SELECT * FROM strategy_deployments WHERE mode = 'PAPER' AND strategy_id = ? "
+                                "ORDER BY id DESC LIMIT 1", (strategy_id,))
+        return StrategyDeploymentRecord.from_row(row) if row else None
+
+    def history(self, strategy_id: str) -> list[StrategyDeploymentRecord]:
+        rows = self.db.query("SELECT * FROM strategy_deployments WHERE mode = 'PAPER' AND strategy_id = ? ORDER BY id",
+                             (strategy_id,))
+        return [StrategyDeploymentRecord.from_row(r) for r in rows]
 
 
 # --------------------------------------------------------------------------- #
@@ -598,6 +795,10 @@ class Repositories:
         self.learning_events = LearningEventRepository(db, clock=clock)
         self.commands = ControlCommandRepository(db, self.mode, clock=clock)
         self.runtime_state = RuntimeStateRepository(db, self.mode, clock=clock)
+        self.rl_decisions = RLDecisionRepository(db, self.mode, clock=clock)
+        self.journal = TradeJournalRepository(db, self.mode, clock=clock)
+        self.strategy_versions = StrategyVersionRepository(db, clock=clock)
+        self.deployments = StrategyDeploymentRepository(db, clock=clock)
 
     def with_clock(self, clock: Clock) -> Repositories:
         """The same database and mode, stamping timestamps with ``clock``."""
@@ -617,7 +818,11 @@ __all__: Sequence[str] = (
     "OrderRepository",
     "PositionRepository",
     "Repositories",
+    "RLDecisionRepository",
     "RiskEventRepository",
+    "StrategyDeploymentRepository",
     "StrategyRepository",
+    "StrategyVersionRepository",
+    "TradeJournalRepository",
     "TradeRepository",
 )
