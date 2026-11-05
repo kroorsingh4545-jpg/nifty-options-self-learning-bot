@@ -11,6 +11,11 @@
     # VALIDATED when every gate passes. Promotion is a separate, human step.
     python -m ml train --data path/to/dataset --strategy vwap_ema --kind signal_filter --events strategy
 
+    # RL trade manager (Phase 8): PPO, >= 5 seeds, walk-forward + holdout.
+    # SYNTHETIC -> research registry only (never promotable); a HISTORICAL
+    # dataset follows the same rules as above.
+    python -m ml train-rl --synthetic --lot-units 65 --days 60 --strategy vwap_ema --timesteps 30000
+
     # List registered runs
     python -m ml list [--research]
 """
@@ -99,6 +104,33 @@ def _train(args: argparse.Namespace) -> int:
     return 0
 
 
+def _train_rl(args: argparse.Namespace) -> int:
+    from ml.rl_agent import PPOParams, RLTrainingConfig, RLTrainingPipeline  # lazy: loads torch
+
+    cfg = load_config(Path(args.config_dir) if args.config_dir else None, use_default_env_file=False)
+    ds = _dataset(args, cfg)
+    registry = research_registry(cfg) if ds.is_synthetic else trading_registry(cfg)
+    tcfg = RLTrainingConfig(seeds=tuple(args.seeds), total_timesteps=args.timesteps,
+                            ppo=PPOParams(n_steps=args.n_steps), n_folds=args.folds, embargo_days=args.embargo_days,
+                            holdout_fraction=args.holdout, setups=args.events, grid_every_minutes=args.every)
+    print(f"{ds.source} dataset: {len(ds.days())} days; training PPO x {len(tcfg.seeds)} seeds "
+          f"({tcfg.n_folds} walk-forward folds + final fit), {tcfg.total_timesteps} steps each")
+    r = RLTrainingPipeline(cfg, registry).run(ds, args.strategy, tcfg)
+    print()
+    print(f"rl_trade_manager: {r.status.value} (gates passed: {r.gates_passed})")
+    print(f"  headline: {json.dumps(r.evaluation['headline'], default=str)}")
+    for name, g in r.evaluation["gates"].items():
+        print(f"  gate {'PASS' if g['passed'] else 'FAIL'}: {name} ({g['value']})")
+    reg = r.registered
+    if reg is not None:
+        print(f"  registered {reg.record.model_version} [{reg.record.data_source.value}] -> {reg.directory}")
+        print(f"  report: {reg.directory / 'evaluation_report.md'}")
+    if ds.is_synthetic:
+        print()
+        print("SYNTHETIC data: this RL model is a research artefact and can never be validated or promoted.")
+    return 0
+
+
 def _list(args: argparse.Namespace) -> int:
     cfg = load_config(Path(args.config_dir) if args.config_dir else None, use_default_env_file=False)
     reg = research_registry(cfg) if args.research else trading_registry(cfg)
@@ -129,6 +161,23 @@ def _parser() -> argparse.ArgumentParser:
     t.add_argument("--folds", type=int, default=5)
     t.add_argument("--embargo-minutes", type=int, default=60)
     t.add_argument("--holdout", type=float, default=0.2, help="fraction of days kept as the final holdout")
+    rl = sub.add_parser("train-rl", help="train / evaluate / register the PPO trade manager")
+    rl.add_argument("--config-dir")
+    rl.add_argument("--data", help="HISTORICAL dataset directory")
+    rl.add_argument("--synthetic", action="store_true", help="generate SYNTHETIC random-walk data instead")
+    rl.add_argument("--lot-units", type=int, help="contract size for the SYNTHETIC instrument list")
+    rl.add_argument("--days", type=int, default=60)
+    rl.add_argument("--seed", type=int, default=7)
+    rl.add_argument("--start", default="2026-07-01")
+    rl.add_argument("--strategy", required=True)
+    rl.add_argument("--events", choices=("grid", "strategy"), default="grid")
+    rl.add_argument("--every", type=int, default=15, help="grid setup spacing, minutes")
+    rl.add_argument("--timesteps", type=int, default=30_000, help="PPO steps per seed and fit")
+    rl.add_argument("--n-steps", type=int, default=512, help="PPO rollout length")
+    rl.add_argument("--seeds", type=int, nargs="+", default=[11, 23, 37, 41, 53])
+    rl.add_argument("--folds", type=int, default=2)
+    rl.add_argument("--embargo-days", type=int, default=1)
+    rl.add_argument("--holdout", type=float, default=0.2)
     ls = sub.add_parser("list", help="list registered model runs")
     ls.add_argument("--config-dir")
     ls.add_argument("--research", action="store_true", help="the SYNTHETIC / research registry")
@@ -137,7 +186,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    return _train(args) if args.command == "train" else _list(args)
+    return {"train": _train, "train-rl": _train_rl, "list": _list}[args.command](args)
 
 
 if __name__ == "__main__":

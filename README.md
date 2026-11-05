@@ -2,14 +2,32 @@
 
 A NIFTY weekly options intraday trading bot for Indian markets, using the Upstox Developer API.
 
-> **Status: Phase 7 (ML layer) complete.** On top of Phases 1–6: point-in-time features, triple-barrier labels,
-> LightGBM signal filter / outcome predictor / regime classifier with purged, embargoed walk-forward validation
-> over 5+ seeds, and a model registry. **There is no real historical data yet: every model so far is trained
-> on SYNTHETIC data and can never be promoted.** ML is off by default. PAPER is the default, and LIVE is
-> always refused in this build. **No real orders can be placed.** RL comes next.
+> **Status: Phase 8 (RL trade management) complete.** On top of Phases 1–7: a Stable-Baselines3 PPO trade
+> manager (Gymnasium environment, versioned reward, 5+ seeds, walk-forward + holdout, judged on equity,
+> drawdown and risk compliance). It can veto setups and tighten stops, take a partial profit or exit. It can
+> never touch loss limits, exposure, the kill switch, credentials or square-off timing. **There is no real
+> historical data yet: every ML and RL model so far is trained on SYNTHETIC data and can never be
+> promoted.** ML and RL are off by default. PAPER is the default, and LIVE is always refused in this build.
+> **No real orders can be placed.**
 > Roadmap: [`docs/build-plan.md`](docs/build-plan.md). ML: [`docs/ml-layer.md`](docs/ml-layer.md).
+> RL: [`docs/rl-layer.md`](docs/rl-layer.md).
 > Backtesting: [`docs/backtesting.md`](docs/backtesting.md). Dashboard: [`docs/dashboard.md`](docs/dashboard.md).
 > Strategies and engine: [`docs/strategies.md`](docs/strategies.md). Risk audits: [`docs/audits/`](docs/audits/).
+
+## RL trade manager (Phase 8)
+
+```bash
+python -m ml train-rl --synthetic --lot-units 65 --days 60 --strategy vwap_ema --timesteps 30000   # SYNTHETIC
+python -m ml train-rl --data path/to/dataset --strategy vwap_ema --events strategy                # your data
+```
+
+Discrete actions: HOLD, TIGHTEN_STOP, MOVE_STOP_TO_BREAKEVEN, TRAIL_STOP, TAKE_PARTIAL_PROFIT, EXIT_FULL,
+ENTER (valid setup only) and SKIP_SETUP. Stops only tighten. In training, a frozen risk envelope built from
+`risk_limits.yaml` sizes every entry and enforces the daily loss limit, trade caps, cooldown, the 14:45
+cut-off and the 15:10 square-off. In the bot, `PositionManager.apply_advice` re-validates every proposal,
+and the risk gate still checks every entry. RL is off per strategy (`rl.enabled: false`). See
+[`docs/rl-layer.md`](docs/rl-layer.md) for the environment, observation and action schemas, the reward and
+the evaluation plan.
 
 ## ML layer (Phase 7)
 

@@ -68,6 +68,9 @@ KINDS: dict[str, tuple[ModelType, type[Any]]] = {
     "outcome_predictor": (ModelType.OUTCOME_PREDICTOR, OutcomePredictor),
     "regime_classifier": (ModelType.REGIME_CLASSIFIER, RegimeClassifier),
 }
+#: The RL trade manager (Phase 8). Resolved lazily so that importing the
+#: registry never loads torch / Stable-Baselines3.
+RL_KIND = "rl_trade_manager"
 DEPLOYABLE: dict[TradingMode, frozenset[ModelRunStatus]] = {
     TradingMode.PAPER: frozenset({ModelRunStatus.PAPER_READY, ModelRunStatus.LIVE_CANDIDATE,
                                   ModelRunStatus.LIVE_APPROVED}),
@@ -90,6 +93,10 @@ def environment_info() -> dict[str, str]:
 
 
 def environment_version(env: Mapping[str, str]) -> str:
+    if env.get("kind") == "rl":
+        return (f"rl-pipeline-{env['pipeline']}|env-{env['rl_env']}|obs-{env['obs_schema']}|reward-{env['reward']}|"
+                f"py-{env['python']}|sb3-{env['stable_baselines3']}|torch-{env['torch']}|"
+                f"gymnasium-{env['gymnasium']}|numpy-{env['numpy']}")
     return (f"pipeline-{env['pipeline']}|features-{env['feature_schema']}|py-{env['python']}|"
             f"lightgbm-{env['lightgbm']}|numpy-{env['numpy']}|pandas-{env['pandas']}")
 
@@ -108,6 +115,24 @@ class LoadedModel:
     @property
     def kind(self) -> str:
         return str(self.manifest["model_kind"])
+
+
+def resolve_kind(kind: str) -> tuple[ModelType, type[Any]]:
+    if kind in KINDS:
+        return KINDS[kind]
+    if kind == RL_KIND:
+        from ml.rl_agent import PPOTradeManager  # lazy: torch is only loaded for RL models
+        return ModelType.RL_PPO, PPOTradeManager
+    raise RegistryError(f"unknown model kind {kind!r}")
+
+
+def expected_schema(kind: str) -> tuple[str, str | None]:
+    """(schema version, schema hash or None) the current code expects for ``kind``."""
+    if kind == RL_KIND:
+        from ml.rl_environment import obs_schema
+        s = obs_schema()
+        return str(s["version"]), str(s["hash"])
+    return FEATURE_SCHEMA_VERSION, None
 
 
 def _safe(part: str) -> str:
@@ -134,9 +159,7 @@ class ModelRegistry:
     def register(self, model: Any, *, kind: str, strategy_id: str | None, data_source: str, manifest: dict[str, Any],
                  report_md: str, status: ModelRunStatus = ModelRunStatus.TRAINED,
                  model_version: str | None = None) -> LoadedModel:
-        if kind not in KINDS:
-            raise RegistryError(f"unknown model kind {kind!r}")
-        model_type, cls = KINDS[kind]
+        model_type, cls = resolve_kind(kind)
         if not isinstance(model, cls):
             raise RegistryError(f"{kind} must be a {cls.__name__}")
         source = ModelDataSource(data_source)
@@ -197,14 +220,16 @@ class ModelRegistry:
                           ("data_source", rec.data_source.value), ("model_type", rec.model_type.value)):
             if manifest.get(key) != want:
                 raise RegistryError(f"manifest {key} {manifest.get(key)!r} does not match the registry ({want!r})")
-        if manifest["feature_schema"]["version"] != FEATURE_SCHEMA_VERSION:
+        want_version, want_hash = expected_schema(str(manifest.get("model_kind")))
+        got = manifest["feature_schema"]
+        if got["version"] != want_version or (want_hash is not None and got.get("hash") != want_hash):
             raise RegistryError(f"model uses feature schema {manifest['feature_schema']['version']}, this code "
-                                f"{FEATURE_SCHEMA_VERSION}")
+                                f"{want_version}")
         for name, digest in manifest["files"].items():
             path = directory / name
             if not path.is_file() or sha256_file(path) != digest:
                 raise RegistryError(f"artefact {name} of {run_id} is missing or was modified")
-        _, cls = KINDS[manifest["model_kind"]]
+        _, cls = resolve_kind(str(manifest["model_kind"]))
         try:
             model = cls.load(directory, manifest)
         except Exception as exc:
@@ -278,5 +303,6 @@ def _metrics_summary(evaluation: Mapping[str, Any]) -> dict[str, Any]:
     return {k: evaluation[k] for k in keys if k in evaluation}
 
 
-__all__ = ["DEPLOYABLE", "KINDS", "MANIFEST", "PIPELINE_VERSION", "REQUIRED_MANIFEST_KEYS", "LoadedModel",
-           "ModelRegistry", "RegistryError", "SyntheticModelError", "environment_info", "environment_version"]
+__all__ = ["DEPLOYABLE", "KINDS", "MANIFEST", "PIPELINE_VERSION", "REQUIRED_MANIFEST_KEYS", "RL_KIND", "LoadedModel",
+           "ModelRegistry", "RegistryError", "SyntheticModelError", "environment_info", "environment_version",
+           "expected_schema", "resolve_kind"]

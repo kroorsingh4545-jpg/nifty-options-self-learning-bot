@@ -405,8 +405,12 @@ class OrderManager:
                 rec = self.get(rec.client_order_id) or rec
                 if rec.status is OrderStatus.UNKNOWN:
                     break  # cannot safely retry -> escalate
-            if rec.status in (OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED, OrderStatus.SUBMITTED):
-                await self.cancel(rec.client_order_id)  # replace the remainder on the next attempt
+            if rec.status not in TERMINAL and not await self.cancel_confirmed(rec.client_order_id):
+                # The previous attempt may still be live at the broker: sending another exit
+                # could sell more than is held. Never re-send; escalate instead.
+                log.critical("exit order could not be cancelled; not re-sending",
+                             extra={"strategy_id": strategy_id, "order_id": rec.client_order_id})
+                break
             if remaining_qty() <= 0:
                 return True
             delay = backoff_delay(attempt, s.exit_retry_base_seconds, s.exit_retry_max_seconds)
@@ -416,9 +420,30 @@ class OrderManager:
             await self._sleep(delay)
         if remaining_qty() <= 0:
             return True
-        msg = (f"could not exit {remaining_qty()} x {instrument.trading_symbol} for {strategy_id} after "
-               f"{s.exit_max_attempts} attempts - MANUAL INTERVENTION REQUIRED")
+        self.escalate_exit_failure(strategy_id, f"could not exit {remaining_qty()} x {instrument.trading_symbol} "
+                                                f"for {strategy_id} after up to {s.exit_max_attempts} attempts")
+        return False
+
+    async def cancel_confirmed(self, client_order_id: str, *, attempts: int = 3) -> bool:
+        """Cancel and confirm the order is no longer live (terminal: CANCELLED,
+        COMPLETE or REJECTED), retrying with backoff. ``False`` means the order
+        may still be live at the broker, so nothing that depends on it being
+        gone (another SELL for the same quantity) may be sent."""
+        s = self.settings
+        for attempt in range(max(1, attempts)):
+            rec = await self.cancel(client_order_id)
+            if rec is None:
+                return False  # not an order we know: cannot confirm anything
+            if rec.status in TERMINAL:
+                return True
+            if attempt + 1 < attempts:
+                await self._sleep(backoff_delay(attempt, s.exit_retry_base_seconds, s.exit_retry_max_seconds))
+        log.critical("order cancel could not be confirmed", extra={"order_id": client_order_id})
+        return False
+
+    def escalate_exit_failure(self, strategy_id: str, detail: str) -> None:
+        """CRITICAL alert + risk event + kill switch (EXIT_FAILURE)."""
+        msg = f"{detail} - MANUAL INTERVENTION REQUIRED"
         self.alerts.send(Alert(RiskSeverity.CRITICAL, "EXIT FAILED", msg, strategy_id=strategy_id))
         self._risk_event("EXIT_FAILED", RiskSeverity.CRITICAL, msg, strategy_id)
         self.kill_switch.trigger(KillReason.EXIT_FAILURE, msg)
-        return False

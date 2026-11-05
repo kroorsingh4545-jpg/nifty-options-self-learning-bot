@@ -463,6 +463,22 @@ class MLConfig(_Frozen):
         return self
 
 
+class RLConfig(_Frozen):
+    """Per-strategy RL trade-manager bounds (Phase 8). The agent picks one of
+    a fixed set of discrete actions; these values bound what each action can
+    do. None of them touches daily loss limits, exposure caps, the kill
+    switch, credentials or square-off timing, which the agent never controls.
+    Stops only ever tighten, and ``risk/`` re-checks every action."""
+
+    enabled: bool = False
+    tighten_fraction: float = Field(default=0.25, gt=0.0, le=0.5)  # TIGHTEN: fraction of the stop-to-price gap
+    trail_distance_r: float = Field(default=0.5, ge=0.1, le=2.0)  # TRAIL: stop this many R below the price
+    partial_fraction: float = Field(default=0.5, gt=0.0, lt=1.0)  # TAKE_PARTIAL_PROFIT: share of open lots
+    max_partial_exits: int = Field(default=1, ge=0, le=3)
+    min_profit_r_for_partial: float = Field(default=0.5, ge=0.0, le=5.0)
+    decision_interval_minutes: int = Field(default=1, ge=1, le=15)
+
+
 class StrategyConfig(_Frozen):
     name: str = Field(min_length=1)
     version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
@@ -478,6 +494,7 @@ class StrategyConfig(_Frozen):
     trailing: TrailingConfig
     risk: StrategyRiskConfig
     ml: MLConfig = MLConfig()
+    rl: RLConfig = RLConfig()
 
 
 class StrategyDefaults(_Frozen):

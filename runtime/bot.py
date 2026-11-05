@@ -42,7 +42,7 @@ from core.clock import now_ist
 from core.engine import TradingEngine
 from core.enums import OptionType, OrderStatus, RiskSeverity, StrategyStatus, TradingMode
 from core.event_bus import EventBus
-from core.interfaces import PassThroughFilter, SignalFilter, StrategyProtocol
+from core.interfaces import ChainedFilter, PassThroughFilter, SignalFilter, StrategyProtocol
 from core.mode_controller import ModeController
 from core.models import Instrument, OrderRequest
 from core.scheduler import TradingScheduler
@@ -53,12 +53,14 @@ from data.market_data import MarketDataService
 from data.storage.repositories import Repositories
 from execution.stack import ExecutionStack, build_stack
 from ml.inference_service import InferenceService, StrategyModels
+from ml.model_registry import LoadedModel
 from monitoring.alerts import Alert
 from monitoring.json_logger import get_logger
 from runtime.contracts import OptionContractResolver, OptionUniverse
 from runtime.control import ControlService
 from runtime.gateway import RiskEntryGateway
 from runtime.ml import build_inference
+from runtime.rl import RLRuntime, build_rl
 from strategies.base_strategy import BaseStrategy
 from strategies.registry import STRATEGY_CLASSES
 
@@ -113,6 +115,8 @@ class TradingBot:
         wall_fn: Callable[[], datetime] = now_ist,
         ml_models: Mapping[str, StrategyModels] | None = None,
         ml_research: bool = False,
+        rl_models: Mapping[str, LoadedModel] | None = None,
+        rl_research: bool = False,
     ) -> None:
         if cfg.mode is not TradingMode.PAPER:
             raise RuntimeError("only PAPER mode can run in this build")
@@ -139,6 +143,10 @@ class TradingBot:
         self._ml_models = dict(ml_models or {})
         self._ml_research = ml_research
         self.inference: InferenceService | None = None
+        # Per-strategy RL trade managers (Phase 8; same model policy as ML).
+        self._rl_models = dict(rl_models or {})
+        self._rl_research = rl_research
+        self.rl: RLRuntime | None = None
         self.scheduler = scheduler or TradingScheduler()
         session = cfg.settings.market_session
         self.candles = CandleBuilder(session_open=session.market_open, session_close=session.market_close)
@@ -229,8 +237,11 @@ class TradingBot:
         enables ML (and no filter was injected). A strategy with ML enabled but
         no deployable model has every entry refused (fail-closed)."""
         enabled = [sid for sid, s in self.cfg.strategies.strategies.items() if s.ml.enabled]
-        if self._filter_injected or not enabled:
-            return
+        if not self._filter_injected and enabled:
+            self._attach_signal_filter(enabled)
+        self._attach_rl()
+
+    def _attach_signal_filter(self, enabled: list[str]) -> None:
         missing = [sid for sid in enabled if self._ml_models.get(sid) is None
                    or self._ml_models[sid].signal_filter is None]
         if missing:
@@ -240,6 +251,26 @@ class TradingBot:
         self.filter = self.inference
         log.info("ML signal filter attached", extra={"strategies": enabled, "research": self._ml_research,
                                                      "models": {k: v.versions() for k, v in self._ml_models.items()}})
+
+    def _attach_rl(self) -> None:
+        """RL trade manager for strategies with ``rl.enabled``. Its entry
+        decision is chained AFTER the signal filter (it can only veto); a
+        strategy with RL enabled but no deployable model has every entry
+        refused (fail-closed) and its open trades keep their configured
+        stop / target / trailing."""
+        enabled = [sid for sid, s in self.cfg.strategies.strategies.items() if s.rl.enabled]
+        if not enabled:
+            return
+        missing = [sid for sid in enabled if sid not in self._rl_models]
+        if missing:
+            log.critical("RL is enabled but no deployable RL model was loaded: entries for these strategies are "
+                         "refused (fail-closed)", extra={"strategies": missing})
+        features = self.inference.features if self.inference is not None else None
+        self.rl = build_rl(self, self._rl_models, research=self._rl_research, features=features)
+        self.filter = ChainedFilter(self.filter, self.rl.advisor)
+        log.info("RL trade manager attached", extra={"strategies": enabled, "research": self._rl_research,
+                                                     "models": {k: v.record.model_version
+                                                                for k, v in self._rl_models.items()}})
 
     def _paper_book_entries(self) -> list[BookEntry]:
         """Persisted PAPER orders + fills, oldest first, for the paper broker."""
@@ -420,4 +451,5 @@ class TradingBot:
             "open_trades": s.positions.open_trade_count(),
             "instruments": self.instrument_summary,
             "ml": dict(self.inference.last) if self.inference is not None else {},
+            "rl": {"last": dict(self.rl.advisor.last), "applied": self.rl.applied[-20:]} if self.rl else {},
         }

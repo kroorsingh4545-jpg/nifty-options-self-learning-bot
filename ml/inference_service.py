@@ -27,6 +27,11 @@ Model policy: production use accepts only HISTORICAL models in a deployable
 status (``ModelRegistry.load_production``). SYNTHETIC / research models are
 accepted only with ``research=True``, which is refused outside PAPER mode
 and meant for backtests on research data.
+
+Phase 8 adds ``RLTradeAdvisor``: the PPO trade manager. It vetoes entries
+(ENTER / SKIP_SETUP) and proposes HOLD / stop tightening / partial profit /
+full exit for open trades, under the same model policy. Its proposals are
+re-validated by ``execution.position_manager.PositionManager.apply_advice``.
 """
 
 from __future__ import annotations
@@ -39,14 +44,27 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from config.settings import BotConfig
-from core.clock import ensure_ist, now_ist
+from core.clock import IST, ensure_ist, now_ist
 from core.enums import ModelType, TradingMode
-from core.interfaces import FilterDecision
+from core.interfaces import FilterDecision, TradeAdvice, TradeAdviceAction
 from core.models import Signal
 from ml.feature_engineering import FeatureEngine, LookaheadError, OptionContext, PastOutcome, feature_vector
 from ml.feature_store import FeatureStore
-from ml.model_registry import LoadedModel, ModelRegistry, SyntheticModelError
+from ml.model_registry import RL_KIND, LoadedModel, ModelRegistry, SyntheticModelError
 from ml.regime_classifier import RuleBasedRegime
+from ml.rl_environment import (
+    STOP_ACTIONS,
+    AccountView,
+    Action,
+    PositionView,
+    RiskEnvelope,
+    SetupView,
+    action_mask,
+    build_observation,
+    observation_vector,
+    partial_lots,
+    proposed_stop,
+)
 from ml.signal_filter import FilterPolicy
 
 log = logging.getLogger(__name__)
@@ -203,4 +221,201 @@ class InferenceService:
             log.exception("could not record the ML feature snapshot", extra={"strategy_id": signal.strategy_id})
 
 
-__all__ = ["InferenceConfigError", "InferenceService", "StrategyModels", "load_strategy_models"]
+# --------------------------------------------------------------------------- #
+# RL trade manager (Phase 8)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class TradeContext:
+    """One OPEN trade as the runtime sees it (built from the position manager)."""
+
+    strategy_id: str
+    trade_uid: str
+    position: PositionView
+    option: OptionContext | None  # the trade's contract, with its latest quote (stamped <= as-of)
+    premium: float | None  # latest traded price of the contract
+    tick_size: float
+    account: AccountView
+
+
+AccountFn = Callable[[str], AccountView]
+
+
+def load_rl_models(registry: ModelRegistry, cfg: BotConfig, mode: TradingMode = TradingMode.PAPER
+                   ) -> dict[str, LoadedModel]:
+    """Production RL models (HISTORICAL, deployable) for every RL-enabled strategy."""
+    out: dict[str, LoadedModel] = {}
+    for sid, scfg in cfg.strategies.strategies.items():
+        if scfg.rl.enabled:
+            m = registry.load_production(ModelType.RL_PPO, sid, mode)
+            if m is not None:
+                out[sid] = m
+    return out
+
+
+class RLTradeAdvisor:
+    """The RL agent as a trade manager.
+
+    * ``evaluate(signal)`` (a ``SignalFilter``): ENTER approves the entry at
+      the size risk computes, SKIP_SETUP vetoes it. The agent can veto, never
+      create or enlarge an entry. Strategies without RL pass through.
+      RL enabled but no model / stale data / any error -> REFUSED.
+    * ``advise(ctx)``: HOLD / tighten the stop / partial profit / full exit
+      for an open trade, as a ``TradeAdvice`` that ``execution`` re-validates.
+      Any problem -> HOLD, which leaves the trade exactly as the deterministic
+      stop, target, trailing and square-off rules manage it.
+
+    It never sees or touches daily loss limits, exposure caps, the kill
+    switch, credentials or square-off timing. SYNTHETIC (research) models are
+    accepted only with ``research=True``, which is refused outside PAPER.
+    """
+
+    def __init__(self, cfg: BotConfig, *, features: FeatureEngine, models: Mapping[str, LoadedModel],
+                 option_context: OptionContextFn, account: AccountFn, outcomes: OutcomesFn,
+                 mode: TradingMode = TradingMode.PAPER, research: bool = False,
+                 max_bar_age: timedelta = timedelta(minutes=2), now_fn: Callable[[], datetime] = now_ist) -> None:
+        if research and TradingMode(mode) is not TradingMode.PAPER:
+            raise InferenceConfigError("research (SYNTHETIC) RL models are only allowed in PAPER mode")
+        for sid, m in models.items():
+            if m.kind != RL_KIND or m.record.model_type is not ModelType.RL_PPO:
+                raise InferenceConfigError(f"{sid}: expected an {RL_KIND} model, got {m.kind}")
+            if m.record.strategy_id != sid:
+                raise InferenceConfigError(f"{sid}: RL model {m.record.model_version} was trained for "
+                                           f"{m.record.strategy_id!r} (strategy model state is isolated)")
+            if m.is_synthetic and not research:
+                raise SyntheticModelError(f"{sid}: {m.record.model_version} was trained on "
+                                          f"{m.record.data_source.value} data and cannot be used for trading")
+        self.cfg = cfg
+        self.features = features
+        self.models = dict(models)
+        self._option_context = option_context
+        self._account = account
+        self._outcomes = outcomes
+        self.mode = TradingMode(mode)
+        self.research = research
+        self.max_bar_age = max_bar_age
+        self._now = now_fn
+        self.envelopes = {sid: RiskEnvelope.from_config(cfg, sid) for sid in self.models}
+        self.last: dict[str, dict[str, Any]] = {}  # strategy -> last decision (dashboard / audit)
+        self._last_advice: dict[str, datetime] = {}  # trade -> last decision time
+
+    def enabled(self, strategy_id: str) -> bool:
+        s = self.cfg.strategies.strategies.get(strategy_id)
+        return s is not None and s.rl.enabled
+
+    def due(self, trade_uid: str, strategy_id: str, as_of: datetime) -> bool:
+        """True when the strategy's decision interval has elapsed for this trade."""
+        last = self._last_advice.get(trade_uid)
+        interval = timedelta(minutes=self.cfg.strategies.strategies[strategy_id].rl.decision_interval_minutes)
+        return last is None or as_of - last >= interval - timedelta(seconds=1)
+
+    def _observation(self, sid: str, as_of: datetime, *, option: OptionContext | None, premium: float | None,
+                     position: PositionView | None, setup: SetupView | None, account: AccountView
+                     ) -> dict[str, float]:
+        market = self.features.features(as_of)
+        return build_observation(
+            market=market, spot=self.features.last_close(as_of),
+            session_open_price=self.features.session_open(as_of.astimezone(IST).date()), as_of=as_of,
+            times=self.features.times, no_new_entries_after=self.cfg.risk.time_rules.no_new_entries_after,
+            option=option, premium=premium, position=position, setup=setup, account=account,
+            outcomes=list(self._outcomes(sid))[-20:], regime=RuleBasedRegime.from_features(market))
+
+    def _stale(self, as_of: datetime) -> str | None:
+        last = self.features.last_bar_end
+        if last is None or as_of - last > self.max_bar_age:
+            return f"feature data stale (last NIFTY bar {last.isoformat() if last else None})"
+        return None
+
+    # Entry approval ------------------------------------------------------
+    def evaluate(self, signal: Signal) -> FilterDecision:
+        sid = signal.strategy_id
+        if not self.enabled(sid):
+            return FilterDecision(allow=True, score=None, size_multiplier=1.0, reason="RL disabled (pass-through)")
+        m = self.models.get(sid)
+        if m is None:
+            return self._veto(sid, signal.signal_id, "RL enabled but no deployable RL model (fail-closed)")
+        as_of = ensure_ist(self._now())
+        stale = self._stale(as_of)
+        if stale or as_of < signal.candle_end:
+            return self._veto(sid, signal.signal_id, stale or "signal is stamped after the decision time")
+        try:
+            option = self._option_context(signal, as_of)
+            raw = self._observation(sid, as_of, option=option, premium=option.premium if option else None,
+                                    position=None, setup=SetupView(signal.option_type, None),
+                                    account=self._account(sid))
+            action, info = m.model.act(observation_vector(raw), action_mask(False, True))
+        except LookaheadError as exc:
+            return self._veto(sid, signal.signal_id, f"lookahead guard: {exc}")
+        except Exception as exc:
+            log.exception("RL entry decision failed; entry refused (fail-closed)", extra={"strategy_id": sid})
+            return self._veto(sid, signal.signal_id, f"RL inference error: {type(exc).__name__}")
+        tag = f"[{m.record.model_version}]"
+        self.last[sid] = {"signal_id": signal.signal_id, "action": action.name, "decided_at": as_of.isoformat(),
+                          "model": m.record.model_version, "research": self.research, **info}
+        if action is Action.ENTER:
+            return FilterDecision(allow=True, score=None, size_multiplier=1.0, reason=f"RL ENTER {tag}")
+        return FilterDecision(allow=False, score=None, size_multiplier=0.0, reason=f"RL {action.name} {tag}")
+
+    def _veto(self, sid: str, signal_id: str, reason: str) -> FilterDecision:
+        self.last[sid] = {"signal_id": signal_id, "action": "VETO", "reason": reason}
+        log.warning("RL refused entry", extra={"strategy_id": sid, "reason": reason})
+        return FilterDecision(allow=False, score=None, size_multiplier=0.0, reason=reason)
+
+    # Trade management ----------------------------------------------------
+    def advise(self, ctx: TradeContext) -> TradeAdvice:
+        sid = ctx.strategy_id
+        as_of = ensure_ist(self._now())
+
+        def hold(reason: str) -> TradeAdvice:
+            self.last[sid] = {"trade": ctx.trade_uid, "action": "HOLD", "reason": reason,
+                              "decided_at": as_of.isoformat()}
+            return TradeAdvice(ctx.trade_uid, sid, TradeAdviceAction.HOLD, reason=reason)
+
+        if not self.enabled(sid):
+            return hold("RL disabled")
+        m = self.models.get(sid)
+        if m is None:
+            return hold("no RL model: the trade keeps its configured stop / target / trailing")
+        if as_of.time() >= self.cfg.risk.time_rules.square_off_start:
+            return hold("square-off window")
+        stale = self._stale(as_of)
+        if stale:
+            return hold(stale)
+        self._last_advice[ctx.trade_uid] = as_of
+        try:
+            raw = self._observation(sid, as_of, option=ctx.option, premium=ctx.premium, position=ctx.position,
+                                    setup=None, account=ctx.account)
+            action, info = m.model.act(observation_vector(raw), action_mask(True, False))
+        except Exception as exc:
+            log.exception("RL advice failed; holding (deterministic stops stay in force)", extra={"strategy_id": sid})
+            return hold(f"RL inference error: {type(exc).__name__}")
+        rules = self.cfg.strategies.strategies[sid].rl
+        price = ctx.premium or 0.0
+        tag, conf = m.record.model_version, float(info.get("confidence", 0.0))
+        self.last[sid] = {"trade": ctx.trade_uid, "action": action.name, "decided_at": as_of.isoformat(),
+                          "model": tag, "research": self.research, **info}
+        if action in STOP_ACTIONS:
+            new = proposed_stop(action, ctx.position, price, rules, ctx.tick_size)
+            if new is None:
+                return hold(f"{action.name} would not tighten")
+            return TradeAdvice(ctx.trade_uid, sid, TradeAdviceAction(action.name), new_stop=new,
+                               reason=f"RL {action.name}", confidence=conf, model_version=tag)
+        if action is Action.TAKE_PARTIAL_PROFIT:
+            lots = partial_lots(ctx.position, price, rules)
+            if lots is None:
+                return hold("partial profit not allowed now")
+            return TradeAdvice(ctx.trade_uid, sid, TradeAdviceAction.TAKE_PARTIAL_PROFIT, exit_lots=lots,
+                               reason="RL TAKE_PARTIAL_PROFIT", confidence=conf, model_version=tag)
+        if action is Action.EXIT_FULL:
+            return TradeAdvice(ctx.trade_uid, sid, TradeAdviceAction.EXIT_FULL, reason="RL EXIT_FULL",
+                               confidence=conf, model_version=tag)
+        return TradeAdvice(ctx.trade_uid, sid, TradeAdviceAction.HOLD, reason="RL HOLD", confidence=conf,
+                           model_version=tag)
+
+    def forget(self, trade_uid: str) -> None:
+        self._last_advice.pop(trade_uid, None)
+
+
+__all__ = ["InferenceConfigError", "InferenceService", "RLTradeAdvisor", "StrategyModels", "TradeContext",
+           "load_rl_models", "load_strategy_models"]

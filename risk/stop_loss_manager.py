@@ -26,6 +26,7 @@ class ExitReason(StrEnum):
     KILL_SWITCH = "KILL_SWITCH"
     MANUAL = "MANUAL"
     STRATEGY = "STRATEGY"
+    TRADE_MANAGER = "TRADE_MANAGER"  # the RL trade manager asked for a full exit (Phase 8)
 
 
 class StopWideningError(ValueError):

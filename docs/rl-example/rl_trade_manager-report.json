@@ -1,0 +1,1461 @@
+{
+ "model_kind": "rl_trade_manager",
+ "strategy_id": "vwap_ema",
+ "data_source": "SYNTHETIC",
+ "data_description": "SYNTHETIC random-walk data (seed 7, 60 days from 2026-07-01); NOT real NIFTY prices",
+ "synthetic": true,
+ "windows": {
+  "development": [
+   "2026-07-02",
+   "2026-09-03",
+   33
+  ],
+  "holdout": [
+   "2026-09-07",
+   "2026-09-23",
+   8
+  ],
+  "embargo_days": 1
+ },
+ "setups": {
+  "source": "grid",
+  "dropped": {
+   "premium outside strategy bounds": 410
+  }
+ },
+ "walk_forward": [
+  {
+   "fold": 0,
+   "train": [
+    "2026-07-02",
+    "2026-07-21",
+    11
+   ],
+   "test": [
+    "2026-07-27",
+    "2026-08-17",
+    10
+   ],
+   "seeds": {
+    "11": {
+     "days": 10,
+     "decisions": 160,
+     "trades": 23,
+     "wins": 12,
+     "win_rate_pct": 52.17,
+     "profit_factor": 0.468,
+     "expectancy": -143.15,
+     "net_pnl": -3292.39,
+     "gross_pnl": -1790.75,
+     "charges": 1501.64,
+     "slippage": 247.0,
+     "max_drawdown": 4544.26,
+     "worst_day": -3212.58,
+     "avg_r_multiple": -0.0554,
+     "avg_win": 241.56,
+     "avg_loss": -562.83,
+     "avg_holding_minutes": 2.74,
+     "exit_reasons": {
+      "RL_EXIT": 20,
+      "STOP_LOSS": 2,
+      "TRAILING_STOP": 1
+     },
+     "partial_exits": 0,
+     "actions": {
+      "SKIP_SETUP": 77,
+      "ENTER": 23,
+      "EXIT_FULL": 20,
+      "MOVE_STOP_TO_BREAKEVEN": 38,
+      "TIGHTEN_STOP": 2
+     },
+     "invalid_actions": 0,
+     "invalid_action_rate": 0.0,
+     "reward": {
+      "realized_trade_return": -0.7719,
+      "transaction_costs": 0.7508,
+      "slippage_penalty": 0.1235,
+      "drawdown_penalty": 2.0198,
+      "excessive_holding_penalty": 0.0,
+      "risk_limit_violation_penalty": 0.0,
+      "overtrading_penalty": 1.15,
+      "total": -4.816
+     },
+     "daily_pnl": {
+      "2026-07-27": -5.21,
+      "2026-07-28": 439.52,
+      "2026-07-29": 136.86,
+      "2026-08-03": 122.63,
+      "2026-08-04": -231.36,
+      "2026-08-06": 0.0,
+      "2026-08-07": -705.13,
+      "2026-08-10": 0.0,
+      "2026-08-12": 162.88,
+      "2026-08-17": -3212.58
+     },
+     "compliance": {
+      "every trade has a stop below entry": "OK",
+      "stops never widened": "OK",
+      "entries inside the window and before 14:45": "OK",
+      "flat by the 15:10 square-off start": "OK",
+      "at most 4 trades per day": "OK",
+      "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+      "size within the per-trade risk budget": "OK",
+      "day loss within the daily loss limit (gaps can overshoot)": "OK",
+      "loss per trade within the risk budget (gaps can overshoot)": "OK"
+     }
+    },
+    "23": {
+     "days": 10,
+     "decisions": 90,
+     "trades": 34,
+     "wins": 16,
+     "win_rate_pct": 47.06,
+     "profit_factor": 0.665,
+     "expectancy": -73.88,
+     "net_pnl": -2511.75,
+     "gross_pnl": -269.75,
+     "charges": 2242.0,
+     "slippage": 331.5,
+     "max_drawdown": 4244.81,
+     "worst_day": -2498.99,
+     "avg_r_multiple": -0.0279,
+     "avg_win": 311.63,
+     "avg_loss": -416.55,
+     "avg_holding_minutes": 1.53,
+     "exit_reasons": {
+      "RL_EXIT": 31,
+      "TRAILING_STOP": 3
+     },
+     "partial_exits": 0,
+     "actions": {
+      "ENTER": 34,
+      "EXIT_FULL": 31,
+      "SKIP_SETUP": 7,
+      "TIGHTEN_STOP": 15,
+      "MOVE_STOP_TO_BREAKEVEN": 3
+     },
+     "invalid_actions": 0,
+     "invalid_action_rate": 0.0,
+     "reward": {
+      "realized_trade_return": 0.0309,
+      "transaction_costs": 1.121,
+      "slippage_penalty": 0.1658,
+      "drawdown_penalty": 2.0914,
+      "excessive_holding_penalty": 0.0,
+      "risk_limit_violation_penalty": 0.0,
+      "overtrading_penalty": 1.7,
+      "total": -5.0473
+     },
+     "daily_pnl": {
+      "2026-07-27": 987.18,
+      "2026-07-28": -845.02,
+      "2026-07-29": 629.2,
+      "2026-08-03": 775.05,
+      "2026-08-04": 11.92,
+      "2026-08-06": 174.73,
+      "2026-08-07": -1071.67,
+      "2026-08-10": -569.95,
+      "2026-08-12": -104.2,
+      "2026-08-17": -2498.99
+     },
+     "compliance": {
+      "every trade has a stop below entry": "OK",
+      "stops never widened": "OK",
+      "entries inside the window and before 14:45": "OK",
+      "flat by the 15:10 square-off start": "OK",
+      "at most 4 trades per day": "OK",
+      "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+      "size within the per-trade risk budget": "OK",
+      "day loss within the daily loss limit (gaps can overshoot)": "OK",
+      "loss per trade within the risk budget (gaps can overshoot)": "OK"
+     }
+    },
+    "37": {
+     "days": 10,
+     "decisions": 82,
+     "trades": 34,
+     "wins": 17,
+     "win_rate_pct": 50.0,
+     "profit_factor": 0.804,
+     "expectancy": -41.97,
+     "net_pnl": -1427.1,
+     "gross_pnl": 819.0,
+     "charges": 2246.1,
+     "slippage": 331.5,
+     "max_drawdown": 3450.85,
+     "worst_day": -2936.9,
+     "avg_r_multiple": 0.0141,
+     "avg_win": 344.49,
+     "avg_loss": -428.44,
+     "avg_holding_minutes": 1.35,
+     "exit_reasons": {
+      "RL_EXIT": 32,
+      "STOP_LOSS": 2
+     },
+     "partial_exits": 0,
+     "actions": {
+      "ENTER": 34,
+      "EXIT_FULL": 32,
+      "HOLD": 12,
+      "SKIP_SETUP": 4
+     },
+     "invalid_actions": 0,
+     "invalid_action_rate": 0.0,
+     "reward": {
+      "realized_trade_return": 0.5753,
+      "transaction_costs": 1.1231,
+      "slippage_penalty": 0.1658,
+      "drawdown_penalty": 2.1626,
+      "excessive_holding_penalty": 0.0,
+      "risk_limit_violation_penalty": 0.0,
+      "overtrading_penalty": 1.7,
+      "total": -4.5762
+     },
+     "daily_pnl": {
+      "2026-07-27": 768.09,
+      "2026-07-28": 439.52,
+      "2026-07-29": 629.2,
+      "2026-08-03": -2076.34,
+      "2026-08-04": 1539.75,
+      "2026-08-06": 307.72,
+      "2026-08-07": -517.01,
+      "2026-08-10": 380.35,
+      "2026-08-12": 38.52,
+      "2026-08-17": -2936.9
+     },
+     "compliance": {
+      "every trade has a stop below entry": "OK",
+      "stops never widened": "OK",
+      "entries inside the window and before 14:45": "OK",
+      "flat by the 15:10 square-off start": "OK",
+      "at most 4 trades per day": "OK",
+      "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+      "size within the per-trade risk budget": "OK",
+      "day loss within the daily loss limit (gaps can overshoot)": "OK",
+      "loss per trade within the risk budget (gaps can overshoot)": "OK"
+     }
+    },
+    "41": {
+     "days": 10,
+     "decisions": 171,
+     "trades": 26,
+     "wins": 14,
+     "win_rate_pct": 53.85,
+     "profit_factor": 1.538,
+     "expectancy": 141.98,
+     "net_pnl": 3691.37,
+     "gross_pnl": 5414.5,
+     "charges": 1723.13,
+     "slippage": 260.0,
+     "max_drawdown": 3649.28,
+     "worst_day": -1813.6,
+     "avg_r_multiple": 0.1259,
+     "avg_win": 753.85,
+     "avg_loss": -571.88,
+     "avg_holding_minutes": 4.08,
+     "exit_reasons": {
+      "RL_EXIT": 17,
+      "STOP_LOSS": 2,
+      "TARGET": 1,
+      "TRAILING_STOP": 6
+     },
+     "partial_exits": 0,
+     "actions": {
+      "ENTER": 26,
+      "HOLD": 22,
+      "TRAIL_STOP": 9,
+      "EXIT_FULL": 17,
+      "SKIP_SETUP": 48,
+      "TIGHTEN_STOP": 4,
+      "MOVE_STOP_TO_BREAKEVEN": 37,
+      "TAKE_PARTIAL_PROFIT": 8
+     },
+     "invalid_actions": 0,
+     "invalid_action_rate": 0.0,
+     "reward": {
+      "realized_trade_return": 2.8373,
+      "transaction_costs": 0.8616,
+      "slippage_penalty": 0.13,
+      "drawdown_penalty": 2.1336,
+      "excessive_holding_penalty": 0.0,
+      "risk_limit_violation_penalty": 0.0,
+      "overtrading_penalty": 1.3,
+      "total": -1.5879
+     },
+     "daily_pnl": {
+      "2026-07-27": 51.23,
+      "2026-07-28": 0.0,
+      "2026-07-29": 64.32,
+      "2026-08-03": -1813.6,
+      "2026-08-04": 0.0,
+      "2026-08-06": 0.0,
+      "2026-08-07": 1067.82,
+      "2026-08-10": -486.57,
+      "2026-08-12": 2667.82,
+      "2026-08-17": 2140.35
+     },
+     "compliance": {
+      "every trade has a stop below entry": "OK",
+      "stops never widened": "OK",
+      "entries inside the window and before 14:45": "OK",
+      "flat by the 15:10 square-off start": "OK",
+      "at most 4 trades per day": "OK",
+      "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+      "size within the per-trade risk budget": "OK",
+      "day loss within the daily loss limit (gaps can overshoot)": "OK",
+      "loss per trade within the risk budget (gaps can overshoot)": "OK"
+     }
+    },
+    "53": {
+     "days": 10,
+     "decisions": 122,
+     "trades": 32,
+     "wins": 13,
+     "win_rate_pct": 40.62,
+     "profit_factor": 0.45,
+     "expectancy": -138.59,
+     "net_pnl": -4434.8,
+     "gross_pnl": -2336.75,
+     "charges": 2098.05,
+     "slippage": 318.5,
+     "max_drawdown": 5644.04,
+     "worst_day": -1784.39,
+     "avg_r_multiple": -0.0543,
+     "avg_win": 279.2,
+     "avg_loss": -424.44,
+     "avg_holding_minutes": 2.41,
+     "exit_reasons": {
+      "RL_EXIT": 28,
+      "TRAILING_STOP": 4
+     },
+     "partial_exits": 0,
+     "actions": {
+      "ENTER": 32,
+      "EXIT_FULL": 28,
+      "TRAIL_STOP": 4,
+      "SKIP_SETUP": 17,
+      "TIGHTEN_STOP": 25,
+      "HOLD": 8,
+      "MOVE_STOP_TO_BREAKEVEN": 8
+     },
+     "invalid_actions": 0,
+     "invalid_action_rate": 0.0,
+     "reward": {
+      "realized_trade_return": -1.0091,
+      "transaction_costs": 1.049,
+      "slippage_penalty": 0.1593,
+      "drawdown_penalty": 2.4326,
+      "excessive_holding_penalty": 0.0,
+      "risk_limit_violation_penalty": 0.0,
+      "overtrading_penalty": 1.6,
+      "total": -6.25
+     },
+     "daily_pnl": {
+      "2026-07-27": 1209.24,
+      "2026-07-28": -845.02,
+      "2026-07-29": -298.85,
+      "2026-08-03": -1784.39,
+      "2026-08-04": -231.36,
+      "2026-08-06": 1258.7,
+      "2026-08-07": -1130.06,
+      "2026-08-10": -82.08,
+      "2026-08-12": -829.96,
+      "2026-08-17": -1701.02
+     },
+     "compliance": {
+      "every trade has a stop below entry": "OK",
+      "stops never widened": "OK",
+      "entries inside the window and before 14:45": "OK",
+      "flat by the 15:10 square-off start": "OK",
+      "at most 4 trades per day": "OK",
+      "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+      "size within the per-trade risk budget": "OK",
+      "day loss within the daily loss limit (gaps can overshoot)": "OK",
+      "loss per trade within the risk budget (gaps can overshoot)": "OK"
+     }
+    }
+   },
+   "baseline_static": {
+    "days": 10,
+    "decisions": 1174,
+    "trades": 27,
+    "wins": 12,
+    "win_rate_pct": 44.44,
+    "profit_factor": 1.585,
+    "expectancy": 496.24,
+    "net_pnl": 13398.46,
+    "gross_pnl": 15203.5,
+    "charges": 1805.04,
+    "slippage": 331.5,
+    "max_drawdown": 9239.96,
+    "worst_day": -3744.07,
+    "avg_r_multiple": 0.258,
+    "avg_win": 3026.07,
+    "avg_loss": -1527.62,
+    "avg_holding_minutes": 43.48,
+    "exit_reasons": {
+     "STOP_LOSS": 15,
+     "TARGET": 11,
+     "SQUARE_OFF": 1
+    },
+    "partial_exits": 0,
+    "actions": {
+     "ENTER": 27,
+     "HOLD": 1147
+    },
+    "invalid_actions": 0,
+    "invalid_action_rate": 0.0,
+    "reward": {
+     "realized_trade_return": 7.7675,
+     "transaction_costs": 0.9025,
+     "slippage_penalty": 0.1658,
+     "drawdown_penalty": 8.2739,
+     "excessive_holding_penalty": 0.936,
+     "risk_limit_violation_penalty": 0.0,
+     "overtrading_penalty": 1.35,
+     "total": -3.8607
+    },
+    "daily_pnl": {
+     "2026-07-27": -3308.8,
+     "2026-07-28": 3174.03,
+     "2026-07-29": -2065.66,
+     "2026-08-03": 2832.58,
+     "2026-08-04": 12386.72,
+     "2026-08-06": 59.56,
+     "2026-08-07": 4132.02,
+     "2026-08-10": -3728.9,
+     "2026-08-12": -3744.07,
+     "2026-08-17": 3660.98
+    },
+    "compliance": {
+     "every trade has a stop below entry": "OK",
+     "stops never widened": "OK",
+     "entries inside the window and before 14:45": "OK",
+     "flat by the 15:10 square-off start": "OK",
+     "at most 4 trades per day": "OK",
+     "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+     "size within the per-trade risk budget": "OK",
+     "day loss within the daily loss limit (gaps can overshoot)": "OK",
+     "loss per trade within the risk budget (gaps can overshoot)": "OK"
+    }
+   },
+   "seed_spread_net_pnl": {
+    "mean": -1594.93,
+    "std": 3152.77,
+    "min": -4434.8,
+    "max": 3691.37,
+    "n": 5
+   }
+  },
+  {
+   "fold": 1,
+   "train": [
+    "2026-07-02",
+    "2026-08-17",
+    22
+   ],
+   "test": [
+    "2026-08-19",
+    "2026-09-03",
+    10
+   ],
+   "seeds": {
+    "11": {
+     "days": 10,
+     "decisions": 225,
+     "trades": 31,
+     "wins": 12,
+     "win_rate_pct": 38.71,
+     "profit_factor": 0.281,
+     "expectancy": -242.35,
+     "net_pnl": -7512.91,
+     "gross_pnl": -5482.75,
+     "charges": 2030.16,
+     "slippage": 227.5,
+     "max_drawdown": 9027.89,
+     "worst_day": -3740.8,
+     "avg_r_multiple": -0.1109,
+     "avg_win": 244.6,
+     "avg_loss": -549.9,
+     "avg_holding_minutes": 6.39,
+     "exit_reasons": {
+      "RL_EXIT": 21,
+      "TRAILING_STOP": 6,
+      "STOP_LOSS": 4
+     },
+     "partial_exits": 0,
+     "actions": {
+      "ENTER": 31,
+      "TAKE_PARTIAL_PROFIT": 109,
+      "EXIT_FULL": 21,
+      "MOVE_STOP_TO_BREAKEVEN": 12,
+      "TRAIL_STOP": 40,
+      "SKIP_SETUP": 6,
+      "TIGHTEN_STOP": 6
+     },
+     "invalid_actions": 0,
+     "invalid_action_rate": 0.0,
+     "reward": {
+      "realized_trade_return": -2.6276,
+      "transaction_costs": 1.0151,
+      "slippage_penalty": 0.1137,
+      "drawdown_penalty": 3.1689,
+      "excessive_holding_penalty": 0.0,
+      "risk_limit_violation_penalty": 0.0,
+      "overtrading_penalty": 1.55,
+      "total": -8.4753
+     },
+     "daily_pnl": {
+      "2026-08-19": 1041.34,
+      "2026-08-20": 132.92,
+      "2026-08-21": -220.37,
+      "2026-08-24": 273.99,
+      "2026-08-25": -2177.08,
+      "2026-08-28": -3740.8,
+      "2026-08-31": -1078.11,
+      "2026-09-01": 0.0,
+      "2026-09-02": -1696.46,
+      "2026-09-03": -48.34
+     },
+     "compliance": {
+      "every trade has a stop below entry": "OK",
+      "stops never widened": "OK",
+      "entries inside the window and before 14:45": "OK",
+      "flat by the 15:10 square-off start": "OK",
+      "at most 4 trades per day": "OK",
+      "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+      "size within the per-trade risk budget": "OK",
+      "day loss within the daily loss limit (gaps can overshoot)": "OK",
+      "loss per trade within the risk budget (gaps can overshoot)": "OK"
+     }
+    },
+    "23": {
+     "days": 10,
+     "decisions": 170,
+     "trades": 32,
+     "wins": 13,
+     "win_rate_pct": 40.62,
+     "profit_factor": 0.685,
+     "expectancy": -57.06,
+     "net_pnl": -1826.05,
+     "gross_pnl": 282.75,
+     "charges": 2108.8,
+     "slippage": 214.5,
+     "max_drawdown": 2600.53,
+     "worst_day": -1335.88,
+     "avg_r_multiple": 0.0097,
+     "avg_win": 305.9,
+     "avg_loss": -305.41,
+     "avg_holding_minutes": 3.31,
+     "exit_reasons": {
+      "TRAILING_STOP": 10,
+      "RL_EXIT": 22
+     },
+     "partial_exits": 0,
+     "actions": {
+      "ENTER": 32,
+      "HOLD": 5,
+      "MOVE_STOP_TO_BREAKEVEN": 30,
+      "TRAIL_STOP": 2,
+      "EXIT_FULL": 22,
+      "SKIP_SETUP": 41,
+      "TIGHTEN_STOP": 38
+     },
+     "invalid_actions": 0,
+     "invalid_action_rate": 0.0,
+     "reward": {
+      "realized_trade_return": 0.2486,
+      "transaction_costs": 1.0544,
+      "slippage_penalty": 0.1073,
+      "drawdown_penalty": 2.075,
+      "excessive_holding_penalty": 0.0,
+      "risk_limit_violation_penalty": 0.0,
+      "overtrading_penalty": 1.6,
+      "total": -4.588
+     },
+     "daily_pnl": {
+      "2026-08-19": -50.8,
+      "2026-08-20": -517.74,
+      "2026-08-21": 77.36,
+      "2026-08-24": -1335.88,
+      "2026-08-25": 0.0,
+      "2026-08-28": -576.56,
+      "2026-08-31": 288.89,
+      "2026-09-01": 0.0,
+      "2026-09-02": 499.21,
+      "2026-09-03": -210.53
+     },
+     "compliance": {
+      "every trade has a stop below entry": "OK",
+      "stops never widened": "OK",
+      "entries inside the window and before 14:45": "OK",
+      "flat by the 15:10 square-off start": "OK",
+      "at most 4 trades per day": "OK",
+      "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+      "size within the per-trade risk budget": "OK",
+      "day loss within the daily loss limit (gaps can overshoot)": "OK",
+      "loss per trade within the risk budget (gaps can overshoot)": "OK"
+     }
+    },
+    "37": {
+     "days": 10,
+     "decisions": 94,
+     "trades": 34,
+     "wins": 19,
+     "win_rate_pct": 55.88,
+     "profit_factor": 1.489,
+     "expectancy": 64.16,
+     "net_pnl": 2181.34,
+     "gross_pnl": 4439.5,
+     "charges": 2258.16,
+     "slippage": 247.0,
+     "max_drawdown": 1312.36,
+     "worst_day": -692.31,
+     "avg_r_multiple": 0.0677,
+     "avg_win": 349.8,
+     "avg_loss": -297.66,
+     "avg_holding_minutes": 1.62,
+     "exit_reasons": {
+      "RL_EXIT": 31,
+      "TRAILING_STOP": 3
+     },
+     "partial_exits": 0,
+     "actions": {
+      "ENTER": 34,
+      "TIGHTEN_STOP": 13,
+      "EXIT_FULL": 31,
+      "SKIP_SETUP": 8,
+      "TRAIL_STOP": 5,
+      "TAKE_PARTIAL_PROFIT": 3
+     },
+     "invalid_actions": 0,
+     "invalid_action_rate": 0.0,
+     "reward": {
+      "realized_trade_return": 2.3432,
+      "transaction_costs": 1.1291,
+      "slippage_penalty": 0.1235,
+      "drawdown_penalty": 1.374,
+      "excessive_holding_penalty": 0.0,
+      "risk_limit_violation_penalty": 0.0,
+      "overtrading_penalty": 1.7,
+      "total": -1.9834
+     },
+     "daily_pnl": {
+      "2026-08-19": 470.42,
+      "2026-08-20": 500.01,
+      "2026-08-21": 418.66,
+      "2026-08-24": -614.47,
+      "2026-08-25": 1977.25,
+      "2026-08-28": -404.0,
+      "2026-08-31": -692.31,
+      "2026-09-01": 972.79,
+      "2026-09-02": -236.48,
+      "2026-09-03": -210.53
+     },
+     "compliance": {
+      "every trade has a stop below entry": "OK",
+      "stops never widened": "OK",
+      "entries inside the window and before 14:45": "OK",
+      "flat by the 15:10 square-off start": "OK",
+      "at most 4 trades per day": "OK",
+      "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+      "size within the per-trade risk budget": "OK",
+      "day loss within the daily loss limit (gaps can overshoot)": "OK",
+      "loss per trade within the risk budget (gaps can overshoot)": "OK"
+     }
+    },
+    "41": {
+     "days": 10,
+     "decisions": 98,
+     "trades": 30,
+     "wins": 11,
+     "win_rate_pct": 36.67,
+     "profit_factor": 0.375,
+     "expectancy": -129.2,
+     "net_pnl": -3876.01,
+     "gross_pnl": -1907.75,
+     "charges": 1968.26,
+     "slippage": 195.0,
+     "max_drawdown": 4675.87,
+     "worst_day": -1975.59,
+     "avg_r_multiple": -0.0374,
+     "avg_win": 211.23,
+     "avg_loss": -326.29,
+     "avg_holding_minutes": 2.23,
+     "exit_reasons": {
+      "RL_EXIT": 23,
+      "TRAILING_STOP": 7
+     },
+     "partial_exits": 0,
+     "actions": {
+      "ENTER": 30,
+      "MOVE_STOP_TO_BREAKEVEN": 17,
+      "EXIT_FULL": 23,
+      "TIGHTEN_STOP": 1,
+      "TRAIL_STOP": 18,
+      "SKIP_SETUP": 8,
+      "TAKE_PARTIAL_PROFIT": 1
+     },
+     "invalid_actions": 0,
+     "invalid_action_rate": 0.0,
+     "reward": {
+      "realized_trade_return": -0.8564,
+      "transaction_costs": 0.9841,
+      "slippage_penalty": 0.0975,
+      "drawdown_penalty": 1.8057,
+      "excessive_holding_penalty": 0.0,
+      "risk_limit_violation_penalty": 0.0,
+      "overtrading_penalty": 1.5,
+      "total": -5.2437
+     },
+     "daily_pnl": {
+      "2026-08-19": 470.42,
+      "2026-08-20": -158.15,
+      "2026-08-21": -322.2,
+      "2026-08-24": -66.62,
+      "2026-08-25": 0.0,
+      "2026-08-28": -1975.59,
+      "2026-08-31": -617.69,
+      "2026-09-01": 0.0,
+      "2026-09-02": -995.65,
+      "2026-09-03": -210.53
+     },
+     "compliance": {
+      "every trade has a stop below entry": "OK",
+      "stops never widened": "OK",
+      "entries inside the window and before 14:45": "OK",
+      "flat by the 15:10 square-off start": "OK",
+      "at most 4 trades per day": "OK",
+      "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+      "size within the per-trade risk budget": "OK",
+      "day loss within the daily loss limit (gaps can overshoot)": "OK",
+      "loss per trade within the risk budget (gaps can overshoot)": "OK"
+     }
+    },
+    "53": {
+     "days": 10,
+     "decisions": 237,
+     "trades": 11,
+     "wins": 5,
+     "win_rate_pct": 45.45,
+     "profit_factor": 0.863,
+     "expectancy": -21.31,
+     "net_pnl": -234.36,
+     "gross_pnl": 497.25,
+     "charges": 731.61,
+     "slippage": 71.5,
+     "max_drawdown": 1174.99,
+     "worst_day": -785.78,
+     "avg_r_multiple": 0.0329,
+     "avg_win": 295.52,
+     "avg_loss": -285.33,
+     "avg_holding_minutes": 1.18,
+     "exit_reasons": {
+      "RL_EXIT": 11
+     },
+     "partial_exits": 0,
+     "actions": {
+      "SKIP_SETUP": 213,
+      "ENTER": 11,
+      "EXIT_FULL": 11,
+      "MOVE_STOP_TO_BREAKEVEN": 2
+     },
+     "invalid_actions": 0,
+     "invalid_action_rate": 0.0,
+     "reward": {
+      "realized_trade_return": 0.2844,
+      "transaction_costs": 0.3658,
+      "slippage_penalty": 0.0358,
+      "drawdown_penalty": 0.4138,
+      "excessive_holding_penalty": 0.0,
+      "risk_limit_violation_penalty": 0.0,
+      "overtrading_penalty": 0.55,
+      "total": -1.081
+     },
+     "daily_pnl": {
+      "2026-08-19": 0.0,
+      "2026-08-20": 0.0,
+      "2026-08-21": 0.0,
+      "2026-08-24": 169.84,
+      "2026-08-25": 0.0,
+      "2026-08-28": -785.78,
+      "2026-08-31": 0.0,
+      "2026-09-01": 0.0,
+      "2026-09-02": 0.0,
+      "2026-09-03": 381.58
+     },
+     "compliance": {
+      "every trade has a stop below entry": "OK",
+      "stops never widened": "OK",
+      "entries inside the window and before 14:45": "OK",
+      "flat by the 15:10 square-off start": "OK",
+      "at most 4 trades per day": "OK",
+      "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+      "size within the per-trade risk budget": "OK",
+      "day loss within the daily loss limit (gaps can overshoot)": "OK",
+      "loss per trade within the risk budget (gaps can overshoot)": "OK"
+     }
+    }
+   },
+   "baseline_static": {
+    "days": 10,
+    "decisions": 1917,
+    "trades": 23,
+    "wins": 8,
+    "win_rate_pct": 34.78,
+    "profit_factor": 0.968,
+    "expectancy": -28.91,
+    "net_pnl": -664.95,
+    "gross_pnl": 848.25,
+    "charges": 1513.2,
+    "slippage": 201.5,
+    "max_drawdown": 11068.82,
+    "worst_day": -3740.8,
+    "avg_r_multiple": 0.071,
+    "avg_win": 2551.86,
+    "avg_loss": -1405.32,
+    "avg_holding_minutes": 83.35,
+    "exit_reasons": {
+     "STOP_LOSS": 12,
+     "SQUARE_OFF": 4,
+     "TARGET": 7
+    },
+    "partial_exits": 0,
+    "actions": {
+     "ENTER": 23,
+     "HOLD": 1894
+    },
+    "invalid_actions": 0,
+    "invalid_action_rate": 0.0,
+    "reward": {
+     "realized_trade_return": 0.5249,
+     "transaction_costs": 0.7566,
+     "slippage_penalty": 0.1007,
+     "drawdown_penalty": 8.7011,
+     "excessive_holding_penalty": 2.208,
+     "risk_limit_violation_penalty": 0.0,
+     "overtrading_penalty": 1.15,
+     "total": -12.3916
+    },
+    "daily_pnl": {
+     "2026-08-19": -1686.14,
+     "2026-08-20": -573.03,
+     "2026-08-21": 1073.28,
+     "2026-08-24": 3072.0,
+     "2026-08-25": -3481.4,
+     "2026-08-28": -3740.8,
+     "2026-08-31": 2847.27,
+     "2026-09-01": -3727.64,
+     "2026-09-02": -1145.07,
+     "2026-09-03": 6696.58
+    },
+    "compliance": {
+     "every trade has a stop below entry": "OK",
+     "stops never widened": "OK",
+     "entries inside the window and before 14:45": "OK",
+     "flat by the 15:10 square-off start": "OK",
+     "at most 4 trades per day": "OK",
+     "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+     "size within the per-trade risk budget": "OK",
+     "day loss within the daily loss limit (gaps can overshoot)": "OK",
+     "loss per trade within the risk budget (gaps can overshoot)": "OK"
+    }
+   },
+   "seed_spread_net_pnl": {
+    "mean": -2253.6,
+    "std": 3681.76,
+    "min": -7512.91,
+    "max": 2181.34,
+    "n": 5
+   }
+  }
+ ],
+ "walk_forward_seed_net_pnl": {
+  "11": -10805.3,
+  "23": -4337.8,
+  "37": 754.24,
+  "41": -184.64,
+  "53": -4669.16
+ },
+ "holdout": {
+  "ensemble": {
+   "days": 8,
+   "decisions": 67,
+   "trades": 22,
+   "wins": 7,
+   "win_rate_pct": 31.82,
+   "profit_factor": 0.549,
+   "expectancy": -64.04,
+   "net_pnl": -1408.8,
+   "gross_pnl": 52.0,
+   "charges": 1460.8,
+   "slippage": 188.5,
+   "max_drawdown": 1742.64,
+   "worst_day": -730.76,
+   "avg_r_multiple": -0.0008,
+   "avg_win": 244.59,
+   "avg_loss": -208.06,
+   "avg_holding_minutes": 1.23,
+   "exit_reasons": {
+    "RL_EXIT": 22
+   },
+   "partial_exits": 0,
+   "actions": {
+    "ENTER": 22,
+    "EXIT_FULL": 22,
+    "MOVE_STOP_TO_BREAKEVEN": 2,
+    "SKIP_SETUP": 18,
+    "TIGHTEN_STOP": 3
+   },
+   "invalid_actions": 0,
+   "invalid_action_rate": 0.0,
+   "reward": {
+    "realized_trade_return": 0.1202,
+    "transaction_costs": 0.7304,
+    "slippage_penalty": 0.0942,
+    "drawdown_penalty": 0.8666,
+    "excessive_holding_penalty": 0.0,
+    "risk_limit_violation_penalty": 0.0,
+    "overtrading_penalty": 1.1,
+    "total": -2.671
+   },
+   "daily_pnl": {
+    "2026-09-07": -730.76,
+    "2026-09-08": 0.0,
+    "2026-09-10": 726.93,
+    "2026-09-11": -557.28,
+    "2026-09-15": 0.0,
+    "2026-09-17": -25.73,
+    "2026-09-21": -580.75,
+    "2026-09-23": -241.21
+   },
+   "compliance": {
+    "every trade has a stop below entry": "OK",
+    "stops never widened": "OK",
+    "entries inside the window and before 14:45": "OK",
+    "flat by the 15:10 square-off start": "OK",
+    "at most 4 trades per day": "OK",
+    "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+    "size within the per-trade risk budget": "OK",
+    "day loss within the daily loss limit (gaps can overshoot)": "OK",
+    "loss per trade within the risk budget (gaps can overshoot)": "OK"
+   }
+  },
+  "seeds": {
+   "11": {
+    "days": 8,
+    "decisions": 91,
+    "trades": 22,
+    "wins": 11,
+    "win_rate_pct": 50.0,
+    "profit_factor": 2.873,
+    "expectancy": 149.12,
+    "net_pnl": 3280.72,
+    "gross_pnl": 4748.25,
+    "charges": 1467.53,
+    "slippage": 188.5,
+    "max_drawdown": 953.96,
+    "worst_day": -580.75,
+    "avg_r_multiple": 0.1288,
+    "avg_win": 457.51,
+    "avg_loss": -159.26,
+    "avg_holding_minutes": 2.36,
+    "exit_reasons": {
+     "RL_EXIT": 21,
+     "TRAILING_STOP": 1
+    },
+    "partial_exits": 0,
+    "actions": {
+     "ENTER": 22,
+     "EXIT_FULL": 21,
+     "MOVE_STOP_TO_BREAKEVEN": 18,
+     "TAKE_PARTIAL_PROFIT": 5,
+     "SKIP_SETUP": 18,
+     "TRAIL_STOP": 7
+    },
+    "invalid_actions": 0,
+    "invalid_action_rate": 0.0,
+    "reward": {
+     "realized_trade_return": 2.4684,
+     "transaction_costs": 0.7338,
+     "slippage_penalty": 0.0942,
+     "drawdown_penalty": 0.9018,
+     "excessive_holding_penalty": 0.0,
+     "risk_limit_violation_penalty": 0.0,
+     "overtrading_penalty": 1.1,
+     "total": -0.3615
+    },
+    "daily_pnl": {
+     "2026-09-07": 1498.88,
+     "2026-09-08": 0.0,
+     "2026-09-10": 1272.97,
+     "2026-09-11": -469.7,
+     "2026-09-15": 0.0,
+     "2026-09-17": 1800.53,
+     "2026-09-21": -580.75,
+     "2026-09-23": -241.21
+    },
+    "compliance": {
+     "every trade has a stop below entry": "OK",
+     "stops never widened": "OK",
+     "entries inside the window and before 14:45": "OK",
+     "flat by the 15:10 square-off start": "OK",
+     "at most 4 trades per day": "OK",
+     "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+     "size within the per-trade risk budget": "OK",
+     "day loss within the daily loss limit (gaps can overshoot)": "OK",
+     "loss per trade within the risk budget (gaps can overshoot)": "OK"
+    }
+   },
+   "23": {
+    "days": 8,
+    "decisions": 173,
+    "trades": 29,
+    "wins": 12,
+    "win_rate_pct": 41.38,
+    "profit_factor": 0.95,
+    "expectancy": -15.24,
+    "net_pnl": -441.9,
+    "gross_pnl": 1550.25,
+    "charges": 1992.15,
+    "slippage": 305.5,
+    "max_drawdown": 6561.03,
+    "worst_day": -4884.01,
+    "avg_r_multiple": 0.0256,
+    "avg_win": 705.1,
+    "avg_loss": -523.71,
+    "avg_holding_minutes": 5.1,
+    "exit_reasons": {
+     "RL_EXIT": 23,
+     "STOP_LOSS": 4,
+     "TARGET": 2
+    },
+    "partial_exits": 3,
+    "actions": {
+     "ENTER": 29,
+     "EXIT_FULL": 23,
+     "HOLD": 94,
+     "SKIP_SETUP": 2,
+     "TRAIL_STOP": 13,
+     "TAKE_PARTIAL_PROFIT": 12
+    },
+    "invalid_actions": 0,
+    "invalid_action_rate": 0.0,
+    "reward": {
+     "realized_trade_return": 0.9279,
+     "transaction_costs": 0.9961,
+     "slippage_penalty": 0.1527,
+     "drawdown_penalty": 3.9213,
+     "excessive_holding_penalty": 0.0,
+     "risk_limit_violation_penalty": 0.0,
+     "overtrading_penalty": 1.45,
+     "total": -5.5922
+    },
+    "daily_pnl": {
+     "2026-09-07": -730.76,
+     "2026-09-08": -4884.01,
+     "2026-09-10": 726.93,
+     "2026-09-11": -920.59,
+     "2026-09-15": 4264.68,
+     "2026-09-17": -25.73,
+     "2026-09-21": -208.56,
+     "2026-09-23": 1336.14
+    },
+    "compliance": {
+     "every trade has a stop below entry": "OK",
+     "stops never widened": "OK",
+     "entries inside the window and before 14:45": "OK",
+     "flat by the 15:10 square-off start": "OK",
+     "at most 4 trades per day": "OK",
+     "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+     "size within the per-trade risk budget": "OK",
+     "day loss within the daily loss limit (gaps can overshoot)": "OK",
+     "loss per trade within the risk budget (gaps can overshoot)": "OK"
+    }
+   },
+   "37": {
+    "days": 8,
+    "decisions": 130,
+    "trades": 23,
+    "wins": 11,
+    "win_rate_pct": 47.83,
+    "profit_factor": 1.386,
+    "expectancy": 55.11,
+    "net_pnl": 1267.53,
+    "gross_pnl": 2795.0,
+    "charges": 1527.47,
+    "slippage": 188.5,
+    "max_drawdown": 1478.53,
+    "worst_day": -777.39,
+    "avg_r_multiple": 0.0704,
+    "avg_win": 413.99,
+    "avg_loss": -273.87,
+    "avg_holding_minutes": 3.91,
+    "exit_reasons": {
+     "RL_EXIT": 20,
+     "TRAILING_STOP": 3
+    },
+    "partial_exits": 0,
+    "actions": {
+     "ENTER": 23,
+     "EXIT_FULL": 20,
+     "MOVE_STOP_TO_BREAKEVEN": 13,
+     "SKIP_SETUP": 20,
+     "TIGHTEN_STOP": 29,
+     "TRAIL_STOP": 25
+    },
+    "invalid_actions": 0,
+    "invalid_action_rate": 0.0,
+    "reward": {
+     "realized_trade_return": 1.4917,
+     "transaction_costs": 0.7637,
+     "slippage_penalty": 0.0942,
+     "drawdown_penalty": 1.0601,
+     "excessive_holding_penalty": 0.0,
+     "risk_limit_violation_penalty": 0.0,
+     "overtrading_penalty": 1.15,
+     "total": -1.5764
+    },
+    "daily_pnl": {
+     "2026-09-07": -63.75,
+     "2026-09-08": 0.0,
+     "2026-09-10": -643.07,
+     "2026-09-11": 38.53,
+     "2026-09-15": 0.0,
+     "2026-09-17": 1098.79,
+     "2026-09-21": -777.39,
+     "2026-09-23": 1614.42
+    },
+    "compliance": {
+     "every trade has a stop below entry": "OK",
+     "stops never widened": "OK",
+     "entries inside the window and before 14:45": "OK",
+     "flat by the 15:10 square-off start": "OK",
+     "at most 4 trades per day": "OK",
+     "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+     "size within the per-trade risk budget": "OK",
+     "day loss within the daily loss limit (gaps can overshoot)": "OK",
+     "loss per trade within the risk budget (gaps can overshoot)": "OK"
+    }
+   },
+   "41": {
+    "days": 8,
+    "decisions": 131,
+    "trades": 23,
+    "wins": 11,
+    "win_rate_pct": 47.83,
+    "profit_factor": 1.125,
+    "expectancy": 20.21,
+    "net_pnl": 464.88,
+    "gross_pnl": 1989.0,
+    "charges": 1524.12,
+    "slippage": 195.0,
+    "max_drawdown": 1642.99,
+    "worst_day": -1441.15,
+    "avg_r_multiple": 0.0663,
+    "avg_win": 381.32,
+    "avg_loss": -310.81,
+    "avg_holding_minutes": 4.04,
+    "exit_reasons": {
+     "RL_EXIT": 19,
+     "TRAILING_STOP": 4
+    },
+    "partial_exits": 0,
+    "actions": {
+     "ENTER": 23,
+     "EXIT_FULL": 19,
+     "SKIP_SETUP": 19,
+     "MOVE_STOP_TO_BREAKEVEN": 11,
+     "TRAIL_STOP": 42,
+     "TAKE_PARTIAL_PROFIT": 17
+    },
+    "invalid_actions": 0,
+    "invalid_action_rate": 0.0,
+    "reward": {
+     "realized_trade_return": 1.092,
+     "transaction_costs": 0.7621,
+     "slippage_penalty": 0.0975,
+     "drawdown_penalty": 1.5129,
+     "excessive_holding_penalty": 0.0,
+     "risk_limit_violation_penalty": 0.0,
+     "overtrading_penalty": 1.15,
+     "total": -2.4304
+    },
+    "daily_pnl": {
+     "2026-09-07": -1441.15,
+     "2026-09-08": 0.0,
+     "2026-09-10": 2421.11,
+     "2026-09-11": -1306.6,
+     "2026-09-15": 0.0,
+     "2026-09-17": 592.32,
+     "2026-09-21": 608.88,
+     "2026-09-23": -409.68
+    },
+    "compliance": {
+     "every trade has a stop below entry": "OK",
+     "stops never widened": "OK",
+     "entries inside the window and before 14:45": "OK",
+     "flat by the 15:10 square-off start": "OK",
+     "at most 4 trades per day": "OK",
+     "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+     "size within the per-trade risk budget": "OK",
+     "day loss within the daily loss limit (gaps can overshoot)": "OK",
+     "loss per trade within the risk budget (gaps can overshoot)": "OK"
+    }
+   },
+   "53": {
+    "days": 8,
+    "decisions": 78,
+    "trades": 23,
+    "wins": 9,
+    "win_rate_pct": 39.13,
+    "profit_factor": 0.871,
+    "expectancy": -26.38,
+    "net_pnl": -606.69,
+    "gross_pnl": 923.0,
+    "charges": 1529.69,
+    "slippage": 201.5,
+    "max_drawdown": 1855.86,
+    "worst_day": -1646.57,
+    "avg_r_multiple": 0.0157,
+    "avg_win": 454.89,
+    "avg_loss": -335.76,
+    "avg_holding_minutes": 1.7,
+    "exit_reasons": {
+     "RL_EXIT": 22,
+     "STOP_LOSS": 1
+    },
+    "partial_exits": 0,
+    "actions": {
+     "ENTER": 23,
+     "EXIT_FULL": 22,
+     "TIGHTEN_STOP": 5,
+     "SKIP_SETUP": 17,
+     "TAKE_PARTIAL_PROFIT": 8,
+     "MOVE_STOP_TO_BREAKEVEN": 3
+    },
+    "invalid_actions": 0,
+    "invalid_action_rate": 0.0,
+    "reward": {
+     "realized_trade_return": 0.5622,
+     "transaction_costs": 0.7648,
+     "slippage_penalty": 0.1007,
+     "drawdown_penalty": 1.199,
+     "excessive_holding_penalty": 0.0,
+     "risk_limit_violation_penalty": 0.0,
+     "overtrading_penalty": 1.15,
+     "total": -2.6523
+    },
+    "daily_pnl": {
+     "2026-09-07": -1646.57,
+     "2026-09-08": 2168.81,
+     "2026-09-10": 726.93,
+     "2026-09-11": -557.28,
+     "2026-09-15": 0.0,
+     "2026-09-17": -25.73,
+     "2026-09-21": -580.75,
+     "2026-09-23": -692.1
+    },
+    "compliance": {
+     "every trade has a stop below entry": "OK",
+     "stops never widened": "OK",
+     "entries inside the window and before 14:45": "OK",
+     "flat by the 15:10 square-off start": "OK",
+     "at most 4 trades per day": "OK",
+     "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+     "size within the per-trade risk budget": "OK",
+     "day loss within the daily loss limit (gaps can overshoot)": "OK",
+     "loss per trade within the risk budget (gaps can overshoot)": "OK"
+    }
+   }
+  },
+  "baseline_static": {
+   "days": 8,
+   "decisions": 1140,
+   "trades": 25,
+   "wins": 9,
+   "win_rate_pct": 36.0,
+   "profit_factor": 0.981,
+   "expectancy": -19.44,
+   "net_pnl": -485.92,
+   "gross_pnl": 1153.75,
+   "charges": 1639.67,
+   "slippage": 266.5,
+   "max_drawdown": 14039.81,
+   "worst_day": -4670.71,
+   "avg_r_multiple": -0.0136,
+   "avg_win": 2758.02,
+   "avg_loss": -1581.76,
+   "avg_holding_minutes": 45.6,
+   "exit_reasons": {
+    "STOP_LOSS": 16,
+    "TARGET": 7,
+    "SQUARE_OFF": 2
+   },
+   "partial_exits": 0,
+   "actions": {
+    "ENTER": 25,
+    "HOLD": 1115
+   },
+   "invalid_actions": 0,
+   "invalid_action_rate": 0.0,
+   "reward": {
+    "realized_trade_return": 0.7101,
+    "transaction_costs": 0.8198,
+    "slippage_penalty": 0.1332,
+    "drawdown_penalty": 8.215,
+    "excessive_holding_penalty": 0.576,
+    "risk_limit_violation_penalty": 0.0,
+    "overtrading_penalty": 1.25,
+    "total": -10.284
+   },
+   "daily_pnl": {
+    "2026-09-07": -1324.04,
+    "2026-09-08": -4670.71,
+    "2026-09-10": -1151.24,
+    "2026-09-11": -3435.57,
+    "2026-09-15": 4617.67,
+    "2026-09-17": 5964.82,
+    "2026-09-21": -3788.0,
+    "2026-09-23": 3301.15
+   },
+   "compliance": {
+    "every trade has a stop below entry": "OK",
+    "stops never widened": "OK",
+    "entries inside the window and before 14:45": "OK",
+    "flat by the 15:10 square-off start": "OK",
+    "at most 4 trades per day": "OK",
+    "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+    "size within the per-trade risk budget": "OK",
+    "day loss within the daily loss limit (gaps can overshoot)": "OK",
+    "loss per trade within the risk budget (gaps can overshoot)": "OK"
+   }
+  },
+  "baseline_skip_all": {
+   "days": 8,
+   "decisions": 213,
+   "trades": 0,
+   "wins": 0,
+   "win_rate_pct": null,
+   "profit_factor": null,
+   "expectancy": null,
+   "net_pnl": 0.0,
+   "gross_pnl": 0,
+   "charges": 0,
+   "slippage": 0,
+   "max_drawdown": 0.0,
+   "worst_day": 0.0,
+   "avg_r_multiple": null,
+   "avg_win": null,
+   "avg_loss": null,
+   "avg_holding_minutes": null,
+   "exit_reasons": {},
+   "partial_exits": 0,
+   "actions": {
+    "SKIP_SETUP": 213
+   },
+   "invalid_actions": 0,
+   "invalid_action_rate": 0.0,
+   "reward": {
+    "realized_trade_return": 0.0,
+    "transaction_costs": 0.0,
+    "slippage_penalty": 0.0,
+    "drawdown_penalty": 0.0,
+    "excessive_holding_penalty": 0.0,
+    "risk_limit_violation_penalty": 0.0,
+    "overtrading_penalty": 0.0,
+    "total": 0.0
+   },
+   "daily_pnl": {
+    "2026-09-07": 0.0,
+    "2026-09-08": 0.0,
+    "2026-09-10": 0.0,
+    "2026-09-11": 0.0,
+    "2026-09-15": 0.0,
+    "2026-09-17": 0.0,
+    "2026-09-21": 0.0,
+    "2026-09-23": 0.0
+   },
+   "compliance": {
+    "every trade has a stop below entry": "OK",
+    "stops never widened": "OK",
+    "entries inside the window and before 14:45": "OK",
+    "flat by the 15:10 square-off start": "OK",
+    "at most 4 trades per day": "OK",
+    "no entry after a daily-loss halt, in a cooldown or after the consecutive-loss limit": "OK",
+    "size within the per-trade risk budget": "OK",
+    "day loss within the daily loss limit (gaps can overshoot)": "OK",
+    "loss per trade within the risk budget (gaps can overshoot)": "OK"
+   }
+  },
+  "seed_spread_net_pnl": {
+   "mean": 792.91,
+   "std": 1581.59,
+   "min": -606.69,
+   "max": 3280.72,
+   "n": 5
+  }
+ },
+ "comparison": {
+  "production": null,
+  "note": "no production RL model for this strategy"
+ },
+ "gates": {
+  "holdout trades": {
+   "value": 22,
+   "min": 20,
+   "passed": true
+  },
+  "holdout expectancy > 0 (net of costs)": {
+   "value": -64.04,
+   "passed": false
+  },
+  "holdout net P&L beats the static-stop baseline": {
+   "value": [
+    -1408.8,
+    -485.92
+   ],
+   "passed": false
+  },
+  "seeds with positive walk-forward OOS net P&L": {
+   "value": 0.2,
+   "min": 0.6,
+   "passed": false
+  },
+  "holdout max drawdown": {
+   "value": 1742.64,
+   "max": 10000.0,
+   "passed": true
+  },
+  "invalid action rate": {
+   "value": 0.0,
+   "max": 0.02,
+   "passed": true
+  },
+  "risk compliance (every OOS run and the holdout)": {
+   "value": [
+    "PASS"
+   ],
+   "passed": true
+  }
+ },
+ "gates_passed": false,
+ "judged_on": "realised equity, trade quality, drawdown and risk compliance (reward is reported only)",
+ "oos_events": 1449,
+ "holdout_events": 67,
+ "headline": {
+  "holdout_net_pnl": -1408.8,
+  "holdout_trades": 22,
+  "holdout_expectancy": -64.04,
+  "holdout_max_drawdown": 1742.64,
+  "baseline_static_net_pnl": -485.92,
+  "compliance": "PASS",
+  "seed_spread_net_pnl": {
+   "mean": 792.91,
+   "std": 1581.59,
+   "min": -606.69,
+   "max": 3280.72,
+   "n": 5
+  }
+ }
+}

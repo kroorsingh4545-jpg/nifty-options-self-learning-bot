@@ -8,8 +8,7 @@ version = "0.1.0"
 description = "NIFTY weekly options intraday bot (Upstox) — PAPER by default"
 requires-python = ">=3.11"
 readme = "README.md"
-# Runtime dependencies, added phase by phase as they are used. Phase 8 adds
-# Stable-Baselines3.
+# Runtime dependencies, added phase by phase as they are used.
 dependencies = [
     "pydantic>=2.7,<3",
     "pydantic-settings>=2.3,<3",
@@ -29,6 +28,11 @@ dependencies = [
     # Phase 7 (ML layer)
     "numpy>=1.26",
     "lightgbm>=4.3,<5",
+    # Phase 8 (RL trade manager). Install the CPU build of torch first if you
+    # have no GPU: pip install torch --index-url https://download.pytorch.org/whl/cpu
+    "gymnasium>=1.0,<2",
+    "stable-baselines3>=2.4,<3",
+    "torch>=2.3",
 ]
 
 [project.optional-dependencies]
@@ -84,7 +88,7 @@ plugins = ["pydantic.mypy"]
 exclude = ["^tests/", "^\\.venv/", "^broker/proto/.*_pb2\\.py$"]
 
 [[tool.mypy.overrides]]
-module = ["apscheduler.*", "plotly.*"]
+module = ["apscheduler.*", "plotly.*", "stable_baselines3.*", "gymnasium.*", "torch.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
