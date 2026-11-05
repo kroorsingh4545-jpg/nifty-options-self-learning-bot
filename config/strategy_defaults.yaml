@@ -59,6 +59,14 @@ strategies:
     ml:
       enabled: false
       confidence_threshold: 0.60
+    rl:                            # Phase 8 RL trade manager (bounds only; never limits)
+      enabled: false
+      tighten_fraction: 0.25       # TIGHTEN_STOP: fraction of the stop-to-price gap
+      trail_distance_r: 0.5        # TRAIL_STOP: stop this many R below the price
+      partial_fraction: 0.5        # TAKE_PARTIAL_PROFIT: share of open lots (>= 1 lot stays)
+      max_partial_exits: 1
+      min_profit_r_for_partial: 0.5
+      decision_interval_minutes: 1
 
   vwap_ema:
     name: VWAP + EMA Momentum
@@ -112,3 +120,11 @@ strategies:
     ml:
       enabled: false
       confidence_threshold: 0.60
+    rl:                            # Phase 8 RL trade manager (bounds only; never limits)
+      enabled: false
+      tighten_fraction: 0.25       # TIGHTEN_STOP: fraction of the stop-to-price gap
+      trail_distance_r: 0.5        # TRAIL_STOP: stop this many R below the price
+      partial_fraction: 0.5        # TAKE_PARTIAL_PROFIT: share of open lots (>= 1 lot stays)
+      max_partial_exits: 1
+      min_profit_r_for_partial: 0.5
+      decision_interval_minutes: 1
