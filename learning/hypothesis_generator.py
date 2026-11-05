@@ -304,7 +304,7 @@ class HypothesisGenerator:
             proposals.append(p)
         # observations a parameter cannot address (strategy logic is not mutable)
         for regime, b in reflection.breakdowns.get("regime", {}).items():
-            if b["trades"] >= min_n and (b["expectancy"] or 0) < 0:
+            if regime != "UNKNOWN" and b["trades"] >= min_n and (b["expectancy"] or 0) < 0:
                 out.observations.append(f"{sid} loses in regime {regime} ({b['trades']} trades, {b['expectancy']} "
                                         "per trade): a regime filter is a logic change, outside the whitelist")
         seen: set[tuple[str, ...]] = set()
