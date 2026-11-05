@@ -1,0 +1,1710 @@
+{
+  "run_uid": "LOOP-13ac22b7ba1a458e",
+  "autonomy": "PAPER_AUTO_IMPROVE",
+  "synthetic": true,
+  "evidence_source": "SYNTHETIC",
+  "reflection": {
+    "kind": "CUSTOM",
+    "start": "2026-09-01",
+    "end": "2026-10-07",
+    "generated_at": "2026-11-05T15:09:03.546625+05:30",
+    "synthetic": true,
+    "evidence": {
+      "SYNTHETIC": 14
+    },
+    "banner": "SYNTHETIC / UNVERIFIED EVIDENCE - this reflection includes trades on generated or unlabelled data. It is NOT a judgement of the strategy on real markets and can never justify a promotion.",
+    "strategies": {
+      "orb_options": {
+        "strategy_id": "orb_options",
+        "stats": {
+          "trades": 7,
+          "wins": 4,
+          "win_rate_pct": 57.14,
+          "gross_pnl": 334.75,
+          "costs": 430.89,
+          "slippage": 71.5,
+          "net_pnl": -96.14,
+          "expectancy": -13.73,
+          "avg_r": -0.079,
+          "profit_factor": 0.984,
+          "max_drawdown": 4904.31,
+          "avg_minutes": 15.2
+        },
+        "best": [
+          {
+            "trade_uid": "PAPER-T-orb_options-13848ce39821",
+            "net_pnl": 4171.05,
+            "r_multiple": 2.214,
+            "entry_time": "2026-10-05T09:50:00+05:30",
+            "exit_reason": "TARGET",
+            "regime": null,
+            "symbol": "NIFTY 24200 PE 06 OCT 26 SYNTH",
+            "version": "0.1.0"
+          },
+          {
+            "trade_uid": "PAPER-T-orb_options-3d1e6a085a40",
+            "net_pnl": 664.33,
+            "r_multiple": 0.457,
+            "entry_time": "2026-09-08T09:45:00+05:30",
+            "exit_reason": "TRAILING_STOP",
+            "regime": null,
+            "symbol": "NIFTY 25150 CE 08 SEP 26 SYNTH",
+            "version": "0.1.0"
+          },
+          {
+            "trade_uid": "PAPER-T-orb_options-ed48e6ccc3e9",
+            "net_pnl": 637.12,
+            "r_multiple": 0.505,
+            "entry_time": "2026-09-28T09:35:00+05:30",
+            "exit_reason": "TRAILING_STOP",
+            "regime": null,
+            "symbol": "NIFTY 25250 PE 29 SEP 26 SYNTH",
+            "version": "0.1.0"
+          }
+        ],
+        "worst": [
+          {
+            "trade_uid": "PAPER-T-orb_options-38ba9352ad81",
+            "net_pnl": -2116.19,
+            "r_multiple": -1.569,
+            "entry_time": "2026-09-08T10:55:00+05:30",
+            "exit_reason": "STOP_LOSS",
+            "regime": null,
+            "symbol": "NIFTY 25100 PE 08 SEP 26 SYNTH",
+            "version": "0.1.0"
+          },
+          {
+            "trade_uid": "PAPER-T-orb_options-1ceb93affc5a",
+            "net_pnl": -2002.15,
+            "r_multiple": -1.211,
+            "entry_time": "2026-09-21T09:35:00+05:30",
+            "exit_reason": "STOP_LOSS",
+            "regime": null,
+            "symbol": "NIFTY 24850 CE 22 SEP 26 SYNTH",
+            "version": "0.1.0"
+          },
+          {
+            "trade_uid": "PAPER-T-orb_options-f8e4202f793f",
+            "net_pnl": -1727.66,
+            "r_multiple": -1.198,
+            "entry_time": "2026-09-07T09:50:00+05:30",
+            "exit_reason": "STOP_LOSS",
+            "regime": null,
+            "symbol": "NIFTY 25050 PE 08 SEP 26 SYNTH",
+            "version": "0.1.0"
+          }
+        ],
+        "breakdowns": {
+          "regime": {
+            "UNKNOWN": {
+              "trades": 7,
+              "wins": 4,
+              "win_rate_pct": 57.14,
+              "gross_pnl": 334.75,
+              "costs": 430.89,
+              "slippage": 71.5,
+              "net_pnl": -96.14,
+              "expectancy": -13.73,
+              "avg_r": -0.079,
+              "profit_factor": 0.984,
+              "max_drawdown": 4904.31,
+              "avg_minutes": 15.2
+            }
+          },
+          "entry_time": {
+            "09:30-10:00": {
+              "trades": 5,
+              "wins": 3,
+              "win_rate_pct": 60.0,
+              "gross_pnl": 2057.25,
+              "costs": 314.56,
+              "slippage": 45.5,
+              "net_pnl": 1742.69,
+              "expectancy": 348.54,
+              "avg_r": 0.153,
+              "profit_factor": 1.467,
+              "max_drawdown": 3065.48,
+              "avg_minutes": 18.3
+            },
+            "10:30-11:00": {
+              "trades": 2,
+              "wins": 1,
+              "win_rate_pct": 50.0,
+              "gross_pnl": -1722.5,
+              "costs": 116.33,
+              "slippage": 26.0,
+              "net_pnl": -1838.83,
+              "expectancy": -919.41,
+              "avg_r": -0.659,
+              "profit_factor": 0.131,
+              "max_drawdown": 2116.19,
+              "avg_minutes": 7.5
+            }
+          },
+          "strike": {
+            "ATM": {
+              "trades": 7,
+              "wins": 4,
+              "win_rate_pct": 57.14,
+              "gross_pnl": 334.75,
+              "costs": 430.89,
+              "slippage": 71.5,
+              "net_pnl": -96.14,
+              "expectancy": -13.73,
+              "avg_r": -0.079,
+              "profit_factor": 0.984,
+              "max_drawdown": 4904.31,
+              "avg_minutes": 15.2
+            }
+          },
+          "option_type": {
+            "CE": {
+              "trades": 3,
+              "wins": 2,
+              "win_rate_pct": 66.67,
+              "gross_pnl": -877.5,
+              "costs": 182.96,
+              "slippage": 39.0,
+              "net_pnl": -1060.46,
+              "expectancy": -353.49,
+              "avg_r": -0.168,
+              "profit_factor": 0.47,
+              "max_drawdown": 2002.15,
+              "avg_minutes": 6.8
+            },
+            "PE": {
+              "trades": 4,
+              "wins": 2,
+              "win_rate_pct": 50.0,
+              "gross_pnl": 1212.25,
+              "costs": 247.93,
+              "slippage": 32.5,
+              "net_pnl": 964.32,
+              "expectancy": 241.08,
+              "avg_r": -0.012,
+              "profit_factor": 1.251,
+              "max_drawdown": 3843.85,
+              "avg_minutes": 21.5
+            }
+          },
+          "stop_target_config": {
+            "SL PREMIUM_PERCENT 25.0 | TP R_MULTIPLE 2.0 | trail R_MULTIPLE 1.0/0.5": {
+              "trades": 7,
+              "wins": 4,
+              "win_rate_pct": 57.14,
+              "gross_pnl": 334.75,
+              "costs": 430.89,
+              "slippage": 71.5,
+              "net_pnl": -96.14,
+              "expectancy": -13.73,
+              "avg_r": -0.079,
+              "profit_factor": 0.984,
+              "max_drawdown": 4904.31,
+              "avg_minutes": 15.2
+            }
+          },
+          "exit_reason": {
+            "STOP_LOSS": {
+              "trades": 3,
+              "wins": 0,
+              "win_rate_pct": 0.0,
+              "gross_pnl": -5674.5,
+              "costs": 171.5,
+              "slippage": 32.5,
+              "net_pnl": -5846.0,
+              "expectancy": -1948.67,
+              "avg_r": -1.326,
+              "profit_factor": 0.0,
+              "max_drawdown": 5846.0,
+              "avg_minutes": 18.2
+            },
+            "TARGET": {
+              "trades": 1,
+              "wins": 1,
+              "win_rate_pct": 100.0,
+              "gross_pnl": 4244.5,
+              "costs": 73.45,
+              "slippage": 6.5,
+              "net_pnl": 4171.05,
+              "expectancy": 4171.05,
+              "avg_r": 2.214,
+              "profit_factor": null,
+              "max_drawdown": 0.0,
+              "avg_minutes": 38.5
+            },
+            "TRAILING_STOP": {
+              "trades": 3,
+              "wins": 3,
+              "win_rate_pct": 100.0,
+              "gross_pnl": 1764.75,
+              "costs": 185.94,
+              "slippage": 32.5,
+              "net_pnl": 1578.81,
+              "expectancy": 526.27,
+              "avg_r": 0.404,
+              "profit_factor": null,
+              "max_drawdown": 0.0,
+              "avg_minutes": 4.5
+            }
+          },
+          "version": {
+            "0.1.0": {
+              "trades": 7,
+              "wins": 4,
+              "win_rate_pct": 57.14,
+              "gross_pnl": 334.75,
+              "costs": 430.89,
+              "slippage": 71.5,
+              "net_pnl": -96.14,
+              "expectancy": -13.73,
+              "avg_r": -0.079,
+              "profit_factor": 0.984,
+              "max_drawdown": 4904.31,
+              "avg_minutes": 15.2
+            }
+          }
+        },
+        "execution": {
+          "slippage_rs": 71.5,
+          "slippage_per_trade": 10.21,
+          "slippage_share_of_losses_pct": 1.22,
+          "heavy_slippage_trades": [],
+          "partial_fill_trades": 0,
+          "failed_order_trades": 0,
+          "error_trades": 0,
+          "avg_entry_latency_seconds": 0.0,
+          "issues": []
+        },
+        "degradation": {
+          "degrading": false,
+          "reasons": [],
+          "earlier": null,
+          "recent": null,
+          "losing_streak": 0
+        },
+        "features": [
+          {
+            "feature": "atr14_pct",
+            "samples": 7,
+            "rho": 0.821,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "rv_15m",
+            "samples": 7,
+            "rho": 0.75,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "option_premium",
+            "samples": 7,
+            "rho": 0.714,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "option_spread_pct",
+            "samples": 7,
+            "rho": -0.714,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "regime_vol",
+            "samples": 5,
+            "rho": 0.707,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "rv_30m",
+            "samples": 5,
+            "rho": 0.7,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "option_premium_pct_spot",
+            "samples": 7,
+            "rho": 0.607,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "ema20_slope_pct",
+            "samples": 5,
+            "rho": 0.6,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "ret_30m",
+            "samples": 5,
+            "rho": 0.6,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "or_width_pct",
+            "samples": 7,
+            "rho": 0.577,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "option_iv",
+            "samples": 7,
+            "rho": 0.536,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "option_volume_log",
+            "samples": 7,
+            "rho": -0.464,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "regime_trend",
+            "samples": 5,
+            "rho": 0.447,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "minutes_since_open",
+            "samples": 7,
+            "rho": -0.327,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "minutes_to_expiry",
+            "samples": 7,
+            "rho": 0.327,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "minutes_to_square_off",
+            "samples": 7,
+            "rho": 0.327,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "is_expiry_day",
+            "samples": 7,
+            "rho": -0.289,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "option_moneyness_pct",
+            "samples": 7,
+            "rho": 0.286,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "ret_5m",
+            "samples": 7,
+            "rho": -0.286,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "option_oi_log",
+            "samples": 7,
+            "rho": -0.25,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "ret_1m",
+            "samples": 7,
+            "rho": 0.214,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "ema20_dist_pct",
+            "samples": 7,
+            "rho": -0.143,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "gap_pct",
+            "samples": 7,
+            "rho": -0.108,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "ret_3m",
+            "samples": 7,
+            "rho": -0.107,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "or_position",
+            "samples": 7,
+            "rho": 0.071,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "ret_15m",
+            "samples": 7,
+            "rho": -0.071,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "vwap_dist_pct",
+            "samples": 7,
+            "rho": -0.071,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "consecutive_losses",
+            "samples": 7,
+            "rho": null,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "recent_avg_r_5",
+            "samples": 0,
+            "rho": null,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "recent_win_rate_5",
+            "samples": 0,
+            "rho": null,
+            "verdict": "INSUFFICIENT_DATA"
+          }
+        ],
+        "evidence": {
+          "SYNTHETIC": 7
+        },
+        "synthetic": true,
+        "findings": [
+          "7 trades, win rate 57.14%, net -96 after 431 costs, expectancy -13.73 per trade",
+          "regime UNKNOWN: 7 trades losing -13.73 per trade",
+          "strike ATM: 7 trades losing -13.73 per trade",
+          "exit_reason STOP_LOSS: 3 trades losing -1948.67 per trade"
+        ]
+      },
+      "vwap_ema": {
+        "strategy_id": "vwap_ema",
+        "stats": {
+          "trades": 7,
+          "wins": 5,
+          "win_rate_pct": 71.43,
+          "gross_pnl": 659.75,
+          "costs": 465.52,
+          "slippage": 71.5,
+          "net_pnl": 194.23,
+          "expectancy": 27.75,
+          "avg_r": 0.105,
+          "profit_factor": 1.057,
+          "max_drawdown": 2544.93,
+          "avg_minutes": 13.1
+        },
+        "best": [
+          {
+            "trade_uid": "PAPER-T-vwap_ema-473aec67784e",
+            "net_pnl": 1170.83,
+            "r_multiple": 0.696,
+            "entry_time": "2026-09-17T13:45:00+05:30",
+            "exit_reason": "TRAILING_STOP",
+            "regime": null,
+            "symbol": "NIFTY 24550 PE 22 SEP 26 SYNTH",
+            "version": "0.1.0"
+          },
+          {
+            "trade_uid": "PAPER-T-vwap_ema-c002a91575e2",
+            "net_pnl": 1020.09,
+            "r_multiple": 0.571,
+            "entry_time": "2026-09-08T09:45:00+05:30",
+            "exit_reason": "TRAILING_STOP",
+            "regime": null,
+            "symbol": "NIFTY 25150 CE 08 SEP 26 SYNTH",
+            "version": "0.1.0"
+          },
+          {
+            "trade_uid": "PAPER-T-vwap_ema-c261e9aebb46",
+            "net_pnl": 565.99,
+            "r_multiple": 0.462,
+            "entry_time": "2026-09-21T13:00:00+05:30",
+            "exit_reason": "TRAILING_STOP",
+            "regime": null,
+            "symbol": "NIFTY 25050 CE 22 SEP 26 SYNTH",
+            "version": "0.1.0"
+          }
+        ],
+        "worst": [
+          {
+            "trade_uid": "PAPER-T-vwap_ema-b800d49f1697",
+            "net_pnl": -2249.39,
+            "r_multiple": -1.153,
+            "entry_time": "2026-09-17T14:00:00+05:30",
+            "exit_reason": "STOP_LOSS",
+            "regime": null,
+            "symbol": "NIFTY 24550 PE 22 SEP 26 SYNTH",
+            "version": "0.1.0"
+          },
+          {
+            "trade_uid": "PAPER-T-vwap_ema-5867b990a302",
+            "net_pnl": -1139.53,
+            "r_multiple": -0.579,
+            "entry_time": "2026-09-28T11:50:00+05:30",
+            "exit_reason": "TRAILING_STOP",
+            "regime": null,
+            "symbol": "NIFTY 24850 PE 29 SEP 26 SYNTH",
+            "version": "0.1.0"
+          },
+          {
+            "trade_uid": "PAPER-T-vwap_ema-d0a5c2beeff7",
+            "net_pnl": 278.0,
+            "r_multiple": 0.329,
+            "entry_time": "2026-09-28T10:25:00+05:30",
+            "exit_reason": "TRAILING_STOP",
+            "regime": null,
+            "symbol": "NIFTY 25150 PE 29 SEP 26 SYNTH",
+            "version": "0.1.0"
+          }
+        ],
+        "breakdowns": {
+          "regime": {
+            "UNKNOWN": {
+              "trades": 7,
+              "wins": 5,
+              "win_rate_pct": 71.43,
+              "gross_pnl": 659.75,
+              "costs": 465.52,
+              "slippage": 71.5,
+              "net_pnl": 194.23,
+              "expectancy": 27.75,
+              "avg_r": 0.105,
+              "profit_factor": 1.057,
+              "max_drawdown": 2544.93,
+              "avg_minutes": 13.1
+            }
+          },
+          "entry_time": {
+            "09:30-10:00": {
+              "trades": 1,
+              "wins": 1,
+              "win_rate_pct": 100.0,
+              "gross_pnl": 1092.0,
+              "costs": 71.91,
+              "slippage": 19.5,
+              "net_pnl": 1020.09,
+              "expectancy": 1020.09,
+              "avg_r": 0.571,
+              "profit_factor": null,
+              "max_drawdown": 0.0,
+              "avg_minutes": 3.5
+            },
+            "10:00-10:30": {
+              "trades": 1,
+              "wins": 1,
+              "win_rate_pct": 100.0,
+              "gross_pnl": 338.0,
+              "costs": 60.0,
+              "slippage": 6.5,
+              "net_pnl": 278.0,
+              "expectancy": 278.0,
+              "avg_r": 0.329,
+              "profit_factor": null,
+              "max_drawdown": 0.0,
+              "avg_minutes": 2.5
+            },
+            "11:30-12:00": {
+              "trades": 2,
+              "wins": 1,
+              "win_rate_pct": 50.0,
+              "gross_pnl": -458.25,
+              "costs": 133.04,
+              "slippage": 19.5,
+              "net_pnl": -591.29,
+              "expectancy": -295.64,
+              "avg_r": -0.084,
+              "profit_factor": 0.481,
+              "max_drawdown": 1139.53,
+              "avg_minutes": 7.0
+            },
+            "13:00-13:30": {
+              "trades": 1,
+              "wins": 1,
+              "win_rate_pct": 100.0,
+              "gross_pnl": 630.5,
+              "costs": 64.51,
+              "slippage": 13.0,
+              "net_pnl": 565.99,
+              "expectancy": 565.99,
+              "avg_r": 0.462,
+              "profit_factor": null,
+              "max_drawdown": 0.0,
+              "avg_minutes": 2.5
+            },
+            "13:30-14:00": {
+              "trades": 1,
+              "wins": 1,
+              "win_rate_pct": 100.0,
+              "gross_pnl": 1241.5,
+              "costs": 70.67,
+              "slippage": 6.5,
+              "net_pnl": 1170.83,
+              "expectancy": 1170.83,
+              "avg_r": 0.696,
+              "profit_factor": null,
+              "max_drawdown": 0.0,
+              "avg_minutes": 31.5
+            },
+            "14:00-14:30": {
+              "trades": 1,
+              "wins": 0,
+              "win_rate_pct": 0.0,
+              "gross_pnl": -2184.0,
+              "costs": 65.39,
+              "slippage": 6.5,
+              "net_pnl": -2249.39,
+              "expectancy": -2249.39,
+              "avg_r": -1.153,
+              "profit_factor": 0.0,
+              "max_drawdown": 2249.39,
+              "avg_minutes": 37.5
+            }
+          },
+          "strike": {
+            "ATM": {
+              "trades": 7,
+              "wins": 5,
+              "win_rate_pct": 71.43,
+              "gross_pnl": 659.75,
+              "costs": 465.52,
+              "slippage": 71.5,
+              "net_pnl": 194.23,
+              "expectancy": 27.75,
+              "avg_r": 0.105,
+              "profit_factor": 1.057,
+              "max_drawdown": 2544.93,
+              "avg_minutes": 13.1
+            }
+          },
+          "option_type": {
+            "CE": {
+              "trades": 2,
+              "wins": 2,
+              "win_rate_pct": 100.0,
+              "gross_pnl": 1722.5,
+              "costs": 136.42,
+              "slippage": 32.5,
+              "net_pnl": 1586.08,
+              "expectancy": 793.04,
+              "avg_r": 0.516,
+              "profit_factor": null,
+              "max_drawdown": 0.0,
+              "avg_minutes": 3.0
+            },
+            "PE": {
+              "trades": 5,
+              "wins": 3,
+              "win_rate_pct": 60.0,
+              "gross_pnl": -1062.75,
+              "costs": 329.1,
+              "slippage": 39.0,
+              "net_pnl": -1391.85,
+              "expectancy": -278.37,
+              "avg_r": -0.059,
+              "profit_factor": 0.589,
+              "max_drawdown": 3110.92,
+              "avg_minutes": 17.1
+            }
+          },
+          "stop_target_config": {
+            "SL PREMIUM_PERCENT 20.0 | TP R_MULTIPLE 2.0 | trail PREMIUM_PERCENT 15.0/5.0": {
+              "trades": 7,
+              "wins": 5,
+              "win_rate_pct": 71.43,
+              "gross_pnl": 659.75,
+              "costs": 465.52,
+              "slippage": 71.5,
+              "net_pnl": 194.23,
+              "expectancy": 27.75,
+              "avg_r": 0.105,
+              "profit_factor": 1.057,
+              "max_drawdown": 2544.93,
+              "avg_minutes": 13.1
+            }
+          },
+          "exit_reason": {
+            "STOP_LOSS": {
+              "trades": 1,
+              "wins": 0,
+              "win_rate_pct": 0.0,
+              "gross_pnl": -2184.0,
+              "costs": 65.39,
+              "slippage": 6.5,
+              "net_pnl": -2249.39,
+              "expectancy": -2249.39,
+              "avg_r": -1.153,
+              "profit_factor": 0.0,
+              "max_drawdown": 2249.39,
+              "avg_minutes": 37.5
+            },
+            "TRAILING_STOP": {
+              "trades": 6,
+              "wins": 5,
+              "win_rate_pct": 83.33,
+              "gross_pnl": 2843.75,
+              "costs": 400.13,
+              "slippage": 65.0,
+              "net_pnl": 2443.62,
+              "expectancy": 407.27,
+              "avg_r": 0.315,
+              "profit_factor": 3.144,
+              "max_drawdown": 1139.53,
+              "avg_minutes": 9.0
+            }
+          },
+          "version": {
+            "0.1.0": {
+              "trades": 7,
+              "wins": 5,
+              "win_rate_pct": 71.43,
+              "gross_pnl": 659.75,
+              "costs": 465.52,
+              "slippage": 71.5,
+              "net_pnl": 194.23,
+              "expectancy": 27.75,
+              "avg_r": 0.105,
+              "profit_factor": 1.057,
+              "max_drawdown": 2544.93,
+              "avg_minutes": 13.1
+            }
+          }
+        },
+        "execution": {
+          "slippage_rs": 71.5,
+          "slippage_per_trade": 10.21,
+          "slippage_share_of_losses_pct": 2.11,
+          "heavy_slippage_trades": [],
+          "partial_fill_trades": 0,
+          "failed_order_trades": 0,
+          "error_trades": 0,
+          "avg_entry_latency_seconds": 0.0,
+          "issues": []
+        },
+        "degradation": {
+          "degrading": false,
+          "reasons": [],
+          "earlier": null,
+          "recent": null,
+          "losing_streak": 0
+        },
+        "features": [
+          {
+            "feature": "ret_15m",
+            "samples": 7,
+            "rho": 0.714,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "ret_5m",
+            "samples": 7,
+            "rho": 0.643,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "option_spread_pct",
+            "samples": 7,
+            "rho": -0.571,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "or_width_pct",
+            "samples": 7,
+            "rho": -0.564,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "or_position",
+            "samples": 7,
+            "rho": 0.536,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "vwap_dist_pct",
+            "samples": 7,
+            "rho": 0.536,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "ema20_slope_pct",
+            "samples": 7,
+            "rho": 0.5,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "is_expiry_day",
+            "samples": 7,
+            "rho": 0.408,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "ema20_dist_pct",
+            "samples": 7,
+            "rho": 0.393,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "ret_3m",
+            "samples": 7,
+            "rho": 0.357,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "option_premium",
+            "samples": 7,
+            "rho": -0.321,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "option_premium_pct_spot",
+            "samples": 7,
+            "rho": -0.321,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "option_oi_log",
+            "samples": 7,
+            "rho": 0.286,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "regime_trend",
+            "samples": 7,
+            "rho": 0.267,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "gap_pct",
+            "samples": 7,
+            "rho": -0.236,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "atr14_pct",
+            "samples": 7,
+            "rho": -0.214,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "minutes_since_open",
+            "samples": 7,
+            "rho": -0.214,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "minutes_to_square_off",
+            "samples": 7,
+            "rho": 0.214,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "ret_1m",
+            "samples": 7,
+            "rho": 0.179,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "ret_30m",
+            "samples": 7,
+            "rho": 0.179,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "rv_15m",
+            "samples": 7,
+            "rho": -0.179,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "minutes_to_expiry",
+            "samples": 7,
+            "rho": -0.143,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "regime_vol",
+            "samples": 7,
+            "rho": -0.116,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "option_volume_log",
+            "samples": 7,
+            "rho": -0.107,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "rv_30m",
+            "samples": 7,
+            "rho": -0.107,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "option_moneyness_pct",
+            "samples": 7,
+            "rho": 0.071,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "option_iv",
+            "samples": 7,
+            "rho": -0.036,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "consecutive_losses",
+            "samples": 7,
+            "rho": null,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "recent_avg_r_5",
+            "samples": 0,
+            "rho": null,
+            "verdict": "INSUFFICIENT_DATA"
+          },
+          {
+            "feature": "recent_win_rate_5",
+            "samples": 0,
+            "rho": null,
+            "verdict": "INSUFFICIENT_DATA"
+          }
+        ],
+        "evidence": {
+          "SYNTHETIC": 7
+        },
+        "synthetic": true,
+        "findings": [
+          "7 trades, win rate 71.43%, net 194 after 466 costs, expectancy 27.75 per trade"
+        ]
+      }
+    }
+  },
+  "strategies": {
+    "orb_options": {
+      "strategy_id": "orb_options",
+      "production_version": "0.1.0",
+      "candidates": [
+        {
+          "hypothesis": {
+            "hypothesis_id": "HYP-b609e8e70bde4ace",
+            "rule": "TARGET_TOO_FAR",
+            "strategy_id": "orb_options",
+            "base_version": "0.1.0",
+            "title": "Bring the target closer: it is rarely reached",
+            "proposed_change": {
+              "take_profit.value": 1.5
+            },
+            "current_values": {
+              "take_profit.value": 2.0
+            },
+            "expected_effect": "More trades bank profit at the target instead of giving it back",
+            "evidence": [
+              "only 14% of trades reached the 2R target; 3 closed later at the trail or the square-off"
+            ],
+            "test_metric": "oos_expectancy_rs",
+            "min_sample_size": 30,
+            "validation_plan": {
+              "gates": [
+                "MIN_SAMPLE",
+                "RISK_COMPLIANCE",
+                "BACKTEST",
+                "WALK_FORWARD",
+                "OUT_OF_SAMPLE",
+                "STRESS",
+                "MULTI_SEED",
+                "PRODUCTION_COMPARISON",
+                "NO_TRADE_BASELINE"
+              ],
+              "backtest": "full non-holdout period, candidate vs the production version, same days and costs",
+              "walk_forward": "chronological test windows (no shuffling, embargo between windows); the candidate must win or tie >= 60% of >= 3 windows",
+              "out_of_sample": "final untouched holdout, evaluated once",
+              "stress": "higher slippage and wider spreads; gap, high-volatility, expiry and low-liquidity days",
+              "multi_seed": "200 seeded block-bootstrap resamples of daily P&L differences (>= 80% must favour the candidate); ML / RL models need >= 5 training seeds",
+              "production_comparison": "OOS expectancy gain >= 50 rupees and >= 5% per trade; drawdown at most 10% worse",
+              "no_trade_baseline": "OOS net P&L after costs > 0 (better than not trading)"
+            },
+            "risk_impact": "take_profit.value 2.0 -> 1.5. Rupee risk per trade is unchanged: position size still comes from the fixed per-trade risk budget, and every per-strategy / global loss limit, the kill switch and the square-off are untouched.",
+            "rollback_plan": "Keep orb_options 0.1.0 ready: if the candidate is deployed to PAPER and underperforms, the deployment controller rolls back to 0.1.0 (or the YAML baseline) in one step; every deployment is versioned and reversible.",
+            "research_only": true,
+            "strength": 41.19
+          },
+          "version": "0.1.1",
+          "version_uid": "SV-e4b13cf58c26442a",
+          "outcome": "REJECTED",
+          "reasons": [
+            "MULTI_SEED: 68% of 200 seeded resamples favour the candidate (need 80%)",
+            "NO_TRADE_BASELINE: OOS net after costs -3039.3 vs 0 for not trading"
+          ],
+          "validation": {
+            "strategy_id": "orb_options",
+            "base_version": "0.1.0",
+            "candidate_version": "0.1.1",
+            "evidence_source": "SYNTHETIC",
+            "synthetic": true,
+            "gates_passed": false,
+            "failed_gates": [
+              "MULTI_SEED",
+              "NO_TRADE_BASELINE"
+            ],
+            "gates": [
+              {
+                "gate": "MIN_SAMPLE",
+                "passed": true,
+                "detail": "7 OOS trades (need 5)",
+                "numbers": {
+                  "oos_trades": 7,
+                  "required": 5
+                }
+              },
+              {
+                "gate": "RISK_COMPLIANCE",
+                "passed": true,
+                "detail": "no risk-limit breach in any candidate run",
+                "numbers": {
+                  "breaches": {}
+                }
+              },
+              {
+                "gate": "BACKTEST",
+                "passed": true,
+                "detail": "MAIN expectancy 277.02 vs production 135.59",
+                "numbers": {
+                  "candidate": {
+                    "trades": 5,
+                    "net_pnl": 1385.12,
+                    "expectancy": 277.02,
+                    "win_rate_pct": 80.0,
+                    "profit_factor": 1.846,
+                    "max_drawdown": 1638.19,
+                    "costs": 308.13
+                  },
+                  "production": {
+                    "trades": 5,
+                    "net_pnl": 677.97,
+                    "expectancy": 135.59,
+                    "win_rate_pct": 80.0,
+                    "profit_factor": 1.414,
+                    "max_drawdown": 1638.19,
+                    "costs": 306.78
+                  }
+                }
+              },
+              {
+                "gate": "WALK_FORWARD",
+                "passed": true,
+                "detail": "won or tied 100% of 8 test windows (need 60% of >= 3)",
+                "numbers": {
+                  "folds": [
+                    {
+                      "fold": 0,
+                      "test": [
+                        "2026-10-12"
+                      ],
+                      "candidate": -1499.78,
+                      "production": -1499.78,
+                      "won_or_tied": true
+                    },
+                    {
+                      "fold": 1,
+                      "test": [
+                        "2026-10-13"
+                      ],
+                      "candidate": 2106.05,
+                      "production": 1398.9,
+                      "won_or_tied": true
+                    },
+                    {
+                      "fold": 2,
+                      "test": [
+                        "2026-10-14"
+                      ],
+                      "candidate": 0,
+                      "production": 0,
+                      "won_or_tied": true
+                    },
+                    {
+                      "fold": 3,
+                      "test": [
+                        "2026-10-15"
+                      ],
+                      "candidate": 426.93,
+                      "production": 426.93,
+                      "won_or_tied": true
+                    },
+                    {
+                      "fold": 4,
+                      "test": [
+                        "2026-10-16"
+                      ],
+                      "candidate": 0,
+                      "production": 0,
+                      "won_or_tied": true
+                    },
+                    {
+                      "fold": 5,
+                      "test": [
+                        "2026-10-19"
+                      ],
+                      "candidate": 351.92,
+                      "production": 351.92,
+                      "won_or_tied": true
+                    },
+                    {
+                      "fold": 6,
+                      "test": [
+                        "2026-10-21"
+                      ],
+                      "candidate": 0,
+                      "production": 0,
+                      "won_or_tied": true
+                    },
+                    {
+                      "fold": 7,
+                      "test": [
+                        "2026-10-22"
+                      ],
+                      "candidate": 0,
+                      "production": 0,
+                      "won_or_tied": true
+                    }
+                  ],
+                  "win_share": 1.0
+                }
+              },
+              {
+                "gate": "OUT_OF_SAMPLE",
+                "passed": true,
+                "detail": "holdout net -4424.42 vs production -4424.42 (2 untouched days, evaluated once)",
+                "numbers": {
+                  "candidate": {
+                    "trades": 2,
+                    "net_pnl": -4424.42,
+                    "expectancy": -2212.21,
+                    "win_rate_pct": 0.0,
+                    "profit_factor": 0.0,
+                    "max_drawdown": 4424.42,
+                    "costs": 121.42
+                  },
+                  "production": {
+                    "trades": 2,
+                    "net_pnl": -4424.42,
+                    "expectancy": -2212.21,
+                    "win_rate_pct": 0.0,
+                    "profit_factor": 0.0,
+                    "max_drawdown": 4424.42,
+                    "costs": 121.42
+                  },
+                  "days": [
+                    "2026-10-23",
+                    "2026-10-26"
+                  ]
+                }
+              },
+              {
+                "gate": "STRESS",
+                "passed": true,
+                "detail": "no stress scenario worse than allowed",
+                "numbers": {
+                  "scenarios": {
+                    "stress_slippage": {
+                      "candidate": 1307.19,
+                      "production": 600.05
+                    },
+                    "stress_thin_quotes": {
+                      "candidate": 0,
+                      "production": 0
+                    },
+                    "gap_days": {
+                      "candidate": 2106.05,
+                      "production": 1398.9
+                    },
+                    "high_vol_days": {
+                      "candidate": 0,
+                      "production": 0
+                    },
+                    "expiry_days": {
+                      "candidate": 2457.97,
+                      "production": 1750.82
+                    }
+                  }
+                }
+              },
+              {
+                "gate": "MULTI_SEED",
+                "passed": false,
+                "detail": "68% of 200 seeded resamples favour the candidate (need 80%)",
+                "numbers": {
+                  "bootstrap_win_share": 0.68,
+                  "resamples": 200,
+                  "uses_models": false,
+                  "model_seeds": 0
+                }
+              },
+              {
+                "gate": "PRODUCTION_COMPARISON",
+                "passed": true,
+                "detail": "OOS expectancy -434.19 vs production -535.21 (need +50); drawdown 4424.42 vs 4424.42",
+                "numbers": {
+                  "metric": "oos_expectancy_rs",
+                  "candidate": {
+                    "trades": 7,
+                    "net_pnl": -3039.3,
+                    "expectancy": -434.19,
+                    "win_rate_pct": 57.14,
+                    "profit_factor": 0.499,
+                    "max_drawdown": 4424.42,
+                    "costs": 429.55
+                  },
+                  "production": {
+                    "trades": 7,
+                    "net_pnl": -3746.45,
+                    "expectancy": -535.21,
+                    "win_rate_pct": 57.14,
+                    "profit_factor": 0.382,
+                    "max_drawdown": 4424.42,
+                    "costs": 428.2
+                  }
+                }
+              },
+              {
+                "gate": "NO_TRADE_BASELINE",
+                "passed": false,
+                "detail": "OOS net after costs -3039.3 vs 0 for not trading",
+                "numbers": {
+                  "oos_net": -3039.3
+                }
+              }
+            ],
+            "summary": {
+              "oos_days": [
+                "2026-10-12",
+                "2026-10-13",
+                "2026-10-14",
+                "2026-10-15",
+                "2026-10-16",
+                "2026-10-19",
+                "2026-10-21",
+                "2026-10-22",
+                "2026-10-23",
+                "2026-10-26"
+              ],
+              "main_days": 10,
+              "holdout_days": 2,
+              "candidate_oos": {
+                "trades": 7,
+                "net_pnl": -3039.3,
+                "expectancy": -434.19,
+                "win_rate_pct": 57.14,
+                "profit_factor": 0.499,
+                "max_drawdown": 4424.42,
+                "costs": 429.55
+              },
+              "production_oos": {
+                "trades": 7,
+                "net_pnl": -3746.45,
+                "expectancy": -535.21,
+                "win_rate_pct": 57.14,
+                "profit_factor": 0.382,
+                "max_drawdown": 4424.42,
+                "costs": 428.2
+              },
+              "changes": [
+                {
+                  "path": "take_profit.value",
+                  "old": 2.0,
+                  "new": 1.5,
+                  "category": "target_r_multiple"
+                }
+              ],
+              "day_types": {
+                "gap": [
+                  "2026-10-13",
+                  "2026-10-21",
+                  "2026-10-23",
+                  "2026-10-26"
+                ],
+                "high_vol": [
+                  "2026-10-14",
+                  "2026-10-16",
+                  "2026-10-21",
+                  "2026-10-22"
+                ],
+                "expiry": [
+                  "2026-10-13",
+                  "2026-10-19"
+                ]
+              },
+              "data_source": "SYNTHETIC",
+              "data_description": "SYNTHETIC random-walk data (seed 7, 37 days from 2026-09-01); NOT real NIFTY prices"
+            }
+          }
+        }
+      ],
+      "observations": [],
+      "skipped": [],
+      "deployed": null,
+      "nominated": []
+    },
+    "vwap_ema": {
+      "strategy_id": "vwap_ema",
+      "production_version": "0.1.0",
+      "candidates": [
+        {
+          "hypothesis": {
+            "hypothesis_id": "HYP-1c02e8ac1fb84c6a",
+            "rule": "TARGET_TOO_FAR",
+            "strategy_id": "vwap_ema",
+            "base_version": "0.1.0",
+            "title": "Bring the target closer: it is rarely reached",
+            "proposed_change": {
+              "take_profit.value": 1.5
+            },
+            "current_values": {
+              "take_profit.value": 2.0
+            },
+            "expected_effect": "More trades bank profit at the target instead of giving it back",
+            "evidence": [
+              "only 0% of trades reached the 2R target; 6 closed later at the trail or the square-off"
+            ],
+            "test_metric": "oos_expectancy_rs",
+            "min_sample_size": 30,
+            "validation_plan": {
+              "gates": [
+                "MIN_SAMPLE",
+                "RISK_COMPLIANCE",
+                "BACKTEST",
+                "WALK_FORWARD",
+                "OUT_OF_SAMPLE",
+                "STRESS",
+                "MULTI_SEED",
+                "PRODUCTION_COMPARISON",
+                "NO_TRADE_BASELINE"
+              ],
+              "backtest": "full non-holdout period, candidate vs the production version, same days and costs",
+              "walk_forward": "chronological test windows (no shuffling, embargo between windows); the candidate must win or tie >= 60% of >= 3 windows",
+              "out_of_sample": "final untouched holdout, evaluated once",
+              "stress": "higher slippage and wider spreads; gap, high-volatility, expiry and low-liquidity days",
+              "multi_seed": "200 seeded block-bootstrap resamples of daily P&L differences (>= 80% must favour the candidate); ML / RL models need >= 5 training seeds",
+              "production_comparison": "OOS expectancy gain >= 50 rupees and >= 5% per trade; drawdown at most 10% worse",
+              "no_trade_baseline": "OOS net P&L after costs > 0 (better than not trading)"
+            },
+            "risk_impact": "take_profit.value 2.0 -> 1.5. Rupee risk per trade is unchanged: position size still comes from the fixed per-trade risk budget, and every per-strategy / global loss limit, the kill switch and the square-off are untouched.",
+            "rollback_plan": "Keep vwap_ema 0.1.0 ready: if the candidate is deployed to PAPER and underperforms, the deployment controller rolls back to 0.1.0 (or the YAML baseline) in one step; every deployment is versioned and reversible.",
+            "research_only": true,
+            "strength": 166.5
+          },
+          "version": "0.1.1",
+          "version_uid": "SV-7ecd54229d3043d5",
+          "outcome": "REJECTED",
+          "reasons": [
+            "MULTI_SEED: 64% of 200 seeded resamples favour the candidate (need 80%)"
+          ],
+          "validation": {
+            "strategy_id": "vwap_ema",
+            "base_version": "0.1.0",
+            "candidate_version": "0.1.1",
+            "evidence_source": "SYNTHETIC",
+            "synthetic": true,
+            "gates_passed": false,
+            "failed_gates": [
+              "MULTI_SEED"
+            ],
+            "gates": [
+              {
+                "gate": "MIN_SAMPLE",
+                "passed": true,
+                "detail": "13 OOS trades (need 5)",
+                "numbers": {
+                  "oos_trades": 13,
+                  "required": 5
+                }
+              },
+              {
+                "gate": "RISK_COMPLIANCE",
+                "passed": true,
+                "detail": "no risk-limit breach in any candidate run",
+                "numbers": {
+                  "breaches": {}
+                }
+              },
+              {
+                "gate": "BACKTEST",
+                "passed": true,
+                "detail": "MAIN expectancy 714.12 vs production 603.83",
+                "numbers": {
+                  "candidate": {
+                    "trades": 10,
+                    "net_pnl": 7141.15,
+                    "expectancy": 714.12,
+                    "win_rate_pct": 80.0,
+                    "profit_factor": 2.806,
+                    "max_drawdown": 3954.44,
+                    "costs": 694.6
+                  },
+                  "production": {
+                    "trades": 10,
+                    "net_pnl": 6038.26,
+                    "expectancy": 603.83,
+                    "win_rate_pct": 80.0,
+                    "profit_factor": 2.527,
+                    "max_drawdown": 3954.44,
+                    "costs": 692.49
+                  }
+                }
+              },
+              {
+                "gate": "WALK_FORWARD",
+                "passed": true,
+                "detail": "won or tied 100% of 8 test windows (need 60% of >= 3)",
+                "numbers": {
+                  "folds": [
+                    {
+                      "fold": 0,
+                      "test": [
+                        "2026-10-12"
+                      ],
+                      "candidate": 3232.96,
+                      "production": 2130.07,
+                      "won_or_tied": true
+                    },
+                    {
+                      "fold": 1,
+                      "test": [
+                        "2026-10-13"
+                      ],
+                      "candidate": 0,
+                      "production": 0,
+                      "won_or_tied": true
+                    },
+                    {
+                      "fold": 2,
+                      "test": [
+                        "2026-10-14"
+                      ],
+                      "candidate": 697.72,
+                      "production": 697.72,
+                      "won_or_tied": true
+                    },
+                    {
+                      "fold": 3,
+                      "test": [
+                        "2026-10-15"
+                      ],
+                      "candidate": -3954.44,
+                      "production": -3954.44,
+                      "won_or_tied": true
+                    },
+                    {
+                      "fold": 4,
+                      "test": [
+                        "2026-10-16"
+                      ],
+                      "candidate": 1944.82,
+                      "production": 1944.82,
+                      "won_or_tied": true
+                    },
+                    {
+                      "fold": 5,
+                      "test": [
+                        "2026-10-19"
+                      ],
+                      "candidate": 4236.53,
+                      "production": 4236.53,
+                      "won_or_tied": true
+                    },
+                    {
+                      "fold": 6,
+                      "test": [
+                        "2026-10-21"
+                      ],
+                      "candidate": 983.56,
+                      "production": 983.56,
+                      "won_or_tied": true
+                    },
+                    {
+                      "fold": 7,
+                      "test": [
+                        "2026-10-22"
+                      ],
+                      "candidate": 0,
+                      "production": 0,
+                      "won_or_tied": true
+                    }
+                  ],
+                  "win_share": 1.0
+                }
+              },
+              {
+                "gate": "OUT_OF_SAMPLE",
+                "passed": true,
+                "detail": "holdout net -5070.73 vs production -5070.73 (2 untouched days, evaluated once)",
+                "numbers": {
+                  "candidate": {
+                    "trades": 3,
+                    "net_pnl": -5070.73,
+                    "expectancy": -1690.24,
+                    "win_rate_pct": 0.0,
+                    "profit_factor": 0.0,
+                    "max_drawdown": 5070.73,
+                    "costs": 185.98
+                  },
+                  "production": {
+                    "trades": 3,
+                    "net_pnl": -5070.73,
+                    "expectancy": -1690.24,
+                    "win_rate_pct": 0.0,
+                    "profit_factor": 0.0,
+                    "max_drawdown": 5070.73,
+                    "costs": 185.98
+                  },
+                  "days": [
+                    "2026-10-23",
+                    "2026-10-26"
+                  ]
+                }
+              },
+              {
+                "gate": "STRESS",
+                "passed": true,
+                "detail": "no stress scenario worse than allowed",
+                "numbers": {
+                  "scenarios": {
+                    "stress_slippage": {
+                      "candidate": 6975.57,
+                      "production": 5872.68
+                    },
+                    "stress_thin_quotes": {
+                      "candidate": 0,
+                      "production": 0
+                    },
+                    "gap_days": {
+                      "candidate": 983.56,
+                      "production": 983.56
+                    },
+                    "high_vol_days": {
+                      "candidate": 3626.1,
+                      "production": 3626.1
+                    },
+                    "expiry_days": {
+                      "candidate": 4236.53,
+                      "production": 4236.53
+                    }
+                  }
+                }
+              },
+              {
+                "gate": "MULTI_SEED",
+                "passed": false,
+                "detail": "64% of 200 seeded resamples favour the candidate (need 80%)",
+                "numbers": {
+                  "bootstrap_win_share": 0.64,
+                  "resamples": 200,
+                  "uses_models": false,
+                  "model_seeds": 0
+                }
+              },
+              {
+                "gate": "PRODUCTION_COMPARISON",
+                "passed": true,
+                "detail": "OOS expectancy 159.26 vs production 74.43 (need +50); drawdown 5070.73 vs 5070.73",
+                "numbers": {
+                  "metric": "oos_expectancy_rs",
+                  "candidate": {
+                    "trades": 13,
+                    "net_pnl": 2070.42,
+                    "expectancy": 159.26,
+                    "win_rate_pct": 61.54,
+                    "profit_factor": 1.229,
+                    "max_drawdown": 5070.73,
+                    "costs": 880.58
+                  },
+                  "production": {
+                    "trades": 13,
+                    "net_pnl": 967.53,
+                    "expectancy": 74.43,
+                    "win_rate_pct": 61.54,
+                    "profit_factor": 1.107,
+                    "max_drawdown": 5070.73,
+                    "costs": 878.47
+                  }
+                }
+              },
+              {
+                "gate": "NO_TRADE_BASELINE",
+                "passed": true,
+                "detail": "OOS net after costs 2070.42 vs 0 for not trading",
+                "numbers": {
+                  "oos_net": 2070.42
+                }
+              }
+            ],
+            "summary": {
+              "oos_days": [
+                "2026-10-12",
+                "2026-10-13",
+                "2026-10-14",
+                "2026-10-15",
+                "2026-10-16",
+                "2026-10-19",
+                "2026-10-21",
+                "2026-10-22",
+                "2026-10-23",
+                "2026-10-26"
+              ],
+              "main_days": 10,
+              "holdout_days": 2,
+              "candidate_oos": {
+                "trades": 13,
+                "net_pnl": 2070.42,
+                "expectancy": 159.26,
+                "win_rate_pct": 61.54,
+                "profit_factor": 1.229,
+                "max_drawdown": 5070.73,
+                "costs": 880.58
+              },
+              "production_oos": {
+                "trades": 13,
+                "net_pnl": 967.53,
+                "expectancy": 74.43,
+                "win_rate_pct": 61.54,
+                "profit_factor": 1.107,
+                "max_drawdown": 5070.73,
+                "costs": 878.47
+              },
+              "changes": [
+                {
+                  "path": "take_profit.value",
+                  "old": 2.0,
+                  "new": 1.5,
+                  "category": "target_r_multiple"
+                }
+              ],
+              "day_types": {
+                "gap": [
+                  "2026-10-13",
+                  "2026-10-21",
+                  "2026-10-23",
+                  "2026-10-26"
+                ],
+                "high_vol": [
+                  "2026-10-14",
+                  "2026-10-16",
+                  "2026-10-21",
+                  "2026-10-22"
+                ],
+                "expiry": [
+                  "2026-10-13",
+                  "2026-10-19"
+                ]
+              },
+              "data_source": "SYNTHETIC",
+              "data_description": "SYNTHETIC random-walk data (seed 7, 37 days from 2026-09-01); NOT real NIFTY prices"
+            }
+          }
+        }
+      ],
+      "observations": [],
+      "skipped": [],
+      "deployed": null,
+      "nominated": []
+    }
+  }
+}
