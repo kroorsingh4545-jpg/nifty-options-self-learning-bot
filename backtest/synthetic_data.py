@@ -29,14 +29,13 @@ import random
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from backtest.data import ONE_MINUTE, HistoricalDataset
+from backtest.data import ONE_MINUTE, SYNTH_TAG, HistoricalDataset
 from config.settings import MarketSession
 from core.clock import IST
 from core.models import Candle, Instrument
 from options.pricing import black_scholes
 
 INDEX_KEY = "NSE_INDEX|Nifty 50"
-SYNTH_TAG = "SYNTH"
 REGIMES = ("TREND_UP", "TREND_DOWN", "RANGE", "HIGH_VOL")
 
 

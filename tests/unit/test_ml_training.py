@@ -288,5 +288,48 @@ def test_cli_synthetic_run_never_touches_the_trading_database(config_dir: Path, 
     assert "SYNTHETIC" in capsys.readouterr().out
 
 
+def _point_cli_at(tmp_path: Path):  # type: ignore[no-untyped-def]
+    def point(d: dict) -> None:  # type: ignore[type-arg]
+        d["ml"]["research_dir"] = str(tmp_path / "research")
+        d["ml"]["artifact_dir"] = str(tmp_path / "models")
+        d["database"]["path"] = str(tmp_path / "trading.db")
+    return point
+
+
+@pytest.mark.parametrize("meta", [None, {"description": "no source"}, {"source": "HISTORICAL"}])
+def test_cli_refuses_unlabelled_or_mislabelled_datasets(config_dir: Path, edit_yaml, tmp_path: Path,  # type: ignore[no-untyped-def]
+                                                        meta: dict[str, str] | None) -> None:
+    """Audit Phase 7 warning 1: a dataset's label is never guessed, and SYNTH data never trains as HISTORICAL."""
+    from backtest.data import save_dataset
+    from ml.__main__ import main
+
+    edit_yaml("settings.yaml", _point_cli_at(tmp_path))
+    d = save_dataset(synthetic_dataset(days=3), tmp_path / "ds")
+    if meta is None:
+        (d / "meta.json").unlink()
+    else:
+        (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    with pytest.raises(SystemExit, match="refusing dataset"):
+        main(["train", "--config-dir", str(config_dir), "--data", str(d), "--strategy", "orb_options",
+              "--kind", "signal_filter", "--folds", "3"])
+    assert not (tmp_path / "trading.db").exists() and not (tmp_path / "models").exists()
+    assert not (tmp_path / "research").exists()
+
+
+def test_cli_routes_an_explicitly_synthetic_dataset_to_research(config_dir: Path, edit_yaml, tmp_path: Path,  # type: ignore[no-untyped-def]
+                                                                capsys: pytest.CaptureFixture[str]) -> None:
+    from backtest.data import save_dataset
+    from ml.__main__ import main
+
+    edit_yaml("settings.yaml", _point_cli_at(tmp_path))
+    d = save_dataset(synthetic_dataset(days=6), tmp_path / "ds")
+    assert json.loads((d / "meta.json").read_text(encoding="utf-8"))["source"] == "SYNTHETIC"
+    rc = main(["train", "--config-dir", str(config_dir), "--data", str(d), "--strategy", "orb_options",
+               "--kind", "signal_filter", "--folds", "3", "--every", "10"])
+    assert rc == 0 and "SYNTHETIC training set" in capsys.readouterr().out
+    assert not (tmp_path / "trading.db").exists() and not (tmp_path / "models").exists()
+    assert (tmp_path / "research" / "research_registry.db").is_file()
+
+
 def test_feature_frame_used_for_training_is_tagged(train_set: TrainingSet) -> None:
     assert isinstance(train_set.features, FeatureFrame) and train_set.features.is_synthetic

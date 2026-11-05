@@ -4,7 +4,9 @@
     # to the research registry (settings ml.research_dir), never the trading DB.
     python -m ml train --synthetic --lot-units 65 --days 30 --strategy orb_options --kind all
 
-    # A HISTORICAL dataset directory (backtest/data.py format). Registers into
+    # A HISTORICAL dataset directory (backtest/data.py format). Its meta.json
+    # must state "source" explicitly (a dataset without one is refused), and a
+    # HISTORICAL dataset with SYNTH-tagged instruments is refused. Registers into
     # the trading database (the bot must have created it) as TRAINED, or
     # VALIDATED when every gate passes. Promotion is a separate, human step.
     python -m ml train --data path/to/dataset --strategy vwap_ema --kind signal_filter --events strategy
@@ -21,7 +23,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from backtest.data import HistoricalDataset, load_dataset
+from backtest.data import BacktestDataError, HistoricalDataset, load_dataset
 from backtest.synthetic_data import SyntheticSpec, generate_synthetic_dataset
 from config.loader import load_config
 from config.settings import BotConfig
@@ -64,7 +66,13 @@ def _dataset(args: argparse.Namespace, cfg: BotConfig) -> HistoricalDataset:
                                           cfg.settings.market_session)
     if not args.data:
         raise SystemExit("give --data <dataset dir> or --synthetic")
-    return load_dataset(Path(args.data))
+    try:
+        # The source label decides which registry a model goes to, so it must be
+        # stated in meta.json (never defaulted), and HISTORICAL data must not
+        # contain SYNTH-tagged instruments (enforced by HistoricalDataset).
+        return load_dataset(Path(args.data), require_source=True)
+    except BacktestDataError as exc:
+        raise SystemExit(f"refusing dataset {args.data}: {exc}") from exc
 
 
 def _train(args: argparse.Namespace) -> int:

@@ -18,6 +18,12 @@ On-disk format (``load_dataset`` / ``save_dataset``)::
     <dir>/candles.csv        instrument_key,timestamp,open,high,low,close,volume,oi
     <dir>/meta.json          {"source": "HISTORICAL" | "SYNTHETIC", "description": "..."}
 
+``meta.json`` is optional for backtests (a missing file reads as HISTORICAL),
+but ``load_dataset(..., require_source=True)`` refuses a dataset without an
+explicit ``source``; the ML layer always loads that way, so a dataset's label
+is never guessed before it is used to train a model. A dataset labelled
+HISTORICAL whose instruments carry the ``SYNTH`` tag is always refused.
+
 ``timestamp`` is the candle START as ISO-8601 with a UTC offset (e.g.
 ``2026-09-01T09:15:00+05:30``, the shape Upstox's historical-candle API
 returns). Naive timestamps are rejected rather than guessed.
@@ -39,11 +45,22 @@ from core.clock import IST, ensure_ist
 from core.models import Candle, Instrument
 
 DataSource = Literal["SYNTHETIC", "HISTORICAL"]
+DATA_SOURCES: tuple[DataSource, ...] = ("HISTORICAL", "SYNTHETIC")
 ONE_MINUTE = timedelta(minutes=1)
+#: Marker in the instrument key and trading symbol of every generated
+#: (``backtest/synthetic_data.py``) instrument. Real Upstox instruments never
+#: carry it.
+SYNTH_TAG = "SYNTH"
 
 
 class BacktestDataError(ValueError):
     """The dataset is unusable (inconsistent, misaligned, or incomplete)."""
+
+
+def synthetic_tagged(instruments: Iterable[Instrument]) -> list[str]:
+    """Instrument keys whose key or trading symbol carries the ``SYNTH`` tag."""
+    return [i.instrument_key for i in instruments
+            if SYNTH_TAG in i.instrument_key.upper() or SYNTH_TAG in i.trading_symbol.upper()]
 
 
 @dataclass(frozen=True)
@@ -55,6 +72,14 @@ class HistoricalDataset:
     _by_day: dict[date, dict[str, tuple[Candle, ...]]] = field(default_factory=dict, compare=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.source not in DATA_SOURCES:
+            raise BacktestDataError(f"dataset source must be HISTORICAL or SYNTHETIC, not {self.source!r}")
+        if self.source == "HISTORICAL":
+            tagged = synthetic_tagged(self.instruments)
+            if tagged:
+                raise BacktestDataError(
+                    f"dataset is labelled HISTORICAL but {len(tagged)} instrument(s) carry the {SYNTH_TAG} tag "
+                    f"(e.g. {tagged[0]}); SYNTHETIC data must be labelled SYNTHETIC")
         by_day: dict[date, dict[str, list[Candle]]] = defaultdict(lambda: defaultdict(list))
         for key, series in self.candles.items():
             for c in series:
@@ -136,8 +161,18 @@ def candle_from_row(row: Mapping[str, Any]) -> Candle:
                   close=float(row["close"]), volume=int(float(row.get("volume") or 0)), oi=oi)
 
 
-def load_dataset(directory: Path) -> HistoricalDataset:
+def load_dataset(directory: Path, *, require_source: bool = False) -> HistoricalDataset:
+    """Load a dataset directory.
+
+    ``require_source=True`` (always used by the ML layer) refuses a directory
+    with no ``meta.json`` or a ``meta.json`` without an explicit ``source``.
+    """
     directory = Path(directory)
+    if require_source:
+        meta_path = directory / "meta.json"
+        if not meta_path.is_file():
+            raise BacktestDataError(f"{directory} has no meta.json; the data source (HISTORICAL or SYNTHETIC) "
+                                    "must be stated explicitly, it is never assumed")
     try:
         records = json.loads((directory / "instruments.json").read_text(encoding="utf-8"))
         meta = json.loads((directory / "meta.json").read_text(encoding="utf-8")) \
@@ -156,8 +191,13 @@ def load_dataset(directory: Path) -> HistoricalDataset:
         if isinstance(exc, BacktestDataError):
             raise
         raise BacktestDataError(f"cannot load dataset from {directory}: {exc}") from exc
+    if not isinstance(meta, dict):
+        raise BacktestDataError("meta.json must be a JSON object")
+    if require_source and "source" not in meta:
+        raise BacktestDataError(f"{directory / 'meta.json'} has no \"source\"; state HISTORICAL or SYNTHETIC "
+                                "explicitly")
     source = meta.get("source", "HISTORICAL")
-    if source not in ("HISTORICAL", "SYNTHETIC"):
+    if source not in DATA_SOURCES:
         raise BacktestDataError(f"meta.json source must be HISTORICAL or SYNTHETIC, not {source!r}")
     candles = {k: tuple(sorted(v, key=lambda c: c.start)) for k, v in series.items()}
     return HistoricalDataset(instruments, candles, source, str(meta.get("description", "")))

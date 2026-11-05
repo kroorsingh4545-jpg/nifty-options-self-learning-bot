@@ -192,6 +192,12 @@ python -m ml list --research
 python -m ml train --data path/to/dataset --strategy vwap_ema --kind signal_filter --events strategy
 ```
 
+`--data` reads the label from the dataset's `meta.json`, and that label decides the registry. So the ML
+layer never guesses it: a dataset with no `meta.json`, or a `meta.json` without an explicit `"source"`, is
+refused. A dataset labelled HISTORICAL whose instrument keys or symbols carry the `SYNTH` tag (everything
+`backtest/synthetic_data.py` generates) is refused too. A dataset saved from the SYNTHETIC generator keeps
+its SYNTHETIC label and goes to the research registry.
+
 A HISTORICAL run that passes every gate ends VALIDATED. Turning it on is a separate, deliberate step:
 `ModelRegistry.mark_paper_ready(run_id, approved_by="<name>")`, then `ml.enabled: true` for that strategy,
 then `load_strategy_models(registry, cfg)` passed as `TradingBot(ml_models=...)`. LIVE needs Phase 9's
