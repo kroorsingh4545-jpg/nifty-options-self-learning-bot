@@ -102,13 +102,16 @@ class RLRuntime:
             del self.applied[:-200]
 
     def _record(self, trade_uid: str, advice: TradeAdvice, now: datetime, *, applied: bool | None, result: str) -> None:
+        """Persist one management decision. Building and writing the record are
+        guarded together (``RLTradeAdvisor.record_decision``): a failure
+        suspends RL for the strategy and never escapes the candle listener."""
         info = self.advisor.last.get(advice.strategy_id, {})
         details = {k: v for k, v in info.items() if k not in ("trade", "action", "model", "decided_at", "reason")}
-        self.advisor.record(self.advisor.decision_record(
+        self.advisor.record_decision(
             kind=RLDecisionKind.MANAGE, strategy_id=advice.strategy_id, trade_uid=trade_uid,
             action=advice.action.value, decided_at=now, reason=advice.reason or "", applied=applied,
             result=result, new_stop=advice.new_stop, exit_lots=advice.exit_lots, confidence=advice.confidence,
-            model_version=advice.model_version, details=details))
+            model_version=advice.model_version, details=details)
 
 
 def build_rl(bot: TradingBot, models: Mapping[str, LoadedModel], *, research: bool = False,

@@ -451,12 +451,23 @@ class RiskEventRepository(_ModeScoped):
         params.append(int(limit))
         return [RiskEventRecord.from_row(r) for r in self.db.query(sql, params)]
 
-    def mentioning(self, text: str, strategy_id: str | None = None) -> list[RiskEventRecord]:
-        """Events whose message or details mention ``text`` (e.g. a trade uid), oldest first."""
+    def mentioning(self, text: str, strategy_id: str | None = None, *, since: datetime | None = None,
+                   until: datetime | None = None) -> list[RiskEventRecord]:
+        """Events whose message or details mention ``text`` (e.g. a trade uid),
+        oldest first. ``since`` / ``until`` (inclusive) bound the search to a
+        time window so the (mode, created_at) index is used instead of a scan
+        of the whole table."""
         like = "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-        sql = ("SELECT * FROM risk_events WHERE mode = ? AND (message LIKE ? ESCAPE '\\' "
-               "OR details_json LIKE ? ESCAPE '\\')")
-        params: list[Any] = [self.mode.value, like, like]
+        sql = "SELECT * FROM risk_events WHERE mode = ?"
+        params: list[Any] = [self.mode.value]
+        if since is not None:
+            sql += " AND created_at >= ?"
+            params.append(ensure_ist(since).isoformat())
+        if until is not None:
+            sql += " AND created_at <= ?"
+            params.append(ensure_ist(until).isoformat())
+        sql += " AND (message LIKE ? ESCAPE '\\' OR details_json LIKE ? ESCAPE '\\')"
+        params += [like, like]
         if strategy_id is not None:
             sql += " AND (strategy_id = ? OR strategy_id IS NULL)"
             params.append(strategy_id)

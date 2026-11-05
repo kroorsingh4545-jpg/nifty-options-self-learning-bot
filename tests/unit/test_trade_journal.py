@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import ast
 import asyncio
-from datetime import date, timedelta
+import time as wall
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,10 +15,28 @@ import pytest
 from backtest.backtester import Backtester, BacktestOptions, BacktestResult, evidence_of
 from backtest.synthetic_data import SyntheticSpec, generate_synthetic_dataset
 from config.settings import AppSettings, BotConfig
-from core.enums import EvidenceSource, OrderStatus, SnapshotPurpose, TradeStatus, TradingMode
+from core.clock import IST
+from core.enums import (
+    EvidenceSource,
+    OptionType,
+    OrderSide,
+    OrderStatus,
+    RiskSeverity,
+    SnapshotPurpose,
+    TradeStatus,
+    TradingMode,
+)
+from core.ids import new_trade_uid
 from data.storage.database import Database
+from data.storage.records import RiskEventRecord, TradeRecord
 from data.storage.repositories import Repositories
-from learning.trade_journal import TradeJournal, build_entry, config_risk_fn, execution_quality
+from learning.trade_journal import (
+    EVENT_WINDOW_AFTER_EXIT,
+    TradeJournal,
+    build_entry,
+    config_risk_fn,
+    execution_quality,
+)
 from tests.ml_support import config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -66,7 +85,6 @@ def test_journal_rows_carry_everything_reflection_needs(run: tuple[BacktestResul
         # features at entry and exit: point in time, taken at the first minute after the event
         fe, fx = j.features_entry_json, j.features_exit_json
         assert "rv_15m" in fe and "option_moneyness_pct" in fe and "rv_15m" in fx
-        from datetime import datetime
         e_at, x_at = datetime.fromisoformat(fe["as_of"]), datetime.fromisoformat(fx["as_of"])
         assert j.entry_time <= e_at <= j.entry_time + timedelta(minutes=1, seconds=1)
         assert j.exit_time <= x_at <= j.exit_time + timedelta(minutes=1, seconds=1)
@@ -172,3 +190,73 @@ def test_learning_never_imports_broker_execution_or_risk() -> None:
             elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
                 tops.add(node.module.split(".")[0])
         assert not tops & {"broker", "execution", "risk", "runtime", "dashboard"}, path.name
+
+
+
+# --------------------------------------------------------------------------- #
+# Audit warnings 3 and 4
+# --------------------------------------------------------------------------- #
+
+
+def _event(repos: Repositories, at: datetime, message: str) -> None:
+    repos.risk_events.insert(RiskEventRecord(mode=TradingMode.PAPER, strategy_id="orb_options", event_type="T",
+                                             severity=RiskSeverity.INFO, message=message, created_at=at))
+
+
+def test_risk_event_lookup_is_time_bounded_and_indexed(paper: Repositories) -> None:
+    t0 = datetime(2026, 9, 7, 10, 0, tzinfo=IST)
+    _event(paper, t0 - timedelta(days=1), "old PAPER-T-x mention")
+    _event(paper, t0 + timedelta(minutes=5), "inside PAPER-T-x mention")
+    _event(paper, t0 + timedelta(days=1), "later PAPER-T-x mention")
+    got = paper.risk_events.mentioning("PAPER-T-x", "orb_options", since=t0, until=t0 + timedelta(hours=1))
+    assert [e.message for e in got] == ["inside PAPER-T-x mention"]
+    assert len(paper.risk_events.mentioning("PAPER-T-x")) == 3  # unbounded still works
+    plan = " ".join(str(tuple(r)) for r in paper.db.query(
+        "EXPLAIN QUERY PLAN SELECT * FROM risk_events WHERE mode = ? AND created_at >= ? AND created_at <= ? "
+        "AND (message LIKE ? OR details_json LIKE ?)", ("PAPER", "a", "b", "%x%", "%x%")))
+    assert "ix_risk_events_time" in plan
+    with paper.db.transaction():
+        for i in range(20_000):  # a long-lived trading database
+            _event(paper, t0 - timedelta(days=30, minutes=i), f"unrelated event {i}")
+    started = wall.perf_counter()
+    for _ in range(20):
+        paper.risk_events.mentioning("PAPER-T-x", "orb_options", since=t0, until=t0 + timedelta(hours=1))
+    assert (wall.perf_counter() - started) / 20 < 0.05  # never a scan of the 20k rows
+
+
+def test_journal_lookup_only_reads_the_trade_window(run: tuple[BacktestResult, Path]) -> None:
+    res, path = run
+    db = Database.open_existing(path)
+    repos = Repositories(db, TradingMode.PAPER)
+    t = repos.trades.get(res.journal[0].trade_uid)
+    assert t is not None and t.exit_time is not None
+    facts = TradeJournal(repos, data_source=EvidenceSource.SYNTHETIC).facts(t)
+    assert all(t.created_at <= e.created_at <= t.exit_time + EVENT_WINDOW_AFTER_EXIT for e in facts.risk_events)
+    db.close()
+
+
+def _closed(repos: Repositories, created: datetime) -> str:
+    uid = new_trade_uid(TradingMode.PAPER, "orb_options")
+    repos.trades.insert(TradeRecord(
+        trade_uid=uid, mode=TradingMode.PAPER, strategy_id="orb_options", strategy_version="0.1.0",
+        instrument_key="NSE_FO|1", trading_symbol="NIFTY SYNTH CE", option_type=OptionType.CE, strike=25000,
+        expiry=date(2026, 11, 10), side=OrderSide.BUY, quantity=65, entry_price=100, entry_time=created,
+        initial_stop_loss=75, stop_loss=75, created_at=created, updated_at=created))
+    repos.trades.close(uid, exit_price=110, exit_reason="TARGET", gross_pnl=650, charges=40, r_multiple=0.4)
+    return uid
+
+
+def test_trades_from_earlier_sessions_are_journaled_as_unknown(paper: Repositories) -> None:
+    session = datetime(2026, 11, 4, 9, 0, tzinfo=IST)
+    old = _closed(paper, session - timedelta(days=1))
+    new = _closed(paper, session + timedelta(hours=1))
+    journal = TradeJournal(paper, data_source=EvidenceSource.LIVE_FEED, session_start=session)
+    assert journal.backfill(["orb_options"]) == 2
+    old_row, new_row = paper.journal.get(old), paper.journal.get(new)
+    assert old_row is not None and old_row.data_source is EvidenceSource.UNKNOWN and not old_row.is_real_evidence
+    assert new_row is not None and new_row.data_source is EvidenceSource.LIVE_FEED
+
+
+def test_a_backtest_session_keeps_its_own_label(run: tuple[BacktestResult, Path]) -> None:
+    res, _ = run  # every trade of a backtest belongs to its own session: none is relabelled UNKNOWN
+    assert res.journal and {j.data_source for j in res.journal} == {EvidenceSource.SYNTHETIC}

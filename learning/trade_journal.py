@@ -32,7 +32,7 @@ import math
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from config.settings import BotConfig, StrategyConfig
@@ -54,6 +54,8 @@ log = logging.getLogger(__name__)
 #: Snapshot schema of the journal's own ENTRY / EXIT snapshots (market features
 #: from ml.feature_engineering plus a few trade fields).
 JOURNAL_SNAPSHOT_SCHEMA = "journal-1"
+#: risk events about a trade are looked up from its creation to this long after its exit
+EVENT_WINDOW_AFTER_EXIT = timedelta(minutes=30)
 
 RiskConfigFn = Callable[[TradeRecord], Mapping[str, Any]]
 
@@ -221,10 +223,19 @@ def build_entry(facts: TradeFacts, *, data_source: EvidenceSource, risk_cfg: Map
 
 class TradeJournal:
     def __init__(self, repos: Repositories, *, data_source: EvidenceSource,
-                 risk_config_fn: RiskConfigFn | None = None) -> None:
+                 risk_config_fn: RiskConfigFn | None = None, session_start: datetime | None = None) -> None:
+        """``data_source`` labels trades of THIS session. A trade created before
+        ``session_start`` (an earlier session, possibly on another feed, or
+        before Phase 9) is labelled UNKNOWN: its evidence cannot be verified."""
         self.repos = repos
         self.data_source = EvidenceSource(data_source)
         self._risk_cfg = risk_config_fn
+        self.session_start = ensure_ist(session_start) if session_start is not None else None
+
+    def label_for(self, trade: TradeRecord) -> EvidenceSource:
+        if self.session_start is not None and trade.created_at < self.session_start:
+            return EvidenceSource.UNKNOWN
+        return self.data_source
 
     def facts(self, trade: TradeRecord) -> TradeFacts:
         r = self.repos
@@ -232,7 +243,10 @@ class TradeJournal:
         fills = [f for o in orders if o.id is not None for f in r.fills.list_for_order(o.id)]
         snaps = [s for s in r.feature_snapshots.list_for_trade(trade.trade_uid)
                  if s.purpose in (SnapshotPurpose.ENTRY, SnapshotPurpose.EXIT)]
-        events = r.risk_events.mentioning(trade.trade_uid, trade.strategy_id)
+        # bounded to the trade's own lifetime (plus the post-close cancel of its
+        # resting stop), so the lookup uses the time index, never a table scan
+        end = (trade.exit_time or trade.updated_at) + EVENT_WINDOW_AFTER_EXIT
+        events = r.risk_events.mentioning(trade.trade_uid, trade.strategy_id, since=trade.created_at, until=end)
         return TradeFacts(trade, orders, fills, snaps, events, r.rl_decisions.list_for_trade(trade.trade_uid))
 
     def record(self, trade_uid: str) -> TradeJournalRecord | None:
@@ -244,7 +258,7 @@ class TradeJournal:
         if t is None or t.status is not TradeStatus.CLOSED:
             return None
         cfg = self._risk_cfg(t) if self._risk_cfg else None
-        entry = build_entry(self.facts(t), data_source=self.data_source, risk_cfg=cfg)
+        entry = build_entry(self.facts(t), data_source=self.label_for(t), risk_cfg=cfg)
         self.repos.journal.insert(entry)
         return self.repos.journal.get(trade_uid)
 
@@ -270,6 +284,7 @@ class TradeJournal:
         return self.repos.journal.list(strategy_id, since=since, until=until)
 
 
-__all__ = ["JOURNAL_SNAPSHOT_SCHEMA", "TradeFacts", "TradeJournal", "build_entry", "clean_features",
+__all__ = ["EVENT_WINDOW_AFTER_EXIT", "JOURNAL_SNAPSHOT_SCHEMA", "TradeFacts", "TradeJournal", "build_entry",
+           "clean_features",
            "config_risk_fn", "execution_quality", "record_trade_snapshot", "risk_config", "rl_activity",
            "trade_errors"]

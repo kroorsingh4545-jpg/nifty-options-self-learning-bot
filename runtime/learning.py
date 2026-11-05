@@ -13,7 +13,9 @@ seen it) the recorder looks at the position manager's trades:
 Snapshots are taken at the first candle after the event, so they lag the
 fill by up to one minute; they never use data from after their as-of time.
 ``flush`` journals anything still pending (end of a backtest, shutdown), and
-start-up backfills closed trades from earlier sessions.
+start-up backfills closed trades from earlier sessions. Those (and any trade
+created before this session started) are labelled UNKNOWN: only trades opened
+in this session carry its evidence label.
 
 Strictly read-only towards trading: it reads ``PositionManager.trades`` and
 writes only ``feature_snapshots`` and ``trade_journal``. Any failure is
@@ -102,7 +104,10 @@ class LearningRecorder:
 
 def build_learning(bot: TradingBot, *, data_source: EvidenceSource,
                    features: FeatureEngine | None = None) -> LearningRecorder:
-    journal = TradeJournal(bot.repos, data_source=data_source, risk_config_fn=config_risk_fn(bot.cfg))
+    # Trades created before this session (earlier sessions, other feeds, pre-Phase 9)
+    # are journaled as UNKNOWN evidence, never with this session's label.
+    journal = TradeJournal(bot.repos, data_source=data_source, risk_config_fn=config_risk_fn(bot.cfg),
+                           session_start=bot._now())
     rec = LearningRecorder(bot, features or feature_engine(bot), journal)
     try:
         n = journal.backfill(bot.cfg.strategies.strategies)

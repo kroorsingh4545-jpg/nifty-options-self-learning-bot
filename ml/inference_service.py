@@ -327,6 +327,21 @@ class RLTradeAdvisor:
             log.critical("RL suspended for the session: entries refused, trades keep their configured stops",
                          extra={"strategy_id": strategy_id, "reason": reason})
 
+    def record_decision(self, **fields: Any) -> bool:
+        """Build AND persist one decision inside one guard (``decision_record``
+        fields). Any failure - an invalid record or a failed write - returns
+        False and suspends RL for the strategy; it never raises into the
+        caller (the candle listener / the entry filter)."""
+        sid = str(fields.get("strategy_id", "?"))
+        try:
+            rec = self.decision_record(**fields)
+        except Exception as exc:
+            self.record_failures += 1
+            log.exception("could not build the RL decision record", extra={"strategy_id": sid})
+            self.suspend(sid, f"RL decision record invalid: {type(exc).__name__}")
+            return False
+        return self.record(rec)
+
     def record(self, rec: RLDecisionRecord) -> bool:
         """Persist one decision. False (and the strategy suspended) on failure."""
         if self.decisions is None:
@@ -396,12 +411,12 @@ class RLTradeAdvisor:
             decision = self._evaluate(signal)
         info = dict(self.last.get(sid, {}))
         action = str(info.pop("action", "VETO"))
-        rec = self.decision_record(
+        recorded = self.record_decision(
             kind=RLDecisionKind.ENTRY, strategy_id=sid, signal_id=signal.signal_id, action=action,
             decided_at=self._now(), allowed=decision.allow, reason=decision.reason,
             confidence=_float(info.get("confidence")), model_version=_str(info.pop("model", None)),
             details={k: v for k, v in info.items() if k != "signal_id"})
-        if not self.record(rec) and decision.allow:
+        if not recorded and decision.allow:
             return self._veto(sid, signal.signal_id, "RL decision could not be recorded (fail-closed)")
         return decision
 

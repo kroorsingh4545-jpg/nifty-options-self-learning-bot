@@ -417,3 +417,69 @@ def test_every_rl_decision_in_a_backtest_is_persisted() -> None:
     assert all(d.applied is not None or d.action == "HOLD" for d in manage)
     assert any(d.action == "TRAIL_STOP" and d.applied for d in manage)
     assert all(d.decided_at.date() in res.days for d in res.rl_decisions)  # simulated time, not wall clock
+
+
+
+# --------------------------------------------------------------------------- #
+# Audit warning 1: an invalid RL record never escapes; it suspends RL
+# --------------------------------------------------------------------------- #
+
+
+def test_an_invalid_entry_record_vetoes_without_raising(monkeypatch: pytest.MonkeyPatch,
+                                                        paper: Repositories) -> None:
+    from ml.inference_service import RLTradeAdvisor
+
+    a, _ = advisor({"orb_options": rl_stub("orb_options", StubRL(Action.ENTER))})
+    a.decisions = paper.rl_decisions
+
+    def broken(self: RLTradeAdvisor, **kw: Any) -> RLDecisionRecord:
+        raise ValueError("injected: invalid record")
+
+    monkeypatch.setattr(RLTradeAdvisor, "decision_record", broken)
+    d = a.evaluate(_sig())  # must not raise
+    assert not d.allow and "could not be recorded" in d.reason
+    assert "orb_options" in a.suspended and a.record_failures == 1
+
+
+def test_management_record_failures_never_escape_the_candle_listener(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fault injection on SYNTHETIC data: building every MANAGE record fails.
+    The backtest completes, every trade still exits under its stops /
+    targets / square-off, nothing is persisted for management, and RL is
+    suspended for the strategy that traded."""
+    from ml.inference_service import RLTradeAdvisor
+
+    original = RLTradeAdvisor.decision_record
+    suspended: dict[str, str] = {}
+
+    def flaky(self: RLTradeAdvisor, **kw: Any) -> RLDecisionRecord:
+        if kw.get("kind") is RLDecisionKind.MANAGE:
+            raise ValueError("injected: invalid record")
+        return original(self, **kw)
+
+    real_suspend = RLTradeAdvisor.suspend
+
+    def spy(self: RLTradeAdvisor, strategy_id: str, reason: str) -> None:
+        suspended[strategy_id] = reason
+        real_suspend(self, strategy_id, reason)
+
+    monkeypatch.setattr(RLTradeAdvisor, "decision_record", flaky)
+    monkeypatch.setattr(RLTradeAdvisor, "suspend", spy)
+
+    @dataclass
+    class EnterThenTrail(StubRL):
+        def act(self, raw: np.ndarray, mask: np.ndarray) -> tuple[Action, dict[str, Any]]:
+            if mask[Action.ENTER.value]:
+                return Action.ENTER, {"confidence": 1.0}
+            return (Action.TRAIL_STOP if mask[Action.TRAIL_STOP.value] else Action.HOLD), {"confidence": 0.8}
+
+    ds = generate_synthetic_dataset(SyntheticSpec(lot_units=65, start=date(2026, 9, 7), days=2, seed=14,
+                                                  strike_margin_points=200))
+    sids = tuple(s for s, c in config().strategies.strategies.items() if c.enabled)
+    models = {s: rl_stub(s, EnterThenTrail(Action.TRAIL_STOP)) for s in sids}
+    res = asyncio.run(Backtester(config(), ds, BacktestOptions(rl_strategies=sids, rl_models=models,
+                                                               rl_research=True)).run())
+    assert res.trades and not res.observations.open_after_close
+    assert all(t.status is TradeStatus.CLOSED and t.stop_loss >= t.initial_stop_loss for t in res.trades)
+    assert not [d for d in res.rl_decisions if d.kind is RLDecisionKind.MANAGE]
+    assert {t.strategy_id for t in res.trades} <= set(suspended)
+    assert all("invalid" in r for r in suspended.values())
