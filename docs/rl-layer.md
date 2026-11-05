@@ -195,6 +195,11 @@ walk-forward run or the holdout.
   target is hit during a partial exit, the rest is exited right after. A kill switch or square-off
   during a partial waits for it, then exits the rest.
 * Full RL exits are recorded as `exit_reason = TRADE_MANAGER`.
+* **Resting-SELL invariant.** For every trade, the live SELL quantity (protective stop plus exit orders) is
+  never more than the quantity held. Protective placement and cancellation are serialised per trade. A
+  cancel counts only when the broker confirms it. An exit is never sent while the stop or another sell may
+  still be live; the bot escalates instead (CRITICAL alert and kill switch). A partial exit sells down to a
+  quantity fixed when it was requested. See `tests/unit/test_resting_sell_invariant.py`.
 
 ## Running it
 

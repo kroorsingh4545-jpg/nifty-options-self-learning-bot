@@ -19,6 +19,23 @@ for a trade that is exiting, or at/after the square-off start (the square-off
 manager owns the end of the day). Limits, exposure and the kill switch are
 not reachable from advice at all.
 
+Resting-SELL invariant: the quantity of LIVE sell orders for a trade (the
+protective SL-M plus any exit order) never exceeds the quantity held, so no
+stop or retry can ever sell more than the position (a short option).
+
+* Placing the protective stop and cancelling it are serialised per trade
+  (``ManagedTrade.protect_lock``); an exit waits for an in-flight placement
+  and then cancels it.
+* A protective stop is sized to what is not already on a live SELL order
+  (``sellable_qty``).
+* A cancel counts only when the broker confirms the order is terminal
+  (``OrderManager.cancel_confirmed``). If the resting stop cannot be
+  cancelled, an exit is NOT sent (the stop keeps protecting the position) and
+  the failure escalates (CRITICAL alert + kill switch); a partial exit is
+  simply abandoned.
+* An exit is never sent while another SELL order of the trade is still live,
+  and exit retries never re-send while the previous attempt may be live.
+
 Strategy isolation: trades and positions are keyed by strategy; a strategy
 can never exit or modify another strategy's trade.
 """
@@ -109,6 +126,8 @@ class ManagedTrade:
     partial_in_progress: bool = False
     partial_exits: int = 0
     escalate_exit: ExitReason | None = None  # stop/target hit while a partial exit was running
+    # serialises protective-stop placement and cancellation (resting-SELL invariant)
+    protect_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
     tasks: set[asyncio.Task[None]] = field(default_factory=set)
 
     @property
@@ -259,6 +278,10 @@ class PositionManager(OpenTradeCounter):
         self._sync_position(t)
 
     def _apply_exit_fill(self, t: ManagedTrade, qty: int, price: float, charges: float, purpose: OrderPurpose) -> None:
+        if qty > t.open_qty:  # sold more than held: the broker position is now short
+            self.orders.escalate_exit_failure(
+                t.strategy_id, f"{t.trade_uid}: SELL fill of {qty} exceeds the {t.open_qty} held "
+                               f"({purpose.value}) - position may be SHORT")
         qty = min(qty, t.open_qty)
         realized = (price - t.avg_entry) * qty
         t.exited_qty += qty
@@ -289,20 +312,56 @@ class PositionManager(OpenTradeCounter):
         elif self.cfg.settings.execution.use_exchange_stop_orders and not t.exit_in_progress:
             self._spawn(t, self._place_protective_stop(t))
 
+    # ------------------------------------------------------------------ #
+    # Resting-SELL invariant
+    # ------------------------------------------------------------------ #
+    def resting_sell_qty(self, t: ManagedTrade) -> int:
+        """Unfilled quantity on this trade's live (non-terminal) SELL orders."""
+        return sum(o.quantity - o.filled_quantity for o in self.repos.orders.list_for_trade(t.trade_uid)
+                   if o.side is OrderSide.SELL and o.status not in TERMINAL)
+
+    def sellable_qty(self, t: ManagedTrade) -> int:
+        """Held quantity not already reserved by a live SELL order."""
+        return max(0, t.open_qty - self.resting_sell_qty(t))
+
     async def _place_protective_stop(self, t: ManagedTrade) -> None:
-        if t.open_qty <= 0 or t.protective_order_id is not None or t.exit_in_progress:
-            return
-        try:
-            rec = await self.orders.submit(OrderIntent(t.strategy_id, t.instrument, OrderSide.SELL, t.open_qty,
-                                                       OrderType.SL_M, OrderPurpose.STOP_LOSS, t.trade_uid,
-                                                       trigger_price=t.stop))
-        except Exception:
-            log.exception("failed to place protective stop; local monitoring remains active",
-                          extra={"strategy_id": t.strategy_id})
-            return
-        self._by_order[rec.client_order_id] = t.trade_uid
-        if rec.status not in TERMINAL:
-            t.protective_order_id = rec.client_order_id
+        async with t.protect_lock:
+            if t.open_qty <= 0 or t.protective_order_id is not None or t.exit_in_progress \
+                    or t.status is not TradeStatus.OPEN:
+                return
+            qty = self.sellable_qty(t)
+            if qty <= 0:
+                log.warning("protective stop not placed: live SELL orders already cover the position",
+                            extra={"strategy_id": t.strategy_id, "trade": t.trade_uid, "open": t.open_qty})
+                return
+            if qty < t.open_qty:
+                log.warning("protective stop sized to the unreserved quantity (live SELL orders exist)",
+                            extra={"strategy_id": t.strategy_id, "trade": t.trade_uid, "open": t.open_qty,
+                                   "qty": qty})
+            try:
+                rec = await self.orders.submit(OrderIntent(t.strategy_id, t.instrument, OrderSide.SELL, qty,
+                                                           OrderType.SL_M, OrderPurpose.STOP_LOSS, t.trade_uid,
+                                                           trigger_price=t.stop))
+            except Exception:
+                log.exception("failed to place protective stop; local monitoring remains active",
+                              extra={"strategy_id": t.strategy_id})
+                return
+            self._by_order[rec.client_order_id] = t.trade_uid
+            if rec.status not in TERMINAL:
+                t.protective_order_id = rec.client_order_id
+
+    async def _release_protective(self, t: ManagedTrade) -> bool:
+        """Cancel the resting stop (after any in-flight placement) and confirm
+        it is gone. ``False``: it may still be live and keeps being tracked."""
+        async with t.protect_lock:
+            coid = t.protective_order_id
+            if coid is None:
+                return True
+            if not await self.orders.cancel_confirmed(coid):
+                return False
+            if t.protective_order_id == coid:
+                t.protective_order_id = None
+            return True
 
     def _close_trade(self, t: ManagedTrade) -> None:
         if t.status is not TradeStatus.OPEN:
@@ -320,10 +379,12 @@ class PositionManager(OpenTradeCounter):
         self.guard.record_trade_close(t.strategy_id, round(net, 2), round(t.charges, 2))
         self.guard.update_unrealized(t.strategy_id, self.unrealized_by_strategy().get(t.strategy_id, 0.0))
         if t.protective_order_id is not None:
-            self._spawn(t, self._cancel_quiet(t.protective_order_id))
+            self._spawn(t, self._cancel_after_close(t))
 
-    async def _cancel_quiet(self, coid: str) -> None:
-        await self.orders.cancel(coid)
+    async def _cancel_after_close(self, t: ManagedTrade) -> None:
+        if not await self._release_protective(t):
+            self.orders.escalate_exit_failure(t.strategy_id, f"resting stop of closed trade {t.trade_uid} could not "
+                                                             "be cancelled and could sell a position that is flat")
 
     def _sync_position(self, t: ManagedTrade, realized_delta: float = 0.0) -> None:
         key = t.instrument.instrument_key
@@ -429,11 +490,19 @@ class PositionManager(OpenTradeCounter):
         try:
             if t.entry_order_id and not t.entry_complete:
                 await self.orders.cancel(t.entry_order_id)  # stop adding to a position we are leaving
-            if t.protective_order_id is not None:
-                await self.orders.cancel(t.protective_order_id)
-                t.protective_order_id = None
+            if not await self._release_protective(t):
+                # Selling now could oversell if the stop also triggers; the stop keeps protecting the position.
+                self.orders.escalate_exit_failure(
+                    t.strategy_id, f"resting stop of {t.trade_uid} could not be cancelled; exit NOT sent "
+                                   "(it could sell more than is held)")
+                return False
             if t.open_qty <= 0:
                 return True
+            live = self.resting_sell_qty(t)
+            if live > 0:
+                self.orders.escalate_exit_failure(
+                    t.strategy_id, f"{live} of {t.trade_uid} is already on live SELL orders; no further exit sent")
+                return False
             log.info("exiting trade", extra={"strategy_id": t.strategy_id, "trade": t.trade_uid,
                                              "reason": reason.value, "qty": t.open_qty})
             ok = await self.orders.exit_position(strategy_id=t.strategy_id, trade_uid=t.trade_uid,
@@ -508,11 +577,14 @@ class PositionManager(OpenTradeCounter):
             return self._refuse(advice, "a partial profit needs the trade to be in profit")
         if t.partial_exits >= scfg.rl.max_partial_exits:
             return self._refuse(advice, f"at most {scfg.rl.max_partial_exits} partial exit(s) per trade")
+        if t.protect_lock.locked():  # the lock alone keeps the invariant; this only avoids churn
+            return self._refuse(advice, "trade is busy (protective stop being placed or cancelled)")
         t.exit_in_progress = True
         t.partial_in_progress = True
-        self._spawn(t, self._partial_exit(t, qty))
+        keep = t.open_qty - qty  # fixed NOW: the quantity that must still be held after the partial
+        self._spawn(t, self._partial_exit(t, keep))
         log.info("trade manager partial exit", extra={"strategy_id": t.strategy_id, "trade": t.trade_uid, "qty": qty,
-                                                      "model": advice.model_version})
+                                                      "keep": keep, "model": advice.model_version})
         return AdviceResult(True, f"partial exit of {qty}")
 
     def _refuse(self, advice: TradeAdvice, reason: str) -> AdviceResult:
@@ -521,15 +593,26 @@ class PositionManager(OpenTradeCounter):
                                                            "reason": reason})
         return AdviceResult(False, reason)
 
-    async def _partial_exit(self, t: ManagedTrade, qty: int) -> None:
-        keep = t.open_qty - qty
+    async def _partial_exit(self, t: ManagedTrade, keep: int) -> None:
+        """Sell down to ``keep`` (fixed when the partial was requested, >= 1
+        lot). Never sells below ``keep`` and never more than is held."""
         try:
-            if t.protective_order_id is not None:
-                await self.orders.cancel(t.protective_order_id)
-                t.protective_order_id = None
+            if keep < t.instrument.lot_size or t.status is not TradeStatus.OPEN or t.open_qty <= keep:
+                log.warning("partial exit abandoned: the position is already at or below the quantity to keep",
+                            extra={"strategy_id": t.strategy_id, "trade": t.trade_uid, "open": t.open_qty,
+                                   "keep": keep})
+                return
+            if not await self._release_protective(t):
+                log.critical("partial exit abandoned: the resting stop could not be cancelled and stays in force",
+                             extra={"strategy_id": t.strategy_id, "trade": t.trade_uid})
+                return
+            if self.resting_sell_qty(t) > 0:
+                log.warning("partial exit abandoned: other SELL orders of the trade are live",
+                            extra={"strategy_id": t.strategy_id, "trade": t.trade_uid})
+                return
             ok = await self.orders.exit_position(strategy_id=t.strategy_id, trade_uid=t.trade_uid,
                                                  instrument=t.instrument,
-                                                 remaining_qty=lambda: max(0, t.open_qty - keep),
+                                                 remaining_qty=lambda: max(0, min(t.open_qty, t.open_qty - keep)),
                                                  purpose=OrderPurpose.EXIT)
             if ok:
                 t.partial_exits += 1
