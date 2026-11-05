@@ -51,14 +51,22 @@ from broker.broker_interface import MarketDataSource
 from broker.paper_broker import PaperBroker
 from config.settings import AppSettings, BotConfig, StrategyDefaults
 from core.clock import IST, ensure_ist
-from core.enums import OrderSide, TradingMode
+from core.enums import EvidenceSource, OrderSide, TradingMode
 from core.event_bus import Topic
 from core.models import Candle, Instrument, OrderUpdate, Tick
 from core.scheduler import TradingScheduler
 from data.market_data import MarketDataService
 from data.storage.bootstrap import sync_strategies
 from data.storage.database import Database
-from data.storage.records import DailyPnlRecord, FillRecord, OrderRecord, RiskEventRecord, TradeRecord
+from data.storage.records import (
+    DailyPnlRecord,
+    FillRecord,
+    OrderRecord,
+    RiskEventRecord,
+    RLDecisionRecord,
+    TradeJournalRecord,
+    TradeRecord,
+)
 from data.storage.repositories import Repositories
 from ml.inference_service import StrategyModels
 from ml.model_registry import LoadedModel
@@ -80,6 +88,12 @@ OVERRIDABLE_SIZING_KEYS = frozenset({"size_multiplier"})
 
 class BacktestConfigError(ValueError):
     pass
+
+
+def evidence_of(source: str) -> EvidenceSource:
+    """Evidence label of a dataset: HISTORICAL or SYNTHETIC; anything else UNKNOWN."""
+    known = (EvidenceSource.HISTORICAL, EvidenceSource.SYNTHETIC)
+    return EvidenceSource(source) if source in known else EvidenceSource.UNKNOWN
 
 
 # --------------------------------------------------------------------------- #
@@ -427,6 +441,10 @@ class BacktestResult:
     cost_model: CostModel
     elapsed_seconds: float
     warnings: list[str] = field(default_factory=list)
+    #: Phase 9: every persisted RL decision (entry approvals and trade advice)
+    rl_decisions: list[RLDecisionRecord] = field(default_factory=list)
+    #: Phase 9: the trade journal of the run (labelled with the dataset's source)
+    journal: list[TradeJournalRecord] = field(default_factory=list)
 
     @property
     def total_capital(self) -> float:
@@ -533,7 +551,8 @@ class Backtester:
                          subscriber=subscriber, now_fn=clock, sleep=clock.sleep, scheduler=scheduler,
                          reconcile_confirm_delay=0, instrument_refresh_attempts=1, wall_fn=clock,
                          ml_models=self.options.ml_models, ml_research=self.options.ml_research,
-                         rl_models=self.options.rl_models, rl_research=self.options.rl_research)
+                         rl_models=self.options.rl_models, rl_research=self.options.rl_research,
+                         evidence_source=evidence_of(ds.source))
         raw_fills: list[tuple[OrderUpdate, float]] = []
 
         def on_fill(u: OrderUpdate) -> None:
@@ -577,6 +596,8 @@ class Backtester:
                     self.options.progress(d, n + 1, len(self.days))
         finally:
             cancelled = await self._stop(bot, clock, foreign)
+        if bot.learning is not None:
+            bot.learning.flush()  # journal anything closed after the last candle
         if cancelled:
             warnings.append(f"{cancelled} background task(s) still waiting at the end of the run were cancelled")
         result = self._collect(bot, repos, raw_fills, obs, warnings, wall_time.perf_counter() - started)
@@ -639,7 +660,9 @@ class Backtester:
             capital={sid: float(self.cfg.strategies.strategies[sid].allocated_capital) for sid in enabled},
             trades=trades, orders=orders, fills=repos.fills.list_all(), executions=executions,
             risk_events=list(reversed(repos.risk_events.recent(limit=1_000_000))), daily_pnl=daily,
-            observations=obs, cost_model=self.cost, elapsed_seconds=round(elapsed, 2), warnings=warnings)
+            observations=obs, cost_model=self.cost, elapsed_seconds=round(elapsed, 2), warnings=warnings,
+            rl_decisions=[d for sid in sids for d in repos.rl_decisions.list_for_strategy(sid)],
+            journal=repos.journal.list())
 
 
 def run_backtest(cfg: BotConfig, dataset: HistoricalDataset, options: BacktestOptions | None = None) -> BacktestResult:

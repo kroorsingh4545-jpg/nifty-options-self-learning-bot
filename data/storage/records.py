@@ -13,11 +13,16 @@ from typing import Annotated, Any, ClassVar
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from core.autonomy import PAPER_PROMOTION_LEVELS
 from core.clock import ensure_ist, now_ist
 from core.enums import (
     REAL_DATA_ONLY_STATUSES,
+    REAL_EVIDENCE_VERSION_STATUSES,
+    AutonomyLevel,
     ControlCommandStatus,
     ControlCommandType,
+    DeploymentAction,
+    EvidenceSource,
     LearningStage,
     ModelDataSource,
     ModelRunStatus,
@@ -30,8 +35,10 @@ from core.enums import (
     PositionStatus,
     ProductType,
     RiskSeverity,
+    RLDecisionKind,
     SnapshotPurpose,
     StrategyStatus,
+    StrategyVersionStatus,
     TradeStatus,
     TradingMode,
 )
@@ -330,6 +337,8 @@ class ModelRunRecord(Record):
     created_at: ISTDatetime = Field(default_factory=_now)
     updated_at: ISTDatetime = Field(default_factory=_now)
     data_source: ModelDataSource = ModelDataSource.UNKNOWN
+    #: v5: the autonomy level in force when the run was promoted.
+    promoted_autonomy: AutonomyLevel | None = None
 
     @model_validator(mode="after")
     def _check(self) -> ModelRunRecord:
@@ -339,6 +348,11 @@ class ModelRunRecord(Record):
             raise ValueError("training_start must be before training_end")
         if self.status is ModelRunStatus.LIVE_APPROVED and not self.approved_by:
             raise ValueError("LIVE_APPROVED requires a named human approver")
+        if self.status is ModelRunStatus.PAPER_READY and self.promoted_autonomy not in PAPER_PROMOTION_LEVELS:
+            raise ValueError("PAPER_READY requires an autonomy level that allows PAPER promotion")
+        if (self.status in (ModelRunStatus.LIVE_CANDIDATE, ModelRunStatus.LIVE_APPROVED)
+                and self.promoted_autonomy is not AutonomyLevel.LIVE_CANDIDATE_APPROVAL):
+            raise ValueError(f"{self.status.value} requires autonomy level LIVE_CANDIDATE_APPROVAL")
         return self
 
 
@@ -384,3 +398,159 @@ class ControlCommandRecord(Record):
         if not v.strip():
             raise ValueError("operator must be a named person")
         return v.strip()
+
+
+# --------------------------------------------------------------------------- #
+# v5: RL decisions, trade journal, strategy versions, deployments (Phase 9)
+# --------------------------------------------------------------------------- #
+
+
+class RLDecisionRecord(Record):
+    """One RL trade-manager decision (entry approval or trade advice)."""
+
+    json_fields: ClassVar[tuple[str, ...]] = ("details_json",)
+
+    id: int | None = None
+    decision_uid: str = Field(min_length=1)
+    mode: TradingMode
+    strategy_id: StrategyId
+    kind: RLDecisionKind
+    trade_uid: str | None = None
+    signal_id: str | None = None
+    action: str = Field(min_length=1)
+    allowed: bool | None = None
+    applied: bool | None = None
+    result: str | None = None
+    new_stop: float | None = Field(default=None, ge=0)
+    exit_lots: int | None = Field(default=None, ge=0)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    model_version: str | None = None
+    research: bool = False
+    reason: str = ""
+    details_json: dict[str, Any] = Field(default_factory=dict)
+    decided_at: ISTDatetime
+    created_at: ISTDatetime = Field(default_factory=_now)
+
+    @model_validator(mode="after")
+    def _check(self) -> RLDecisionRecord:
+        if self.kind is RLDecisionKind.MANAGE and not self.trade_uid:
+            raise ValueError("a MANAGE decision must name its trade")
+        if self.kind is RLDecisionKind.ENTRY and not self.signal_id:
+            raise ValueError("an ENTRY decision must name its signal")
+        if self.trade_uid is not None:
+            _check_mode_prefix(self.mode, self.trade_uid, "trade_uid")
+        return self
+
+
+class TradeJournalRecord(Record):
+    """LOG stage: one closed trade with everything reflection needs."""
+
+    json_fields: ClassVar[tuple[str, ...]] = ("risk_config_json", "features_entry_json", "features_exit_json",
+                                              "errors_json", "execution_json", "rl_json")
+
+    id: int | None = None
+    trade_uid: str
+    mode: TradingMode
+    strategy_id: StrategyId
+    strategy_version: str = Field(min_length=1)
+    data_source: EvidenceSource
+    instrument_key: str = Field(min_length=1)
+    trading_symbol: str = Field(min_length=1)
+    option_type: OptionType
+    strike: float = Field(gt=0)
+    expiry: date
+    quantity: int = Field(gt=0)
+    entry_time: ISTDatetime
+    exit_time: ISTDatetime
+    entry_price: float = Field(ge=0)
+    exit_price: float = Field(ge=0)
+    entry_reason: str | None = None
+    exit_reason: str | None = None
+    ml_confidence: float | None = Field(default=None, ge=0, le=1)
+    regime: str | None = None
+    initial_stop_loss: float = Field(ge=0)
+    final_stop_loss: float = Field(ge=0)
+    target: float | None = Field(default=None, ge=0)
+    risk_config_json: dict[str, Any] = Field(default_factory=dict)
+    gross_pnl: float
+    costs: float = Field(ge=0)
+    net_pnl: float
+    slippage: float = Field(default=0.0, ge=0)
+    r_multiple: float | None = None
+    features_entry_json: dict[str, Any] = Field(default_factory=dict)
+    features_exit_json: dict[str, Any] = Field(default_factory=dict)
+    errors_json: list[dict[str, Any]] = Field(default_factory=list)
+    execution_json: dict[str, Any] = Field(default_factory=dict)
+    rl_json: dict[str, Any] = Field(default_factory=dict)
+    created_at: ISTDatetime = Field(default_factory=_now)
+
+    @model_validator(mode="after")
+    def _check(self) -> TradeJournalRecord:
+        _check_mode_prefix(self.mode, self.trade_uid, "trade_uid")
+        if self.entry_time > self.exit_time:
+            raise ValueError("entry_time must not be after exit_time")
+        return self
+
+    @property
+    def is_real_evidence(self) -> bool:
+        return self.data_source in (EvidenceSource.LIVE_FEED, EvidenceSource.HISTORICAL)
+
+
+class StrategyVersionRecord(Record):
+    """A strategy parameter version: the YAML baseline or a whitelisted mutation."""
+
+    json_fields: ClassVar[tuple[str, ...]] = ("config_json", "mutation_json", "hypothesis_json", "evaluation_json")
+
+    id: int | None = None
+    version_uid: str = Field(min_length=1)
+    strategy_id: StrategyId
+    version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
+    base_version: str | None = None
+    parent_uid: str | None = None
+    status: StrategyVersionStatus
+    config_json: dict[str, Any]
+    mutation_json: list[dict[str, Any]] = Field(default_factory=list)
+    hypothesis_json: dict[str, Any] = Field(default_factory=dict)
+    evaluation_json: dict[str, Any] = Field(default_factory=dict)
+    evidence_source: EvidenceSource = EvidenceSource.UNKNOWN
+    autonomy_level: AutonomyLevel | None = None
+    approved_by: str | None = None
+    status_reason: str | None = None
+    created_at: ISTDatetime = Field(default_factory=_now)
+    updated_at: ISTDatetime = Field(default_factory=_now)
+
+    @model_validator(mode="after")
+    def _check(self) -> StrategyVersionRecord:
+        if self.status in REAL_EVIDENCE_VERSION_STATUSES and self.evidence_source is not EvidenceSource.HISTORICAL:
+            raise ValueError(f"{self.status.value} requires verification on HISTORICAL data")
+        if self.status is StrategyVersionStatus.LIVE_APPROVED and not (self.approved_by or "").strip():
+            raise ValueError("LIVE_APPROVED requires a named human approver")
+        return self
+
+
+class StrategyDeploymentRecord(Record):
+    """One PAPER deployment change. There is no LIVE deployment record."""
+
+    id: int | None = None
+    deployment_uid: str = Field(min_length=1)
+    mode: TradingMode = TradingMode.PAPER
+    strategy_id: StrategyId
+    action: DeploymentAction
+    version_uid: str | None = None
+    previous_version_uid: str | None = None
+    actor: str = Field(min_length=1)
+    autonomy_level: AutonomyLevel
+    reason: str = ""
+    created_at: ISTDatetime = Field(default_factory=_now)
+
+    @model_validator(mode="after")
+    def _check(self) -> StrategyDeploymentRecord:
+        if self.mode is not TradingMode.PAPER:
+            raise ValueError("only PAPER deployments exist; LIVE deployment is not possible in this build")
+        if self.action is DeploymentAction.DEPLOY and self.version_uid is None:
+            raise ValueError("DEPLOY needs a version")
+        if self.action is DeploymentAction.RETIRE and self.version_uid is not None:
+            raise ValueError("RETIRE returns to the YAML baseline (no version)")
+        if not self.actor.strip():
+            raise ValueError("actor must be named")
+        return self

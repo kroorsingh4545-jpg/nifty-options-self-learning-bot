@@ -18,7 +18,7 @@ import pandas as pd
 import pytest
 
 from core.clock import IST
-from core.enums import ModelDataSource, ModelRunStatus, ModelType, TradingMode
+from core.enums import AutonomyLevel, ModelDataSource, ModelRunStatus, ModelType, TradingMode
 from data.storage.bootstrap import sync_strategies
 from data.storage.database import Database
 from data.storage.records import ModelRunRecord
@@ -130,7 +130,7 @@ def test_pipeline_on_synthetic_data_is_rejected_or_trained_never_validated(
     with pytest.raises(SyntheticModelError):
         research.mark_validated(rec.run_id)
     with pytest.raises(SyntheticModelError):
-        research.mark_paper_ready(rec.run_id, approved_by="a.human")
+        research.mark_paper_ready(rec.run_id, approved_by="a.human", autonomy=AutonomyLevel.PAPER_AUTO_IMPROVE)
     assert research.production_run(rec.model_type, "orb_options") is None
 
 
@@ -250,13 +250,20 @@ def test_promotion_state_machine_on_bare_rows(paper: Repositories, tmp_path: Pat
                                  {"gates_passed": False}))
     with pytest.raises(RegistryError, match="gates"):
         reg.mark_validated("R-fail")
+    auto = AutonomyLevel.PAPER_AUTO_IMPROVE
     with pytest.raises(RegistryError, match="VALIDATED"):
-        reg.mark_paper_ready("R-ok", approved_by="a.human")
+        reg.mark_paper_ready("R-ok", approved_by="a.human", autonomy=auto)
     reg.mark_validated("R-ok")
     with pytest.raises(RegistryError, match="approver"):
-        reg.mark_paper_ready("R-ok", approved_by="  ")
+        reg.mark_paper_ready("R-ok", approved_by="  ", autonomy=auto)
+    with pytest.raises(RegistryError, match="approver"):  # the loop is not a human
+        reg.mark_paper_ready("R-ok", approved_by="learning_loop", autonomy=auto)
+    # Phase 7 audit warning 5: the autonomy level gates the promotion
+    with pytest.raises(RegistryError, match="OBSERVE_ONLY"):
+        reg.mark_paper_ready("R-ok", approved_by="a.human", autonomy=AutonomyLevel.OBSERVE_ONLY)
     assert reg.production_run(ModelType.SIGNAL_FILTER, "orb_options") is None  # VALIDATED is not deployable
-    reg.mark_paper_ready("R-ok", approved_by="a.human")
+    reg.mark_paper_ready("R-ok", approved_by="a.human", autonomy=auto)
+    assert reg.runs.get("R-ok").promoted_autonomy is auto  # type: ignore[union-attr]
     assert reg.production_run(ModelType.SIGNAL_FILTER, "orb_options").run_id == "R-ok"  # type: ignore[union-attr]
     assert reg.production_run(ModelType.SIGNAL_FILTER, "orb_options", TradingMode.LIVE) is None
     assert reg.production_run(ModelType.SIGNAL_FILTER, "vwap_ema") is None  # per-strategy isolation

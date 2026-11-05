@@ -205,6 +205,42 @@ class MLSection(_Frozen):
     min_seeds: int = Field(default=5, ge=5, le=50)
 
 
+class GateThresholds(_Frozen):
+    """VERIFY / PROMOTE thresholds for strategy candidates (Phase 9). They can
+    be made stricter in YAML; the floors keep every gate meaningful."""
+
+    #: candidate OOS expectancy must beat the production version by this many
+    #: rupees per trade AND by this share of |production expectancy|
+    min_expectancy_gain_rs: NonNegativeFloat = 50.0
+    min_expectancy_gain_pct: NonNegativeFloat = Field(default=5.0, le=100.0)
+    #: candidate max drawdown may exceed production by at most this share
+    max_drawdown_worsening_pct: NonNegativeFloat = Field(default=10.0, le=50.0)
+    #: share of walk-forward test windows the candidate must win (or tie)
+    min_fold_win_share: float = Field(default=0.6, ge=0.5, le=1.0)
+    min_folds: int = Field(default=3, ge=2, le=20)
+    #: stress: worst-scenario net loss may be at most this multiple of production's
+    max_stress_loss_ratio: float = Field(default=1.25, ge=1.0, le=2.0)
+    #: block-bootstrap of daily P&L differences (multi-seed robustness)
+    bootstrap_resamples: int = Field(default=200, ge=50, le=5000)
+    min_bootstrap_win_share: float = Field(default=0.8, ge=0.5, le=1.0)
+    min_seeds: int = Field(default=5, ge=5, le=50)
+
+
+class LearningSection(_Frozen):
+    """Self-learning (Reflective Loop) settings. Autonomy itself is
+    ``app.autonomy_level``; nothing here can enable LIVE."""
+
+    journal_enabled: bool = True  # LOG every closed trade (with entry / exit features)
+    research_dir: Path = Path("data/dev/learning")  # SYNTHETIC / research loop runs (never the trading DB)
+    reflection_window_days: int = Field(default=5, ge=1, le=60)
+    max_hypotheses_per_strategy: int = Field(default=3, ge=1, le=10)
+    min_sample_trades: int = Field(default=30, ge=10)  # default hypothesis minimum sample
+    paper_validation_days: int = Field(default=10, ge=5, le=120)  # before LIVE_CANDIDATE
+    paper_validation_min_trades: int = Field(default=20, ge=10)
+    auto_deploy_paper: bool = True  # PAPER_READY versions deploy to PAPER (only if autonomy allows)
+    gates: GateThresholds = GateThresholds()
+
+
 class AppSettings(_Frozen):
     app: AppSection = AppSection()
     market_session: MarketSession = MarketSession()
@@ -217,6 +253,7 @@ class AppSettings(_Frozen):
     execution: ExecutionSection = ExecutionSection()
     logging: LoggingSection = LoggingSection()
     ml: MLSection = MLSection()
+    learning: LearningSection = LearningSection()
 
 
 # --------------------------------------------------------------------------- #

@@ -40,7 +40,7 @@ from broker.upstox_rate_limiter import backoff_delay
 from config.settings import BotConfig
 from core.clock import now_ist
 from core.engine import TradingEngine
-from core.enums import OptionType, OrderStatus, RiskSeverity, StrategyStatus, TradingMode
+from core.enums import EvidenceSource, OptionType, OrderStatus, RiskSeverity, StrategyStatus, TradingMode
 from core.event_bus import EventBus
 from core.interfaces import ChainedFilter, PassThroughFilter, SignalFilter, StrategyProtocol
 from core.mode_controller import ModeController
@@ -59,6 +59,7 @@ from monitoring.json_logger import get_logger
 from runtime.contracts import OptionContractResolver, OptionUniverse
 from runtime.control import ControlService
 from runtime.gateway import RiskEntryGateway
+from runtime.learning import LearningRecorder, build_learning
 from runtime.ml import build_inference
 from runtime.rl import RLRuntime, build_rl
 from strategies.base_strategy import BaseStrategy
@@ -117,6 +118,7 @@ class TradingBot:
         ml_research: bool = False,
         rl_models: Mapping[str, LoadedModel] | None = None,
         rl_research: bool = False,
+        evidence_source: EvidenceSource = EvidenceSource.UNKNOWN,
     ) -> None:
         if cfg.mode is not TradingMode.PAPER:
             raise RuntimeError("only PAPER mode can run in this build")
@@ -147,6 +149,10 @@ class TradingBot:
         self._rl_models = dict(rl_models or {})
         self._rl_research = rl_research
         self.rl: RLRuntime | None = None
+        # Phase 9 LOG stage: what market data this session trades on (labels
+        # every trade_journal row; only LIVE_FEED / HISTORICAL is evidence).
+        self.evidence_source = EvidenceSource(evidence_source)
+        self.learning: LearningRecorder | None = None
         self.scheduler = scheduler or TradingScheduler()
         session = cfg.settings.market_session
         self.candles = CandleBuilder(session_open=session.market_open, session_close=session.market_close)
@@ -217,6 +223,7 @@ class TradingBot:
         self._resolver = resolver
         gateway = RiskEntryGateway(self.cfg, s, self.broker)
         self._attach_ml()
+        self._attach_learning()
         strategies: list[StrategyProtocol] = list(self.strategies)
         self.engine = TradingEngine(strategies=strategies, resolver=resolver, gateway=gateway,
                                     signal_filter=self.filter, bus=self.bus,
@@ -251,6 +258,15 @@ class TradingBot:
         self.filter = self.inference
         log.info("ML signal filter attached", extra={"strategies": enabled, "research": self._ml_research,
                                                      "models": {k: v.versions() for k, v in self._ml_models.items()}})
+
+    def _attach_learning(self) -> None:
+        """Trade journal + ENTRY / EXIT feature snapshots (read-only towards
+        trading). Shares the ML / RL feature engine when there is one."""
+        if not self.cfg.settings.learning.journal_enabled:
+            return
+        features = (self.inference.features if self.inference is not None
+                    else self.rl.advisor.features if self.rl is not None else None)
+        self.learning = build_learning(self, data_source=self.evidence_source, features=features)
 
     def _attach_rl(self) -> None:
         """RL trade manager for strategies with ``rl.enabled``. Its entry
@@ -357,6 +373,8 @@ class TradingBot:
                     strat.set_signal_instrument(new_future)
             if self.inference is not None:
                 self.inference.features.set_futures_key(new_future)
+            if self.learning is not None:
+                self.learning.features.set_futures_key(new_future)
             held = {t.instrument.instrument_key for t in self.stack.positions.open_trades()}
             remove = {old_future} - held if old_future else set()
             await self._subscribe({new_future}, remove)
@@ -451,5 +469,7 @@ class TradingBot:
             "open_trades": s.positions.open_trade_count(),
             "instruments": self.instrument_summary,
             "ml": dict(self.inference.last) if self.inference is not None else {},
-            "rl": {"last": dict(self.rl.advisor.last), "applied": self.rl.applied[-20:]} if self.rl else {},
+            "rl": {"last": dict(self.rl.advisor.last), "applied": self.rl.applied[-20:],
+                   "suspended": dict(self.rl.advisor.suspended)} if self.rl else {},
+            "learning": self.learning.stats() if self.learning is not None else {},
         }

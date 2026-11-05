@@ -136,6 +136,60 @@ class LearningStage(StrEnum):
     REJECT = "REJECT"
 
 
+class StrategyVersionStatus(StrEnum):
+    """Lifecycle of a strategy parameter version (Phase 9 Reflective Loop).
+
+    BASELINE (the YAML config) -> CANDIDATE (a whitelisted mutation) ->
+    VERIFIED (every VERIFY gate passed) | REJECTED -> PAPER_READY (promotion
+    gate; HISTORICAL evidence + autonomy) -> PAPER_ACTIVE (deployed to PAPER)
+    -> LIVE_CANDIDATE (after the paper-validation period; autonomy) ->
+    LIVE_APPROVED (named human only; never deployed by this build).
+    SUPERSEDED / ROLLED_BACK / ARCHIVED are terminal bookkeeping states."""
+
+    BASELINE = "BASELINE"
+    CANDIDATE = "CANDIDATE"
+    VERIFIED = "VERIFIED"
+    REJECTED = "REJECTED"
+    PAPER_READY = "PAPER_READY"
+    PAPER_ACTIVE = "PAPER_ACTIVE"
+    SUPERSEDED = "SUPERSEDED"
+    ROLLED_BACK = "ROLLED_BACK"
+    LIVE_CANDIDATE = "LIVE_CANDIDATE"
+    LIVE_APPROVED = "LIVE_APPROVED"
+    ARCHIVED = "ARCHIVED"
+
+
+#: Strategy-version statuses that need HISTORICAL (real-market) verification.
+REAL_EVIDENCE_VERSION_STATUSES = frozenset({StrategyVersionStatus.PAPER_READY, StrategyVersionStatus.PAPER_ACTIVE,
+                                            StrategyVersionStatus.LIVE_CANDIDATE,
+                                            StrategyVersionStatus.LIVE_APPROVED})
+
+
+class EvidenceSource(StrEnum):
+    """Where trades / verification evidence came from.
+
+    LIVE_FEED: a PAPER session on the real Upstox market feed.
+    HISTORICAL: a backtest on recorded real market data.
+    SYNTHETIC: generated data (tests, demos) - never evidence for promotion.
+    UNKNOWN: not declared - treated like SYNTHETIC."""
+
+    LIVE_FEED = "LIVE_FEED"
+    HISTORICAL = "HISTORICAL"
+    SYNTHETIC = "SYNTHETIC"
+    UNKNOWN = "UNKNOWN"
+
+
+class RLDecisionKind(StrEnum):
+    ENTRY = "ENTRY"  # entry approval (ENTER / SKIP / VETO)
+    MANAGE = "MANAGE"  # open-trade management advice
+
+
+class DeploymentAction(StrEnum):
+    DEPLOY = "DEPLOY"
+    ROLLBACK = "ROLLBACK"
+    RETIRE = "RETIRE"  # back to the YAML baseline
+
+
 class ControlCommandType(StrEnum):
     """Operator commands the dashboard may queue (executed by the bot)."""
 

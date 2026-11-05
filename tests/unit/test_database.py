@@ -159,6 +159,8 @@ def test_other_enums_match_schema(seeded_db: Database) -> None:
             "training_end": "2026-06-01", "artifact_path": "models/x", "status": st.value,
             "approved_by": "a.human" if st is ModelRunStatus.LIVE_APPROVED else None,
             "created_at": NOW, "updated_at": NOW, "data_source": "HISTORICAL",
+            # v5: promotions record the autonomy level that allowed them
+            "promoted_autonomy": "LIVE_CANDIDATE_APPROVAL",
         })
 
 
@@ -368,7 +370,7 @@ V3_MODEL_RUNS = """CREATE TABLE model_runs (
     status TEXT NOT NULL DEFAULT 'TRAINED', approved_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"""
 
 
-def test_v3_database_is_migrated_to_v4(tmp_path: Path) -> None:
+def test_v3_database_is_migrated_to_current(tmp_path: Path) -> None:
     path = tmp_path / "old.db"
     raw = sqlite3.connect(path)
     raw.execute(V3_MODEL_RUNS)
@@ -382,7 +384,7 @@ def test_v3_database_is_migrated_to_v4(tmp_path: Path) -> None:
     raw.close()
     db = Database(path)
     db.initialize()
-    assert db.current_schema_version() == SCHEMA_VERSION == 4
+    assert db.current_schema_version() == SCHEMA_VERSION == 5
     # an existing row of unknown provenance keeps its status but can never be promoted again
     assert db.query_one("SELECT data_source FROM model_runs WHERE run_id = 'OLD'")["data_source"] == "UNKNOWN"  # type: ignore[index]
     with pytest.raises(sqlite3.IntegrityError, match="HISTORICAL"):

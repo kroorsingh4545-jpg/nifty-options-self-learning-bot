@@ -10,6 +10,9 @@
 * Never consulted while the kill switch blocks the strategy (the kill-switch
   handlers own those exits), at/after the square-off start (the square-off
   manager owns those), or for a trade that is entering or exiting.
+* Phase 9: every decision (HOLD included) is persisted to ``rl_decisions``
+  with what execution did with it. If a decision cannot be written, the
+  advisor suspends RL for that strategy for the session.
 """
 
 from __future__ import annotations
@@ -19,7 +22,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from core.interfaces import TradeAdviceAction
+from core.enums import RLDecisionKind
+from core.interfaces import TradeAdvice, TradeAdviceAction
 from core.models import Candle
 from execution.position_manager import ManagedTrade
 from ml.feature_engineering import FeatureEngine
@@ -87,13 +91,24 @@ class RLRuntime:
                                tick_size=t.instrument.tick_size, account=account_view(bot, sid))
             advice = self.advisor.advise(ctx)
             if advice.action is TradeAdviceAction.HOLD:
+                self._record(t.trade_uid, advice, now, applied=None, result="HOLD")
                 continue
             res = bot.stack.positions.apply_advice(advice)
+            self._record(t.trade_uid, advice, now, applied=res.applied, result=res.reason)
             self.applied.append({"at": now.isoformat(), "trade": t.trade_uid, "strategy_id": sid,
                                  "action": advice.action.value, "new_stop": advice.new_stop,
                                  "exit_lots": advice.exit_lots, "applied": res.applied, "result": res.reason,
                                  "model": advice.model_version})
             del self.applied[:-200]
+
+    def _record(self, trade_uid: str, advice: TradeAdvice, now: datetime, *, applied: bool | None, result: str) -> None:
+        info = self.advisor.last.get(advice.strategy_id, {})
+        details = {k: v for k, v in info.items() if k not in ("trade", "action", "model", "decided_at", "reason")}
+        self.advisor.record(self.advisor.decision_record(
+            kind=RLDecisionKind.MANAGE, strategy_id=advice.strategy_id, trade_uid=trade_uid,
+            action=advice.action.value, decided_at=now, reason=advice.reason or "", applied=applied,
+            result=result, new_stop=advice.new_stop, exit_lots=advice.exit_lots, confidence=advice.confidence,
+            model_version=advice.model_version, details=details))
 
 
 def build_rl(bot: TradingBot, models: Mapping[str, LoadedModel], *, research: bool = False,
@@ -103,7 +118,7 @@ def build_rl(bot: TradingBot, models: Mapping[str, LoadedModel], *, research: bo
                              option_context=lambda s, t: signal_option_context(bot, s, t),
                              account=lambda sid: account_view(bot, sid),
                              outcomes=lambda sid: closed_outcomes(bot, sid), mode=cfg.mode, research=research,
-                             now_fn=bot._now)
+                             now_fn=bot._now, decisions=bot.repos.rl_decisions)
     rt = RLRuntime(bot, advisor)
     bot.candles.add_listener(rt.on_candle)  # after the feature engine's listener: features include this bar
     return rt
