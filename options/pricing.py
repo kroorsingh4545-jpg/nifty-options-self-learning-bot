@@ -54,4 +54,35 @@ def implied_volatility(price: float, spot: float, strike: float, years: float, r
     return 0.5 * (lo + hi)
 
 
-__all__ = ["YEAR_SECONDS", "black_scholes", "implied_volatility", "norm_cdf"]
+def norm_pdf(x: float) -> float:
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+
+def bs_greeks(spot: float, strike: float, years: float, vol: float, rate: float, call: bool) -> dict[str, float] | None:
+    """Black-Scholes Greeks of a European option, or ``None`` when undefined
+    (expired, zero volatility or non-positive inputs).
+
+    * ``delta``: per 1 point of the underlying
+    * ``gamma``: per 1 point of the underlying, per point
+    * ``theta``: per calendar DAY (negative for a long option, usually)
+    * ``vega``:  per 1 volatility POINT (0.01)
+    """
+    if years <= 0 or vol <= 0 or spot <= 0 or strike <= 0:
+        return None
+    sq = vol * math.sqrt(years)
+    d1 = (math.log(spot / strike) + (rate + 0.5 * vol * vol) * years) / sq
+    d2 = d1 - sq
+    disc = math.exp(-rate * years)
+    pdf = norm_pdf(d1)
+    gamma = pdf / (spot * sq)
+    vega = spot * pdf * math.sqrt(years) / 100.0
+    if call:
+        delta = norm_cdf(d1)
+        theta = -spot * pdf * vol / (2 * math.sqrt(years)) - rate * strike * disc * norm_cdf(d2)
+    else:
+        delta = norm_cdf(d1) - 1.0
+        theta = -spot * pdf * vol / (2 * math.sqrt(years)) + rate * strike * disc * norm_cdf(-d2)
+    return {"delta": delta, "gamma": gamma, "theta": theta / 365.0, "vega": vega}
+
+
+__all__ = ["YEAR_SECONDS", "black_scholes", "bs_greeks", "implied_volatility", "norm_cdf", "norm_pdf"]
