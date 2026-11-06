@@ -311,3 +311,24 @@ async def test_feed_lag_never_blocks_exits() -> None:
     assert rec is not None and rec.status is TradeStatus.CLOSED  # ...but the stop-loss exit still ran
     assert rec.exit_reason == "STOP_LOSS"
     assert sim.bot.stack.positions.net_quantities() == {}
+
+
+async def test_square_off_closes_everything_while_entries_are_lag_blocked() -> None:
+    sim = LaggedSim(at(9, 14))
+    await sim.bot.prepare()
+    sim.bot.start()
+    await sim.run_path(ORB_DAY)  # no lag: the ORB CE entry opens
+    (t,) = sim.bot.stack.positions.open_trades("orb_options")
+    sim.lag = 9.0
+    for k in range(20):  # lagged NIFTY ticks up to the square-off window
+        await sim.step(at(15, 9, 40 + k), 24570.0, premium=110.0)
+    reason = sim.bot.entry_block_reason()
+    assert reason is not None and "feed lag" in reason  # new entries are blocked...
+    await sim.step(at(15, 10), 24570.0, premium=110.0)
+    await sim.bot.stack.square_off.check()
+    await sim.bot.settle()
+    assert sim.bot.entry_block_reason() is not None  # ...still blocked while square-off runs
+    rec = sim.repos.trades.get(t.trade_uid)
+    assert rec is not None and rec.status is TradeStatus.CLOSED and rec.exit_reason == "SQUARE_OFF"
+    assert sim.bot.stack.positions.open_trade_count() == 0
+    assert sim.bot.stack.positions.net_quantities() == {}

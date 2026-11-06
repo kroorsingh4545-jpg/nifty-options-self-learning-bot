@@ -1,6 +1,6 @@
 # Risk & Execution Audit Report
 
-Date: 2026-11-06 (re-audit after round 2)
+Date: 2026-11-06 (re-audit after round 2; updated for the lag-blocked square-off test)
 Scope (files / PR): branch `market-data-fixes` vs `main` (22463cd), two rounds.
 
 * **Round 1** (e6d334a): one candle per bucket, structured WebSocket status, price / feed-lag tiles, feed logging,
@@ -25,7 +25,7 @@ always showed *offline*;
 
 Mode audited: PAPER. LIVE order routing does not exist in this build.
 Environment: project `.venv` (Python 3.13.1), mypy 2.4.1 (pinned).
-Tests: **1267 passed, 0 failed** (1 pytest warning, a NumPy deprecation in `test_ml_training.py`); `ruff check .` and `mypy .` (strict, 133 files) clean. The round-1 failure
+Tests: **1268 passed, 0 failed** (1 pytest warning, a NumPy deprecation in `test_ml_training.py`); `ruff check .` and `mypy .` (strict, 133 files) clean. The round-1 failure
 (`test_dashboard_app.py::test_login_required_and_unconfigured_refuses`, caused by the developer `.env`) now passes.
 Verdict: **PASS WITH WARNINGS**
 
@@ -34,7 +34,7 @@ Verdict: **PASS WITH WARNINGS**
 | # | Area | Status | Evidence (file:line, test) | Notes |
 |---|---|---|---|---|
 | 1 | Entry logic | OK | `runtime/bot.py:341-368` (lag gate, `entry_block_reason`), `:229` (`block_fn=self.entry_block_reason`); `runtime/contracts.py:99-101`; `core/engine.py:162`, `:186`; `data/candle_builder.py:126-135`, `:154-158`; `test_bot_integration.py:272`, `:286`; `test_candle_builder.py:138`, `:153` | Entries still pass the unchanged risk gateway. A NIFTY feed lag above ±5 s (`config/settings.py:182`) refuses every new entry and gives the reason. 4 s does not block. Each candle bucket is now published once. No lag reading yet (`None`) means no lag block; without a spot price the resolver refuses anyway (`runtime/contracts.py:103-105`) |
-| 2 | Exit logic | OK | `execution/stack.py:127-128`; `execution/position_manager.py:437-458`; `test_bot_integration.py:296` (`test_feed_lag_never_blocks_exits`) | The lag gate is only consulted by contract resolution, which is entry-only. The test blocks entries with a 9 s lag, then pushes the premium through the stop: the trade closes with `STOP_LOSS` |
+| 2 | Exit logic | OK | `execution/stack.py:127-128`; `execution/position_manager.py:437-458`; `test_bot_integration.py:296` (`test_feed_lag_never_blocks_exits`), `:316` | The lag gate is only consulted by contract resolution, which is entry-only. With entries blocked by a 9 s lag, a stop-loss exit (`:296`) and the mandatory square-off (`:316`) both still close the trade |
 | 3 | Stop-loss logic | OK | `test_bot_integration.py:296` | Unchanged and tick-driven. Proven to still fire while entries are lag-blocked |
 | 4 | Take-profit logic | N/A | not in diff | tick-driven, unchanged |
 | 5 | Trailing-stop logic | N/A | not in diff | unchanged |
@@ -46,7 +46,7 @@ Verdict: **PASS WITH WARNINGS**
 | 11 | Partial fills | N/A | not in diff | unchanged |
 | 12 | Order rejection handling | N/A | not in diff | unchanged |
 | 13 | Reconciliation | N/A | not in diff | unchanged |
-| 14 | Square-off logic | OK | `execution/square_off.py:105` (unchanged, never consults the entry block); `runtime/__main__.py:132-152`; `test_paper_launcher.py:420` | Square-off still runs on the PC clock, but a session can no longer start with that clock more than ±2 s off Upstox server time: `paper` refuses on a FAIL. Drift during a session is re-checked and shown (area 19) |
+| 14 | Square-off logic | OK | `execution/square_off.py:105` (unchanged, never consults the entry block); `runtime/__main__.py:132-152`; `test_paper_launcher.py:420`; `test_bot_integration.py:316` (`test_square_off_closes_everything_while_entries_are_lag_blocked`) | The test opens the ORB trade, lags the feed 9 s so new entries are blocked, then runs square-off at 15:10 while the block is still active: the trade closes with `SQUARE_OFF` and no position is left. Square-off still runs on the PC clock, but a session can no longer start with that clock more than ±2 s off Upstox server time: `paper` refuses on a FAIL. Drift during a session is re-checked and shown (area 19) |
 | 15 | Kill-switch behavior | OK | `risk/risk_manager.py:244-245`; `broker/upstox_rest.py:276`; `runtime/paper.py:314`, `:365-394`; `monitoring/alerts.py:98` | The lag gate only adds a block and can't lift the kill switch. The in-session clock probe uses the session REST client: a 401 still trips `AUTH_FAILURE` as before. A failed measurement is logged, never raised, and trips nothing. Lag and drift WARNINGs do not page Telegram (alerts start at ERROR) |
 | 16 | API rate-limit compliance | OK | `broker/upstox_rest.py:235-240` (scope check, then `limiter.acquire`), `:384-427`; `test_upstox_rest.py:324` (3 calls granted by the limiter, market-data path only) | Clock measurement = 3 STANDARD LTP calls, once per `check`/`paper` and once per 900 s in a session (`config/settings.py:152`, min 60 s). That is far inside the 400/min budget |
 | 17 | PAPER/LIVE isolation | OK | `broker/upstox_rest.py:235`; `runtime/paper.py:120`, `:268`; `test_paper_launcher.py:247` | The probe calls `/v3/market-quote/ltp` only, which an analytics token is allowed to call. No order path is touched |
@@ -79,10 +79,7 @@ None.
 
 ## Required tests missing
 
-1. Square-off on a lagged feed: exits on a lagged feed are covered for the stop-loss
-   (`test_bot_integration.py:296`), and square-off doesn't consult the block (by code), but no test runs a
-   square-off while entries are lag-blocked.
-2. No end-to-end test of `MarketDataStream` → `MarketDataService` → `CandleBuilder` → engine with a skewed
+1. No end-to-end test of `MarketDataStream` → `MarketDataService` → `CandleBuilder` → engine with a skewed
    clock. The parts are tested separately (`test_candle_builder.py:153`, `test_bot_integration.py:272`).
-3. No test of `UpstoxRestClient.measure_clock_offset` against the real Upstox host. A one-off manual
+2. No test of `UpstoxRestClient.measure_clock_offset` against the real Upstox host. A one-off manual
    `python -m runtime check` on the PC is the live check.
