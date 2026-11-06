@@ -14,6 +14,22 @@ class TradingMode(StrEnum):
     LIVE = "LIVE"
 
 
+class UpstoxTokenType(StrEnum):
+    """What kind of Upstox access token ``UPSTOX_ACCESS_TOKEN`` holds.
+
+    * ``analytics`` — the long-lived (about 1 year), read-only Analytics Token.
+      It cannot place orders and, without a static IP, only the market-data
+      APIs accept it (market quote, historical data, option chain, market
+      information, the market-data WebSocket). User, funds, portfolio and
+      order APIs reject it. PAPER only; LIVE always refuses it.
+    * ``daily`` — the OAuth access token from the daily login flow; expires
+      at ``broker.token_expiry_time`` (03:30 IST).
+    """
+
+    ANALYTICS = "analytics"
+    DAILY = "daily"
+
+
 class AutonomyLevel(StrEnum):
     OBSERVE_ONLY = "OBSERVE_ONLY"
     PAPER_AUTO_IMPROVE = "PAPER_AUTO_IMPROVE"

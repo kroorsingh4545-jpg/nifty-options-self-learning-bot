@@ -28,7 +28,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from config import hard_limits as hl
-from core.enums import AutonomyLevel, TradingMode
+from core.enums import AutonomyLevel, TradingMode, UpstoxTokenType
 from core.ids import STRATEGY_ID_PATTERN
 
 # --------------------------------------------------------------------------- #
@@ -599,6 +599,12 @@ def _normalise_mode(value: Any) -> Any:
     return value
 
 
+def _normalise_lower(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.strip().lower()
+    return value
+
+
 class EnvSettings(BaseSettings):
     """Secrets and mode from environment variables / ``.env``.
 
@@ -619,6 +625,10 @@ class EnvSettings(BaseSettings):
     upstox_api_key: SecretStr | None = None
     upstox_api_secret: SecretStr | None = None
     upstox_access_token: SecretStr | None = None
+    # Kind of token in UPSTOX_ACCESS_TOKEN. Defaults to the restrictive
+    # choice: an analytics token only reaches market-data endpoints and LIVE
+    # refuses it, so a wrong default can only block, never widen, access.
+    upstox_token_type: Annotated[UpstoxTokenType, BeforeValidator(_normalise_lower)] = UpstoxTokenType.ANALYTICS
     telegram_bot_token: SecretStr | None = None
     telegram_chat_id: str | None = None
     dashboard_username: str | None = None
@@ -658,7 +668,10 @@ class EnvSettings(BaseSettings):
 
     @property
     def upstox_credentials_present(self) -> bool:
-        return self.upstox_api_key is not None and self.upstox_access_token is not None
+        """An analytics token is used on its own; a daily token also needs the API key."""
+        if self.upstox_access_token is None:
+            return False
+        return self.upstox_token_type is UpstoxTokenType.ANALYTICS or self.upstox_api_key is not None
 
 
 # --------------------------------------------------------------------------- #

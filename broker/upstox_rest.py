@@ -10,7 +10,16 @@ Guarantees:
 * The bearer token is only ever placed in the request header; it is never
   logged and error messages are passed through the secret masker.
 * Order placement / modification / cancellation is NOT implemented: those
-  methods refuse unconditionally (and would also require TRADING_MODE=LIVE).
+  methods refuse unconditionally (and would also require TRADING_MODE=LIVE and
+  a daily token).
+* With an Upstox Analytics Token (``UPSTOX_TOKEN_TYPE=analytics``, the
+  default) only market-data endpoints may be called (market quote,
+  historical candles, option contract / chain, market information, market-data
+  feed authorisation). Any other path (user, funds, portfolio, orders) is
+  refused locally with ``TokenScopeError`` before the token is read or the
+  rate limiter is touched, so it neither reaches Upstox nor marks the client
+  unauthenticated. Analytics tokens have no daily expiry; a 401 still fails
+  auth as usual.
 """
 
 from __future__ import annotations
@@ -34,13 +43,14 @@ from broker.errors import (
     MaintenanceWindowError,
     RateLimitError,
     TokenExpiredError,
+    TokenScopeError,
 )
 from broker.upstox_mapping import parse_candles, parse_funds, parse_instrument, parse_position
 from broker.upstox_rate_limiter import ApiCategory, Clock, RealClock, UpstoxRateLimiter, backoff_delay
 from config import hard_limits
 from config.settings import BotConfig, BrokerSection
 from core.clock import IST, now_ist
-from core.enums import TradingMode
+from core.enums import TradingMode, UpstoxTokenType
 from core.masking import DEFAULT_MASKER, SecretMasker
 from core.models import BrokerPosition, Candle, Funds, Instrument
 from monitoring.json_logger import get_logger
@@ -51,6 +61,23 @@ AUTH_ERROR_CODES = frozenset({"UDAPI100050", "UDAPI100016"})
 MAINTENANCE_ERROR_CODE = "UDAPI100072"
 RETRYABLE_STATUS = frozenset({500, 502, 503, 504})
 LTP_MAX_KEYS = 500
+
+#: REST paths an analytics token may call (official market-data APIs only).
+MARKET_DATA_PATH_PREFIXES: tuple[str, ...] = (
+    "/v2/market-quote/",
+    "/v3/market-quote/",
+    "/v2/historical-candle/",
+    "/v3/historical-candle/",
+    "/v2/option/contract",
+    "/v2/option/chain",
+    "/v2/market/",  # market information: holidays, timings, exchange status
+    "/v2/feed/market-data-feed/",
+    "/v3/feed/market-data-feed/",
+)
+
+
+def is_market_data_path(path: str) -> bool:
+    return path.startswith(MARKET_DATA_PATH_PREFIXES)
 
 TokenProvider = Callable[[], str | None]
 
@@ -92,6 +119,7 @@ class UpstoxRestClient(MarketDataSource):
         token_provider: TokenProvider,
         limiter: UpstoxRateLimiter,
         mode: TradingMode,
+        token_type: UpstoxTokenType = UpstoxTokenType.ANALYTICS,
         settings: BrokerSection | None = None,
         http: httpx.AsyncClient | None = None,
         cdn_http: httpx.AsyncClient | None = None,
@@ -103,6 +131,7 @@ class UpstoxRestClient(MarketDataSource):
     ) -> None:
         self.settings = settings or BrokerSection()
         self.mode = TradingMode(mode)
+        self.token_type = UpstoxTokenType(token_type)
         self.limiter = limiter
         self._token_provider = token_provider
         self._clock: Clock = clock or RealClock()
@@ -120,7 +149,7 @@ class UpstoxRestClient(MarketDataSource):
         self._cdn = cdn_http or httpx.AsyncClient(
             timeout=httpx.Timeout(60.0, connect=self.settings.connect_timeout_seconds), follow_redirects=False)
         self.auth_failed: str | None = None
-        self.token_expires_at = next_token_expiry(self._now(), self.settings.token_expiry_time)
+        self.token_expires_at = self._expiry()
 
     @classmethod
     def from_config(
@@ -131,6 +160,7 @@ class UpstoxRestClient(MarketDataSource):
             token_provider=lambda: token.get_secret_value() if token is not None else None,
             limiter=limiter,
             mode=cfg.mode,
+            token_type=cfg.env.upstox_token_type,
             settings=cfg.settings.broker,
             **kwargs,
         )
@@ -144,10 +174,27 @@ class UpstoxRestClient(MarketDataSource):
     # ------------------------------------------------------------------ #
     # Auth state
     # ------------------------------------------------------------------ #
+    @property
+    def market_data_only(self) -> bool:
+        return self.token_type is UpstoxTokenType.ANALYTICS
+
+    def _expiry(self) -> datetime | None:
+        """Daily tokens expire at ``token_expiry_time``; analytics tokens have no daily expiry."""
+        if self.market_data_only:
+            return None
+        return next_token_expiry(self._now(), self.settings.token_expiry_time)
+
     def reset_auth(self) -> None:
         """Call after a fresh access token has been provisioned."""
         self.auth_failed = None
-        self.token_expires_at = next_token_expiry(self._now(), self.settings.token_expiry_time)
+        self.token_expires_at = self._expiry()
+
+    def _check_scope(self, path: str) -> None:
+        if self.market_data_only and not is_market_data_path(path):
+            log.error("refused non-market-data call with an analytics token", extra={"path": path})
+            raise TokenScopeError(
+                f"{path} is not a market-data endpoint: the Upstox Analytics Token can only call "
+                "market-data APIs (set UPSTOX_TOKEN_TYPE=daily with a daily token for account APIs)")
 
     def _fail_auth(self, reason: str) -> TokenExpiredError:
         first = self.auth_failed is None
@@ -161,7 +208,7 @@ class UpstoxRestClient(MarketDataSource):
     def _token(self) -> str:
         if self.auth_failed is not None:
             raise TokenExpiredError(f"Upstox authentication unavailable: {self.auth_failed}. Re-authenticate.")
-        if self._now() >= self.token_expires_at:
+        if self.token_expires_at is not None and self._now() >= self.token_expires_at:
             raise self._fail_auth("access token past daily expiry")
         token = self._token_provider()
         if not token:
@@ -183,6 +230,7 @@ class UpstoxRestClient(MarketDataSource):
         params: dict[str, Any] | None = None,
         retry: bool,
     ) -> Any:
+        self._check_scope(path)  # before the token or a rate-limit slot is touched
         cfg = self.settings
         attempt = 0
         while True:
@@ -337,7 +385,7 @@ class UpstoxRestClient(MarketDataSource):
         return parse_candles(instrument_key, (data or {}).get("candles", []), interval_minutes, self._now())
 
     # ------------------------------------------------------------------ #
-    # Account (read-only)
+    # Account (read-only; daily token only — an analytics token is refused)
     # ------------------------------------------------------------------ #
     async def get_positions(self) -> list[BrokerPosition]:
         data = await self._get("/v2/portfolio/short-term-positions")
@@ -366,6 +414,8 @@ class UpstoxRestClient(MarketDataSource):
     def _refuse_order_routing(self, action: str) -> LiveTradingDisabledError:
         if self.mode is not TradingMode.LIVE:
             reason = f"TRADING_MODE is {self.mode.value}"
+        elif self.market_data_only:
+            reason = "the Upstox Analytics Token is read-only and cannot place orders"
         elif not hard_limits.LIVE_TRADING_AVAILABLE:
             reason = "LIVE order routing is not available in this build"
         else:  # pragma: no cover - unreachable until LIVE routing is implemented

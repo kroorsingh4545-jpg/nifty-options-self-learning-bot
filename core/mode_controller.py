@@ -3,7 +3,8 @@
 PAPER is the default and the only mode this build can run. A request to switch
 to LIVE is evaluated against every precondition in ``docs/safety-policy.md``
 and the reasons are reported — but it is refused regardless while
-``live_available`` is False (no LIVE order routing exists).
+``live_available`` is False (no LIVE order routing exists), and always while
+the configured Upstox token is a read-only analytics token.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from core.clock import now_ist
-from core.enums import AutonomyLevel, TradingMode
+from core.enums import AutonomyLevel, TradingMode, UpstoxTokenType
 
 log = logging.getLogger(__name__)
 
@@ -49,11 +50,13 @@ class ModeController:
         *,
         live_available: bool = False,
         autonomy: AutonomyLevel = AutonomyLevel.PAPER_AUTO_IMPROVE,
+        token_type: UpstoxTokenType = UpstoxTokenType.ANALYTICS,
         now_fn: Callable[[], datetime] = now_ist,
     ) -> None:
         self.mode = TradingMode.PAPER
         self.autonomy = autonomy
         self._live_available = live_available
+        self._token_type = UpstoxTokenType(token_type)
         self._now = now_fn
         self.history: list[ModeChangeResult] = []
 
@@ -80,6 +83,8 @@ class ModeController:
             reasons.append("no named human approval for LIVE")
         if not self._live_available:
             reasons.append("LIVE order routing is not available in this build")
+        if self._token_type is UpstoxTokenType.ANALYTICS:
+            reasons.append("the Upstox Analytics Token is read-only and cannot place orders")
         return reasons
 
     def request_live(self, confirmation: str, pre: LivePreconditions) -> ModeChangeResult:

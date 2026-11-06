@@ -78,12 +78,30 @@ was created with). `.env` and `data/trading.db` are local files; copy them yours
    ```
 
 The bot uses the official REST API (`https://api.upstox.com`) and the Market Data Feed V3 WebSocket, through
-a central rate limiter set 20% below Upstox's published limits. In PAPER mode it calls only read endpoints:
-the instrument list, market-feed authorisation, LTP recovery and (for `--connect`) funds.
+a central rate limiter set 20% below Upstox's published limits. In PAPER mode it calls only market-data
+endpoints: the instrument list, market-feed authorisation, option contracts / chain and LTP (recovery, and the
+one `--connect` check).
+
+## Analytics token (recommended for PAPER)
+
+An Upstox **Analytics Token** is read-only, valid for about a year and cannot place orders. Without a static IP
+it only works with the market-data APIs (market quote, historical data, option chain, market information and
+the market-data WebSocket); user, funds, portfolio and order APIs reject it. That is everything PAPER needs.
+
+```
+UPSTOX_ACCESS_TOKEN=<analytics token>
+UPSTOX_TOKEN_TYPE=analytics   # the default; UPSTOX_API_KEY is not needed with an analytics token
+```
+
+With `UPSTOX_TOKEN_TYPE=analytics` the REST client refuses every non-market-data path locally
+(`TokenScopeError`; nothing is sent), there is no 03:30 daily expiry (a rejected token still trips the kill
+switch with `AUTH_FAILURE`), and **LIVE always refuses it**: config loading, the broker factory, the LIVE mode
+request and the order methods each reject an analytics token. Use `UPSTOX_TOKEN_TYPE=daily` only with a daily
+token from the flow below.
 
 ## Generate an access token
 
-Upstox access tokens are issued per day and **expire at 03:30 IST the next morning**. Generate one each
+(Only for `UPSTOX_TOKEN_TYPE=daily`; skip this with an analytics token.) Upstox access tokens are issued per day and **expire at 03:30 IST the next morning**. Generate one each
 trading day before starting the bot. (Check the current flow in the Upstox API docs, "Authentication".)
 
 1. Open this URL in a browser (your API key and the exact redirect URL from the app):
@@ -103,7 +121,8 @@ trading day before starting the bot. (Check the current flow in the Upstox API d
      -d "redirect_uri=<REDIRECT_URL>" -d "grant_type=authorization_code"
    ```
 
-4. Put the `access_token` from the response into `.env` as `UPSTOX_ACCESS_TOKEN=...`, then check it:
+4. Put the `access_token` from the response into `.env` as `UPSTOX_ACCESS_TOKEN=...` with
+   `UPSTOX_TOKEN_TYPE=daily`, then check it (one market-data call, the NIFTY index LTP):
 
    ```bash
    python -m runtime check --connect
@@ -150,7 +169,7 @@ the learning loop at 15:45 if enabled. The dashboard heartbeat is published ever
 **Stopping.** Ctrl+C or SIGTERM: no new entries, background work settles, pending trades are journaled,
 the final state is published, then the feed and database close. Positions still open stay in the database
 and are restored at the next start, but their stops are monitored only while the bot runs, so stop after
-the square-off. Run one session per trading day (the access token is daily).
+the square-off. Run one session per trading day (a daily access token expires overnight).
 
 The kill switch trips on: a daily loss breach (cleared automatically the next trading day), WebSocket down
 for more than 30 s or reconnects exhausted, Upstox auth failure, the rate-limit circuit locking, repeated API
@@ -294,7 +313,7 @@ any future LIVE build is even considered, every item below must be true and veri
 5. The kill switch is armed and has been tested end to end, including a manual kill and named reset.
 6. Per-strategy and global daily loss limits are configured and no looser than `config/hard_limits.py`.
 7. Upstox rate limits and charges are re-verified against current Upstox / NSE documentation.
-8. The holiday calendar for the year is loaded; the access token is fresh; the WebSocket is connected.
+8. The holiday calendar for the year is loaded; the Upstox token is valid (fresh, if daily); the WebSocket is connected.
 9. Telegram alerts are configured and a test alert was received.
 10. Start with the smallest size (one lot, one strategy) and the operator watching the dashboard.
 11. The operator types `ENABLE LIVE TRADING` to confirm. Any failed check refuses LIVE and logs why.
