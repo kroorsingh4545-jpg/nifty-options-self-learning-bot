@@ -18,6 +18,7 @@ from enum import StrEnum
 from typing import Any
 
 from core.clock import now_ist
+from core.tasks import wait_for_tasks
 
 log = logging.getLogger(__name__)
 
@@ -80,5 +81,4 @@ class EventBus:
         return list(self._recent[topic])[-n:]
 
     async def drain(self) -> None:
-        while self._tasks:
-            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        await wait_for_tasks(self._tasks)

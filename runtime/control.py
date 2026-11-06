@@ -41,6 +41,7 @@ from core.event_bus import Topic
 from core.masking import DEFAULT_MASKER
 from core.mode_controller import LivePreconditions
 from core.models import Candle
+from core.tasks import wait_for_tasks
 from data.storage.records import ControlCommandRecord
 from execution.operator_controls import ControlResult
 from monitoring.json_logger import get_logger
@@ -141,8 +142,7 @@ class ControlService:
 
     async def wait_idle(self) -> None:
         """Await background commands (tests / orderly shutdown)."""
-        while self._tasks:
-            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        await wait_for_tasks(self._tasks)
 
     async def _execute(self, cmd: ControlCommandRecord) -> None:
         assert cmd.id is not None

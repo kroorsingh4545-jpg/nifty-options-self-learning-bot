@@ -36,6 +36,7 @@ from enum import StrEnum
 
 from core.clock import now_ist
 from core.enums import RiskSeverity, TradingMode
+from core.tasks import wait_for_tasks
 from data.storage.records import RiskEventRecord
 from data.storage.repositories import RiskEventRepository
 from monitoring.alerts import Alert, AlertSink, LogAlertSink
@@ -186,8 +187,7 @@ class KillSwitch:
 
     async def wait_idle(self) -> None:
         """Await all running handler tasks (tests / orderly shutdown)."""
-        while self._tasks:
-            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        await wait_for_tasks(self._tasks)
 
     # ------------------------------------------------------------------ #
     def reset(self, *, operator: str, note: str, strategy_id: str | None = None) -> bool:

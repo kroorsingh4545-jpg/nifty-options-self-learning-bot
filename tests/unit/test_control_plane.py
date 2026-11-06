@@ -393,6 +393,7 @@ async def test_kill_is_not_delayed_by_a_stuck_exit() -> None:
     assert sim.repos.commands.get(kill).status is ControlCommandStatus.DONE  # type: ignore[union-attr]
     assert sim.bot.stack.kill_switch.active
     assert sim.repos.runtime_state.latest() is not None  # heartbeat kept publishing
+    await asyncio.sleep(0)  # let the background exit run its first step (3.12+ wait_for does not yield)
     assert calls == 1  # the in-flight exit was not started a second time
 
     wall: Any = sim.bot.control._wall

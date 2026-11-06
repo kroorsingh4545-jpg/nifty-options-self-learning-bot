@@ -62,6 +62,7 @@ from core.enums import (
 from core.ids import new_trade_uid
 from core.interfaces import STOP_ADVICE, TradeAdvice, TradeAdviceAction
 from core.models import Instrument, OrderUpdate, Tick
+from core.tasks import wait_for_tasks
 from data.storage.records import OrderRecord, PositionRecord, TradeRecord
 from data.storage.repositories import Repositories
 from execution.order_manager import TERMINAL, EntryBlockedError, OrderIntent, OrderManager
@@ -643,12 +644,10 @@ class PositionManager(OpenTradeCounter):
         task.add_done_callback(t.tasks.discard)
 
     async def wait_for(self, t: ManagedTrade) -> None:
-        while t.tasks:
-            await asyncio.gather(*list(t.tasks), return_exceptions=True)
+        await wait_for_tasks(t.tasks)
 
     async def wait_idle(self) -> None:
-        while self._tasks:
-            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        await wait_for_tasks(self._tasks)
 
     # ------------------------------------------------------------------ #
     # Restart recovery
