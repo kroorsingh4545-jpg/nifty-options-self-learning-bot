@@ -291,6 +291,20 @@ def test_cli_check_shows_the_deployed_version(tmp_path: Path, monkeypatch: pytes
     assert "not applied" in capsys.readouterr().out
 
 
+async def test_health_reports_the_heartbeat(tmp_path: Path) -> None:
+    cfg = paper_cfg(tmp_path)
+    assert cli.health(cfg, 30) == (False, "no trading database yet")
+    wall = FakeWallClock(at(9, 14))
+    s = session(cfg, wall, FakeConnections(wall))
+    await s.start()  # publishes a heartbeat on the real wall clock
+    try:
+        ok, detail = cli.health(cfg, 30)
+        assert ok and "PAPER bot alive" in detail
+        assert cli.health(cfg, -1)[0] is False  # too old
+    finally:
+        await s.shutdown()
+
+
 def test_no_secret_reaches_the_check_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                             capsys: pytest.CaptureFixture[str]) -> None:
     cfg = paper_cfg(tmp_path, upstox_access_token=SecretStr("super-secret-token-value"))

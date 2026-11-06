@@ -31,6 +31,7 @@ ENV_VARS = (
     "TELEGRAM_CHAT_ID",
     "DASHBOARD_USERNAME",
     "DASHBOARD_PASSWORD",
+    "DATABASE_PATH",
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

@@ -623,6 +623,9 @@ class EnvSettings(BaseSettings):
     telegram_chat_id: str | None = None
     dashboard_username: str | None = None
     dashboard_password: SecretStr | None = None
+    # Optional override of settings.yaml database.path (Docker keeps the
+    # database on a volume outside the ``data`` package directory).
+    database_path: Path | None = None
 
     @model_validator(mode="after")
     def _dashboard_pair(self) -> EnvSettings:
@@ -681,7 +684,8 @@ class BotConfig(_Frozen):
 
     @property
     def database_path(self) -> Path:
-        return self.resolve_path(self.settings.database.path)
+        override = self.env.database_path
+        return self.resolve_path(override if override is not None else self.settings.database.path)
 
     @property
     def log_directory(self) -> Path:

@@ -1,0 +1,64 @@
+# PAPER trading stack: the bot (real Upstox market data, simulated orders)
+# and the Streamlit dashboard, sharing one SQLite database volume.
+#
+#   cp .env.example .env            # fill in Upstox, Telegram and dashboard values
+#   docker compose build
+#   docker compose run --rm bot python -m runtime check
+#   docker compose up -d
+#   docker compose logs -f bot
+#   open http://127.0.0.1:8501      # dashboard (bound to localhost only)
+#
+# LIVE trading is not available in this build. TRADING_MODE is pinned to
+# PAPER below (it overrides .env), and LIVE would be refused at config load.
+
+x-bot-common: &common
+  build: .
+  image: nifty-options-bot:paper
+  env_file: .env
+  environment:
+    TRADING_MODE: PAPER
+    DATABASE_PATH: /app/var/trading.db
+    TZ: Asia/Kolkata
+  volumes:
+    - bot-db:/app/var
+    - bot-research:/app/data/dev
+    - bot-logs:/app/logs
+    - bot-reports:/app/reports
+    - bot-models:/app/models
+    # Edit the YAML config on the host without rebuilding (read-only in the container):
+    - ./config/settings.yaml:/app/config/settings.yaml:ro
+    - ./config/risk_limits.yaml:/app/config/risk_limits.yaml:ro
+    - ./config/strategy_defaults.yaml:/app/config/strategy_defaults.yaml:ro
+  restart: unless-stopped
+
+services:
+  bot:
+    <<: *common
+    command: ["python", "-m", "runtime", "paper"]
+    # SIGTERM -> orderly shutdown (no new entries, settle, journal, close).
+    stop_grace_period: 60s
+
+  dashboard:
+    <<: *common
+    # Inside the container Streamlit must listen on 0.0.0.0 for the port mapping, so the app's
+    # loopback guard is acknowledged with --allow-remote. The HOST side is bound to 127.0.0.1
+    # only: put a TLS reverse proxy in front before exposing it beyond this machine.
+    command: ["streamlit", "run", "dashboard/app.py", "--server.address=0.0.0.0", "--server.port=8501",
+              "--server.headless=true", "--", "--allow-remote"]
+    ports:
+      - "127.0.0.1:8501:8501"
+    depends_on:
+      - bot
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  bot-db:
+  bot-research:
+  bot-logs:
+  bot-reports:
+  bot-models:

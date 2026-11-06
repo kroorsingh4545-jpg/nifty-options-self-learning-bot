@@ -22,6 +22,7 @@ from broker.upstox_rate_limiter import UpstoxRateLimiter
 from broker.upstox_rest import UpstoxRestClient
 from config.loader import ConfigError, load_config
 from config.settings import BotConfig
+from core.clock import now_ist
 from core.enums import AutonomyLevel, TradingMode
 from data.storage.database import Database, DatabaseError
 from data.storage.repositories import Repositories
@@ -55,7 +56,31 @@ def _parser() -> argparse.ArgumentParser:
     r.add_argument("--paused", action="store_true", help="start with the engine PAUSED")
     r.add_argument("--baseline", action="store_true", help="trade the YAML config, ignore PAPER deployments")
     r.add_argument("--stop-at", type=_hhmm, help="end the session at this IST time today (HH:MM)")
+    h = sub.add_parser("health", help="exit 0 if a PAPER bot published a heartbeat recently (Docker healthcheck)")
+    h.add_argument("--max-age", type=float, default=30.0, help="seconds")
     return p
+
+
+def health(cfg: BotConfig, max_age: float) -> tuple[bool, str]:
+    if not cfg.database_path.is_file():
+        return False, "no trading database yet"
+    try:
+        db = Database.open_existing(cfg.database_path)
+    except DatabaseError as exc:
+        return False, str(exc)
+    try:
+        latest = Repositories(db, TradingMode.PAPER).runtime_state.latest()
+    finally:
+        db.close()
+    if latest is None:
+        return False, "the bot has not published a heartbeat"
+    state, at = latest
+    age = (now_ist() - at).total_seconds()
+    if state.get("mode") != TradingMode.PAPER.value:
+        return False, f"heartbeat mode is {state.get('mode')!r}, expected PAPER"
+    if age > max_age:
+        return False, f"heartbeat is {age:.0f}s old"
+    return True, f"PAPER bot alive (heartbeat {age:.0f}s old, engine {state.get('engine_state')})"
 
 
 def _versions_preview(cfg: BotConfig, autonomy: AutonomyLevel, baseline: bool) -> str:
@@ -91,6 +116,10 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"CONFIG ERROR: {exc}", file=sys.stderr)
         return 2
+    if args.cmd == "health":
+        ok, detail = health(cfg, args.max_age)
+        print(detail)
+        return 0 if ok else 1
     configure_from_config(cfg)
     checks = preflight(cfg)
     print("PAPER pre-flight checks:")
