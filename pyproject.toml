@@ -43,7 +43,7 @@ dev = [
     "pytest-timeout>=2.3",  # a hung test fails instead of freezing the run
     "grpcio-tools>=1.66",  # regenerate broker/proto/*_pb2.py
     "ruff>=0.5",
-    "mypy>=1.10",
+    "mypy==2.4.1",  # pinned: the version the strict check is clean with (newer releases may add errors)
     "types-PyYAML",
     "pandas-stubs",
 ]
