@@ -155,10 +155,28 @@ stops, targets and trailing.
 python -m learning synthetic --lot-units 65 --paper-days 25 --verify-days 12 --min-trades 5 --out reports/learning
 ```
 
-The PAPER bot journals automatically (`learning.journal_enabled`). A future launcher applies the deployed
-PAPER versions at start-up with `DeploymentController(...).effective_config()`; a deployment never changes
-a running session. Example output: [`docs/learning-example/`](learning-example/learning_report.md)
-(SYNTHETIC).
+```
+# On the TRADING database, after the close (HISTORICAL verification data only)
+python -m learning run --data path/to/historical-dataset
+```
+
+Or inside the PAPER session: set `learning.loop.enabled: true` and `learning.loop.verify_data` in
+`config/settings.yaml`; the launcher (`python -m runtime paper`) runs the loop daily at `learning.loop.run_at`
+(15:45 IST) in a worker thread with its own database connection, and refuses while the market is open or a
+PAPER trade is open. Reports go to `learning.loop.reports_dir`.
+
+**Autonomy is read live.** In the session, `autonomy_fn` is the running bot's level (`bot.mode.autonomy`,
+the value the dashboard's SET_AUTONOMY command changes). `python -m learning run` in another process uses
+`learning.autonomy_source.PublishedAutonomy`: the level in the bot's heartbeat (`runtime_state`, published
+every second), or, when the heartbeat is missing, older than 10 s or unreadable, the level the bot would
+start with (`persisted_autonomy`: the most restrictive of YAML and the last applied dashboard change;
+anything unreadable resolves to OBSERVE_ONLY). It is read again at every promotion step, so a dashboard
+switch to OBSERVE_ONLY stops the next PAPER_READY decision or deployment at once.
+
+The PAPER bot journals automatically (`learning.journal_enabled`). The launcher applies the deployed PAPER
+versions at start-up with `DeploymentController(...).resolve()` (unless the autonomy level is OBSERVE_ONLY
+or `--baseline` is given); a deployment never changes a running session. Example output:
+[`docs/learning-example/`](learning-example/learning_report.md) (SYNTHETIC).
 
 ## Limits
 
@@ -167,5 +185,5 @@ a running session. Example output: [`docs/learning-example/`](learning-example/l
 * Walk-forward windows are computed from one backtest over the whole non-holdout period. The candidate is
   fixed by its hypothesis, so there is no parameter selection inside the windows.
 * MULTI_SEED resamples days. The rule-based backtest is deterministic, so seeds matter for models only.
-* There is no launcher yet (Phase 10), so a PAPER deployment is recorded and applied through
-  `effective_config()` by the composition root.
+* A PAPER deployment takes effect at the next PAPER session start (`python -m runtime paper`), never
+  inside a running session.
