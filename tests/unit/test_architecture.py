@@ -68,6 +68,14 @@ NETWORK_ALLOWED = {
 }
 
 
+def test_launcher_can_only_build_a_paper_broker() -> None:
+    """runtime/paper.py builds its broker through the factory (PaperBroker only in
+    PAPER) and never calls an order method on the Upstox client."""
+    text = (PROJECT_ROOT / "runtime" / "paper.py").read_text(encoding="utf-8")
+    assert "create_broker(" in text and "enable_portfolio=False" in text
+    assert not re.search(r"\.(place_order|modify_order|cancel_order)\(", text)
+
+
 def test_network_access_only_from_upstox_adapters() -> None:
     for pkg in PROJECT_TOP_LEVEL:
         for path in _py_files(pkg):

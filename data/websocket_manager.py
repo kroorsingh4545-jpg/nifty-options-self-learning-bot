@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any, Protocol
 
 from broker.upstox_rate_limiter import Clock
@@ -32,7 +32,7 @@ from data.market_data import MarketDataService
 class FeedAuthorizer(Protocol):
     async def authorize_market_feed(self) -> str: ...
 
-    async def authorize_portfolio_feed(self, update_types: Iterable[str]) -> str: ...
+    async def authorize_portfolio_feed(self, update_types: Sequence[str]) -> str: ...
 
 
 class WebSocketManager:

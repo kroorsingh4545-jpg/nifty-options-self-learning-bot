@@ -81,6 +81,17 @@ class ControlService:
         self._tasks: set[asyncio.Task[None]] = set()
         bot.candles.add_listener(self._on_candle)
 
+    def set_status_providers(self, *, connection_status: StatusProvider | None = None,
+                             rate_limit_usage: StatusProvider | None = None,
+                             alert_channels: StatusProvider | None = None) -> None:
+        """Wired by the PAPER launcher once the Upstox clients and alert sinks exist."""
+        if connection_status is not None:
+            self._connection = connection_status
+        if rate_limit_usage is not None:
+            self._rate_limits = rate_limit_usage
+        if alert_channels is not None:
+            self._channels = alert_channels
+
     # ------------------------------------------------------------------ #
     def _on_candle(self, c: Candle) -> None:
         keys = {self.bot.spot_key}
@@ -248,7 +259,8 @@ class ControlService:
             eng = (engine or {}).get("strategies", {}).get(sid, {})
             strategies.append({
                 "strategy_id": sid, "name": scfg.name,
-                "version": scfg.version, "enabled": scfg.enabled, "status": repo_status.get(sid),
+                "version": scfg.version, "version_source": bot.version_sources.get(sid, "YAML"),
+                "enabled": scfg.enabled, "status": repo_status.get(sid),
                 "allocated_capital": scfg.allocated_capital, "mode": cfg.mode.value,
                 "realized": g.get("realized", 0.0), "unrealized": g.get("unrealized", 0.0),
                 "daily_loss": g.get("loss", 0.0), "daily_loss_limit": g.get("limit"),
@@ -327,7 +339,7 @@ class ControlService:
             },
             "rate_limits": self._rate_limits() if self._rate_limits else None,
             "alert_channels": self._channels() if self._channels else {"dashboard": "on",
-                                                                      "telegram": "not configured (Phase 10)"},
+                                                                      "telegram": "not wired (no PAPER launcher)"},
             "capital": {"total": cfg.risk.capital.total_capital,
                         "per_strategy": {sid: sc.allocated_capital for sid, sc in strategies_cfg.items()},
                         "deployed": round(exposure, 2)},
