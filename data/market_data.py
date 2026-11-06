@@ -7,8 +7,11 @@ fresh for trading decisions.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
+from statistics import median
+from typing import Any
 
 from broker.broker_interface import MarketDataSource
 from broker.upstox_rate_limiter import RequestCoalescer
@@ -17,6 +20,9 @@ from core.models import Tick
 from monitoring.json_logger import get_logger
 
 log = get_logger(__name__)
+
+#: live ticks per instrument kept for the feed-lag median
+LAG_SAMPLES = 30
 
 
 class MarketDataService:
@@ -37,6 +43,8 @@ class MarketDataService:
         self._coalescer = RequestCoalescer(snapshot_debounce_seconds)
         self.ticks_received = 0
         self.out_of_order = 0
+        # instrument -> recent (local receipt - exchange time) in seconds, live ticks only
+        self._lag: dict[str, deque[float]] = {}
 
     def add_listener(self, fn: Callable[[Tick], object]) -> None:
         self._listeners.append(fn)
@@ -55,6 +63,8 @@ class MarketDataService:
         self._latest[tick.instrument_key] = tick
         if not tick.is_snapshot:
             self._stale.discard(tick.instrument_key)
+            lag = (tick.received_at - tick.exchange_time).total_seconds()
+            self._lag.setdefault(tick.instrument_key, deque(maxlen=LAG_SAMPLES)).append(lag)
         for fn in list(self._listeners):
             try:
                 fn(tick)
@@ -68,6 +78,24 @@ class MarketDataService:
     def ltp(self, instrument_key: str) -> float | None:
         t = self._latest.get(instrument_key)
         return t.ltp if t else None
+
+    def feed_lag(self, instrument_key: str) -> float | None:
+        """Median of (local receipt - exchange time) over the instrument's recent
+        live ticks, in seconds. For an actively traded instrument (the NIFTY
+        index) this is network latency plus the local clock's offset; for an
+        illiquid one the exchange time is its last trade, so the lag means
+        nothing. None before any live tick."""
+        samples = self._lag.get(instrument_key)
+        return float(median(samples)) if samples else None
+
+    def quote_status(self, instrument_key: str) -> dict[str, Any]:
+        """Latest price of one instrument for display: ltp, freshness, age."""
+        t = self._latest.get(instrument_key)
+        if t is None:
+            return {"ltp": None, "fresh": False, "age_seconds": None, "exchange_time": None, "snapshot": False}
+        return {"ltp": t.ltp, "fresh": self.is_fresh(instrument_key),
+                "age_seconds": round(max(0.0, (self._now() - t.received_at).total_seconds()), 1),
+                "exchange_time": t.exchange_time.isoformat(), "snapshot": t.is_snapshot}
 
     def is_fresh(self, instrument_key: str, max_age_seconds: float | None = None) -> bool:
         """True only for a live (non-snapshot) tick received recently and not

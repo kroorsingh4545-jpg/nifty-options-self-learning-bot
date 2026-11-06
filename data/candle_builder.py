@@ -6,10 +6,16 @@
 * Volume is the increase in the cumulative day volume (``volume_today``); the
   first tick of the day only sets the baseline.
 * Late (out-of-order) ticks for an already-closed bucket are dropped and
-  counted, never used to rewrite a published candle.
+  counted, never used to rewrite a published candle. This holds whether the
+  bucket was closed by a later tick or by ``flush``: each (instrument,
+  timeframe) remembers the end of its last published candle, so a bucket is
+  published at most once.
 * Ticks outside the session are ignored.
-* ``flush(now)`` closes candles whose interval has ended even if no further
-  tick arrives (call it from a timer).
+* ``flush(now)`` closes candles whose interval ended at least
+  ``flush_grace_seconds`` before ``now`` even if no further tick arrives (call
+  it from a timer). ``now`` is the local clock while buckets use exchange
+  time; the grace absorbs feed latency and a small local clock offset so the
+  last ticks of a bucket are not cut off.
 * Buckets without any tick produce no candle (no synthetic bars).
 """
 
@@ -61,13 +67,19 @@ class CandleBuilder:
         *,
         session_open: time = time(9, 15),
         session_close: time = time(15, 30),
+        flush_grace_seconds: float = 0.0,
     ) -> None:
         self.timeframes = tuple(sorted(set(timeframes)))
         if not self.timeframes or any(tf <= 0 for tf in self.timeframes):
             raise ValueError("timeframes must be positive minutes")
+        if flush_grace_seconds < 0:
+            raise ValueError("flush_grace_seconds must be >= 0")
+        self.flush_grace = timedelta(seconds=flush_grace_seconds)
         self.session_open = session_open
         self.session_close = session_close
         self._working: dict[tuple[str, int], _Working] = {}
+        # (instrument, timeframe) -> end of the last published candle
+        self._closed_until: dict[tuple[str, int], datetime] = {}
         self._last_volume: dict[str, tuple[date, int]] = {}
         self._listeners: list[Callable[[Candle], None]] = []
         self.ignored_outside_session = 0
@@ -111,12 +123,16 @@ class CandleBuilder:
             key = (tick.instrument_key, tf)
             start, end = self.bucket(ts, tf)
             w = self._working.get(key)
-            if w is None:
+            closed = self._closed_until.get(key)
+            if closed is not None and start < closed:
+                late = True  # this bucket was already published (by a later tick or by flush)
+            elif w is None:
                 self._working[key] = _Working(start, end, tick.ltp, tick.ltp, tick.ltp, tick.ltp, vol, tick.oi, 1)
             elif start < w.start:
                 late = True
             elif start > w.start:
                 completed.append(w.to_candle(tick.instrument_key, tf, complete=True))
+                self._closed_until[key] = w.end
                 self._working[key] = _Working(start, end, tick.ltp, tick.ltp, tick.ltp, tick.ltp, vol, tick.oi, 1)
             else:
                 w.update(tick.ltp, vol, tick.oi)
@@ -132,11 +148,14 @@ class CandleBuilder:
         return out
 
     def flush(self, now: datetime) -> list[Candle]:
-        """Close every working candle whose interval ended at or before ``now``."""
+        """Close every working candle whose interval ended at least
+        ``flush_grace_seconds`` before ``now``."""
         completed = []
+        cutoff = now - self.flush_grace
         for (key, tf), w in list(self._working.items()):
-            if w.end <= now:
+            if w.end <= cutoff:
                 completed.append(w.to_candle(key, tf, complete=True))
+                self._closed_until[(key, tf)] = w.end
                 del self._working[(key, tf)]
         completed.sort(key=lambda c: (c.end, c.timeframe_minutes))
         self._publish(completed)

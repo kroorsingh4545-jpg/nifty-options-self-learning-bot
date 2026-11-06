@@ -10,7 +10,16 @@ from config.settings import BotConfig
 from core.enums import AutonomyLevel
 from core.mode_controller import LIVE_CONFIRMATION_PHRASE
 from dashboard.commands import CommandClient, Submitted
-from dashboard.data_access import RuntimeView, duration, inr
+from dashboard.data_access import (
+    RuntimeView,
+    clock_status,
+    duration,
+    entry_block,
+    feed_lag_status,
+    inr,
+    price_status,
+    websocket_status,
+)
 
 KILL_CONFIRM = "confirm_kill"
 
@@ -64,6 +73,30 @@ def engine_controls(st: Any, client: CommandClient, view: RuntimeView) -> None:
         _flash(st, client.engine("stop"))
 
 
+def market_strip(st: Any, view: RuntimeView) -> None:
+    """Latest NIFTY index / future prices from the live feed, the feed lag and
+    the PC clock offset."""
+    cols = st.columns(4)
+    quiet = {"delta_color": "off", "delta_arrow": "off"}
+    for col, (label, which) in zip(cols, (("NIFTY index", "index"), ("NIFTY future", "future")), strict=False):
+        value, detail = price_status(view, which)
+        col.metric(label, value, detail, **quiet)
+    lag, lag_detail, too_high = feed_lag_status(view)
+    cols[2].metric("Feed lag", lag, lag_detail, **quiet)
+    offset, clock_detail, drifted = clock_status(view)
+    cols[3].metric("PC clock", offset, clock_detail, **quiet)
+    if not view.online:
+        return
+    if too_high:
+        entry_limit = view.get("connections", "entry_feed_lag_limit_seconds")
+        gate = f" Above ±{entry_limit:g}s new entries are blocked (exits are not)." if entry_limit else ""
+        st.warning(f"Market-data feed lag is {lag} ({lag_detail}). Candles are timed by the exchange clock "
+                   f"and the session by this PC's clock: sync the PC clock (Windows: `w32tm /resync`).{gate}")
+    if drifted:
+        st.warning(f"PC clock has drifted {offset} from Upstox server time ({clock_detail}). Sync it "
+                   "(Windows, admin: `net start w32time` then `w32tm /resync`).")
+
+
 def status_strip(st: Any, view: RuntimeView) -> None:
     cols = st.columns(6)
     online = view.online
@@ -73,9 +106,8 @@ def status_strip(st: Any, view: RuntimeView) -> None:
                    f"heartbeat {age:.0f}s ago" if age is not None else "no heartbeat", **quiet)
     cols[1].metric("Upstox", "connected" if view.get("connections", "upstox_connected") else "offline",
                    str(view.get("connections", "upstox", default="unknown")), **quiet)
-    ws = str(view.get("connections", "websocket", default="unknown"))
-    cols[2].metric("WebSocket", "connected" if ws == "connected" else "offline",
-                   f"{ws} · {view.get('connections', 'subscriptions', default=0)} subscriptions", **quiet)
+    ws_value, ws_detail = websocket_status(view)
+    cols[2].metric("WebSocket", ws_value, ws_detail, **quiet)
     phase = view.get("session", "phase", default="—")
     trading_day = view.get("session", "trading_day")
     cols[3].metric("Market session", phase, "trading day" if trading_day else "not a trading day", **quiet)
@@ -89,7 +121,7 @@ def status_strip(st: Any, view: RuntimeView) -> None:
     if not online:
         st.warning("The bot is not publishing state (offline or stopped). Commands are queued: a kill switch "
                    "is applied when the bot starts; other commands expire after 60 s.")
-    block = view.get("session", "instrument_block")
+    block = entry_block(view)
     if block:
         st.error(f"New entries blocked: {block}")
     if view.state is not None and not view.get("session", "holiday_calendar_loaded", default=True):

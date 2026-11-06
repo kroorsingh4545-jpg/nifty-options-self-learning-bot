@@ -160,7 +160,8 @@ class TradingBot:
         self.learning: LearningRecorder | None = None
         self.scheduler = scheduler or TradingScheduler()
         session = cfg.settings.market_session
-        self.candles = CandleBuilder(session_open=session.market_open, session_close=session.market_close)
+        self.candles = CandleBuilder(session_open=session.market_open, session_close=session.market_close,
+                                     flush_grace_seconds=cfg.settings.websocket.candle_flush_grace_seconds)
         self.strategies: list[BaseStrategy] = []
         self.universe: OptionUniverse | None = None
         self.engine: TradingEngine | None = None
@@ -170,6 +171,7 @@ class TradingBot:
         self.instrument_summary: dict[str, object] = {}
         self.last_reset_day: date | None = None
         self._resolver: OptionContractResolver | None = None
+        self._lag_blocked = False
         self.control = ControlService(self, wall_fn=wall_fn)
 
     # ------------------------------------------------------------------ #
@@ -224,7 +226,7 @@ class TradingBot:
         self.strategies = build_strategies(self.cfg, self._now, futures_key=self.futures.instrument_key)
         resolver = OptionContractResolver(universe=self.universe, strategies=dict(self.cfg.strategies.strategies),
                                           spot_fn=self.spot, quote_fn=self.md.get,
-                                          block_fn=self.instrument_block_reason)
+                                          block_fn=self.entry_block_reason)
         self._resolver = resolver
         gateway = RiskEntryGateway(self.cfg, s, self.broker)
         self._attach_ml()
@@ -335,6 +337,34 @@ class TradingBot:
             loaded = self.master.loaded_for.isoformat() if self.master else None
             return f"instrument list not loaded for {today} (last loaded {loaded}): new entries blocked"
         return None
+
+    def feed_lag_block_reason(self) -> str | None:
+        """New entries are blocked while the NIFTY feed lag (median local
+        receipt - exchange time of recent index ticks) is above
+        ``websocket.max_entry_feed_lag_seconds``: candles, signals and the
+        session clock disagree. Only the entry path (contract resolution)
+        consults this; stops, targets, trailing, square-off and manual exits
+        never do."""
+        limit = self.cfg.settings.websocket.max_entry_feed_lag_seconds
+        lag = self.md.feed_lag(self.spot_key)
+        blocked = lag is not None and abs(lag) > limit
+        if blocked and not self._lag_blocked:
+            log.warning("new entries blocked: NIFTY feed lag too high (exits unaffected)",
+                        extra={"feed_lag_seconds": round(lag or 0.0, 3), "limit_seconds": limit})
+        elif not blocked and self._lag_blocked:
+            log.warning("new entries allowed again: NIFTY feed lag back within limit",
+                        extra={"feed_lag_seconds": round(lag, 3) if lag is not None else None,
+                               "limit_seconds": limit})
+        self._lag_blocked = blocked
+        if not blocked:
+            return None
+        return (f"NIFTY feed lag {lag:+.1f}s exceeds \u00b1{limit:g}s (PC clock off or feed delayed): "
+                "new entries blocked, exits unaffected")
+
+    def entry_block_reason(self) -> str | None:
+        """Every reason new entries are blocked right now (None if none)."""
+        reasons = [r for r in (self.instrument_block_reason(), self.feed_lag_block_reason()) if r]
+        return "; ".join(reasons) if reasons else None
 
     async def _refresh_instruments(self, day: date, instruments: Sequence[Instrument] | None) -> bool:
         last = ""

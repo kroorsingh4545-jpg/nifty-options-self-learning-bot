@@ -17,7 +17,7 @@ from config.loader import load_config
 from config.settings import BotConfig
 from core.enums import OptionType, OrderPurpose, StrategyStatus, TradeStatus, TradingMode
 from core.event_bus import Topic
-from core.models import Candle, Instrument
+from core.models import Candle, Instrument, Tick
 from data.market_data import MarketDataService
 from data.storage.bootstrap import sync_strategies
 from data.storage.database import Database
@@ -243,3 +243,92 @@ async def test_schedule_registers_session_jobs() -> None:
     assert sch.jobs["reconcile"].every_seconds is not None and sch.jobs["reconcile"].every_seconds <= 300
     await sch.run_now("square_off")
     await sch.run_now("candle_flush")
+
+
+# --------------------------------------------------------------------------- #
+# NIFTY feed lag blocks NEW entries only
+# --------------------------------------------------------------------------- #
+
+
+class LaggedSim(Sim):
+    """Ticks arrive ``lag`` seconds after their exchange time (e.g. a PC clock that is fast)."""
+
+    lag = 0.0
+
+    async def step(self, t: datetime, spot: float, premium: float = 100.0) -> None:
+        self.wall.now = t + timedelta(seconds=self.lag)
+        assert self.bot.universe is not None
+
+        def late(key: str, px: float, **kw: Any) -> Tick:
+            return tick(key, px, t, **kw).model_copy(update={"received_at": self.wall.now})
+
+        if self.md.ltp(INDEX) is not None:
+            for key in self.bot.universe.wanted(spot) | self.bot.universe.subscribed:
+                self.md.on_tick(late(key, premium, spread=0.1, vtt=250_000, oi=1_200_000))
+        self.md.on_tick(late(INDEX, spot, spread=0.0))
+        await self.bot.settle()
+
+
+async def test_feed_lag_above_limit_blocks_new_entries() -> None:
+    sim = LaggedSim(at(9, 14))
+    sim.lag = 7.0
+    await sim.bot.prepare()
+    sim.bot.start()
+    await sim.run_path(ORB_DAY)
+    assert sim.bot.stack.positions.open_trade_count() == 0
+    decisions = [e.payload for e in sim.bot.bus.recent(Topic.ENTRY_DECISION)]
+    assert decisions and not any(d["approved"] for d in decisions)  # the ORB breakout was signalled...
+    assert all("feed lag" in " ".join(d["reasons"]) for d in decisions)  # ...and refused for the lag
+    reason = sim.bot.entry_block_reason()
+    assert reason is not None and "+7.0s" in reason and "exits unaffected" in reason
+
+
+async def test_feed_lag_within_limit_does_not_block() -> None:
+    sim = LaggedSim(at(9, 14))
+    sim.lag = 4.0  # above the 2 s warning, below the 5 s entry limit
+    await sim.bot.prepare()
+    sim.bot.start()
+    await sim.run_path(ORB_DAY)
+    assert sim.bot.entry_block_reason() is None
+    assert sim.bot.stack.positions.open_trade_count() == 1
+
+
+async def test_feed_lag_never_blocks_exits() -> None:
+    sim = LaggedSim(at(9, 14))
+    await sim.bot.prepare()
+    sim.bot.start()
+    await sim.run_path(ORB_DAY)  # no lag: the ORB CE entry opens
+    (t,) = sim.bot.stack.positions.open_trades("orb_options")
+    sim.lag = 9.0
+    for k in range(20):  # enough lagged NIFTY ticks to move the 30-tick median above 5 s
+        await sim.step(at(9, 50, 30 + k), 24565.0, premium=t.levels.entry)
+    assert sim.bot.entry_block_reason() is not None  # entries are blocked now...
+    assert sim.repos.trades.get(t.trade_uid).status is TradeStatus.OPEN  # type: ignore[union-attr]
+    await sim.step(at(9, 51), 24560.0, premium=t.levels.stop - 5)  # premium through the stop, feed lagging
+    await sim.step(at(9, 51, 1), 24560.0, premium=t.levels.stop - 5)
+    assert sim.bot.entry_block_reason() is not None
+    rec = sim.repos.trades.get(t.trade_uid)
+    assert rec is not None and rec.status is TradeStatus.CLOSED  # ...but the stop-loss exit still ran
+    assert rec.exit_reason == "STOP_LOSS"
+    assert sim.bot.stack.positions.net_quantities() == {}
+
+
+async def test_square_off_closes_everything_while_entries_are_lag_blocked() -> None:
+    sim = LaggedSim(at(9, 14))
+    await sim.bot.prepare()
+    sim.bot.start()
+    await sim.run_path(ORB_DAY)  # no lag: the ORB CE entry opens
+    (t,) = sim.bot.stack.positions.open_trades("orb_options")
+    sim.lag = 9.0
+    for k in range(20):  # lagged NIFTY ticks up to the square-off window
+        await sim.step(at(15, 9, 40 + k), 24570.0, premium=110.0)
+    reason = sim.bot.entry_block_reason()
+    assert reason is not None and "feed lag" in reason  # new entries are blocked...
+    await sim.step(at(15, 10), 24570.0, premium=110.0)
+    await sim.bot.stack.square_off.check()
+    await sim.bot.settle()
+    assert sim.bot.entry_block_reason() is not None  # ...still blocked while square-off runs
+    rec = sim.repos.trades.get(t.trade_uid)
+    assert rec is not None and rec.status is TradeStatus.CLOSED and rec.exit_reason == "SQUARE_OFF"
+    assert sim.bot.stack.positions.open_trade_count() == 0
+    assert sim.bot.stack.positions.net_quantities() == {}

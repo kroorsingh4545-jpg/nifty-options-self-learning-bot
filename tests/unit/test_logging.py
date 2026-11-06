@@ -109,3 +109,16 @@ def test_unserialisable_extras_do_not_crash(stream: io.StringIO) -> None:
     get_logger("t").info("obj", extra={"path": Path("x/y"), "obj": object()})
     rec = _lines(stream)[0]
     assert rec["path"] in ("x/y", "x\\y")
+
+def test_apscheduler_info_is_quiet_but_its_warnings_are_kept() -> None:
+    buf = io.StringIO()
+    configure_logging(level="INFO", console=True, stream=buf)
+    try:
+        logging.getLogger("apscheduler.executors.default").info('Running job "control" (scheduled at ...)')
+        logging.getLogger("apscheduler.scheduler").warning("Run time of job was missed")
+        events = [r["event"] for r in _lines(buf)]
+        assert events == ["Run time of job was missed"]
+        configure_logging(level="ERROR", console=False)
+        assert logging.getLogger("apscheduler").level == logging.ERROR  # never noisier than the root
+    finally:
+        configure_logging(console=False)

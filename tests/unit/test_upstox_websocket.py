@@ -274,3 +274,25 @@ async def test_portfolio_order_updates_parsed() -> None:
     assert u.broker_order_id == "2611030001" and u.client_order_id == "LIVE-orb_options-abc"
     await p.stop()
     await task
+
+async def test_subscriptions_first_ticks_and_decode_errors_are_logged_and_counted(
+        caplog: pytest.LogCaptureFixture) -> None:
+    cf = FakeConnector()
+    stream, ticks, _ = make_market(cf)
+    await stream.subscribe(["NSE_FO|1", "NSE_FO|2", "NSE_FO|3"], "full")
+    with caplog.at_level("INFO", logger="broker.upstox_websocket"):
+        task = asyncio.create_task(stream.run())
+        conn = await cf.wait_for_connections(1)
+        conn.push(b"\x00\xffnot-protobuf")
+        conn.push(feed_option("NSE_FO|1", 5.0, T0))
+        conn.push(feed_option("NSE_FO|2", 6.0, T0))
+        await until(lambda: len(ticks) == 2)
+        await stream.stop()
+        await task
+    events = [r.getMessage() for r in caplog.records]
+    subs = [r for r in caplog.records if r.getMessage() == "market data subscription request sent"]
+    assert len(subs) == 1  # one line per request, not per chunk
+    assert subs[0].__dict__["instruments"] == 3 and subs[0].__dict__["frames"] == 2
+    assert events.count("first market data ticks after connect") == 1
+    assert stream.message_errors == 1 and stream.ticks_received == 2
+    assert stream.last_message_age() is not None

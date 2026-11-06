@@ -13,15 +13,21 @@ from core.enums import ControlCommandType, OptionType, OrderSide, TradeStatus, T
 from dashboard.auth import LOCKOUT_SECONDS, MAX_FAILURES, Credentials, LoginGate, check_credentials, credentials_from
 from dashboard.commands import COMMAND_TTL, CommandClient
 from dashboard.data_access import (
+    RuntimeView,
     candles_frame,
+    clock_status,
     duration,
     ema_series,
+    entry_block,
+    feed_lag_status,
     inr,
     performance,
     portfolio,
+    price_status,
     runtime_view,
     trade_markers,
     vwap_series,
+    websocket_status,
 )
 from data.storage.database import Database
 from data.storage.records import TradeRecord
@@ -164,3 +170,49 @@ def test_chart_overlays_and_markers(repos: Repositories) -> None:
 def test_formatting() -> None:
     assert inr(-1234.5, 2) == "-₹1,234.50" and inr(None) == "—"
     assert duration(65) == "1m 05s" and duration(3725) == "1h 02m" and duration(None) == "—"
+
+def _view(conn: dict[str, Any], *, online: bool = True, market: dict[str, Any] | None = None) -> RuntimeView:
+    return RuntimeView({"connections": conn, "market": market or {}}, 1.0 if online else 60.0)
+
+
+def test_websocket_tile_uses_the_structured_state_not_the_text() -> None:
+    text = "CONNECTED (16 subscriptions)"  # what the 2026-11-06 session published
+    live = {"websocket": text, "websocket_connected": True, "websocket_stale": False, "subscriptions": 16,
+            "last_message_age_seconds": 0.4}
+    assert websocket_status(_view(live))[0] == "connected"
+    assert websocket_status(_view({**live, "websocket_stale": True}))[0] == "stale"
+    assert websocket_status(_view({**live, "websocket_connected": False, "websocket": "RECONNECTING (16 "
+                                   "subscriptions)"}))[0] == "offline"
+    assert websocket_status(_view(live, online=False))[0] == "unknown"
+    # an older bot that publishes only the text
+    assert websocket_status(_view({"websocket": text, "subscriptions": 16}))[0] == "connected"
+    assert websocket_status(_view({"websocket": "IDLE (0 subscriptions)"}))[0] == "offline"
+
+
+def test_price_and_feed_lag_tiles() -> None:
+    market = {"index": {"ltp": 24881.65, "fresh": True, "age_seconds": 0.3, "snapshot": False},
+              "future": {"ltp": 24943.4, "fresh": False, "age_seconds": 42.0, "snapshot": False,
+                         "symbol": "NIFTY FUT 23 NOV 26"}}
+    v = _view({"feed_lag_seconds": 7.22, "feed_lag_limit_seconds": 2.0}, market=market)
+    assert price_status(v, "index") == ("24,881.65", "live · 0s ago")
+    value, detail = price_status(v, "future")
+    assert value == "24,943.40" and detail.startswith("STALE · 42s ago") and "NIFTY FUT" in detail
+    assert price_status(_view({}), "index") == ("—", "no tick yet")
+    lag, detail, high = feed_lag_status(v)
+    assert lag == "+7.2s" and high and "PC clock" in detail
+    assert feed_lag_status(_view({"feed_lag_seconds": 0.15, "feed_lag_limit_seconds": 2.0}))[2] is False
+    assert feed_lag_status(_view({})) == ("—", "no live NIFTY ticks yet", False)
+
+
+def test_clock_tile_and_entry_block() -> None:
+    drifted = _view({"clock": {"offset_seconds": 7.2, "uncertainty_seconds": 0.3, "limit_seconds": 2.0,
+                               "drifted": True, "error": None}})
+    value, detail, high = clock_status(drifted)
+    assert value == "+7.2s" and high and "\u00b10.3s" in detail and "limit \u00b12s" in detail
+    assert clock_status(_view({}))[:2] == ("—", "not checked in this session")
+    assert clock_status(_view({"clock": {"offset_seconds": None, "error": "ConnectError"}}))[1] == \
+        "check failed (ConnectError)"
+    assert entry_block(RuntimeView({"session": {"entry_block": "NIFTY feed lag +7.0s ...",
+                                                "instrument_block": None}}, 1.0)) == "NIFTY feed lag +7.0s ..."
+    assert entry_block(RuntimeView({"session": {"instrument_block": "list not loaded"}}, 1.0)) == "list not loaded"
+    assert entry_block(RuntimeView({"session": {"entry_block": None}}, 1.0)) is None

@@ -65,8 +65,8 @@ class TradingScheduler:
         else:
             assert spec.at is not None
             trigger = CronTrigger(day_of_week="mon-fri", hour=spec.at.hour, minute=spec.at.minute, timezone=IST)
-        self._scheduler.add_job(_wrap(spec.job_id, spec.func), trigger, id=spec.job_id, max_instances=1,
-                                coalesce=True, misfire_grace_time=30)
+        self._scheduler.add_job(_wrap(spec.job_id, spec.func), trigger, id=spec.job_id, name=spec.job_id,
+                                max_instances=1, coalesce=True, misfire_grace_time=30)
         self.jobs[spec.job_id] = spec
 
     async def run_now(self, job_id: str) -> None:

@@ -77,7 +77,16 @@ streamlit run dashboard/app.py -- --db /tmp/qa.db
 ## Displays
 
 * **Control bar:** mode banner, bot heartbeat, Upstox, WebSocket, market session, square-off countdown,
-  autonomy, instrument-list and holiday-calendar blocks.
+  autonomy, instrument-list and holiday-calendar blocks. The WebSocket tile reads the bot's structured
+  `websocket_connected` / `websocket_stale` fields: *connected*, *stale* (connected but silent), *offline*, or
+  *unknown* while the bot is not publishing.
+* **Market strip:** latest NIFTY index and NIFTY future prices from the live feed (*live*, *STALE* or
+  *snapshot*, with the tick age) and the **feed lag**: the median (local receipt − exchange time) of NIFTY
+  index ticks. A lag above `websocket.max_feed_lag_seconds` (default 2 s) shows a warning: it almost always
+  means the PC clock is off (Windows: `w32tm /resync`). Above `websocket.max_entry_feed_lag_seconds` (5 s) new
+  entries are blocked (never exits) and the reason shows under "New entries blocked". The **PC clock** tile shows
+  the last in-session comparison with Upstox server time (re-checked every 15 min) and warns beyond
+  `broker.max_clock_offset_seconds` (2 s).
 * **Overview:** total / deployed capital, available funds, realized / unrealized / total P&L, daily loss used
   and remaining, open positions, trades today, win rate, profit factor, max drawdown. Strategy cards show
   name, version, status, enabled, allocated capital, mode, P&L, daily loss usage, open trades, trades today,

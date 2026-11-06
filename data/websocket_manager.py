@@ -116,8 +116,11 @@ class WebSocketManager:
                 "reconnect_attempts": s.reconnect_attempts,
                 "connect_count": s.connect_count,
                 "messages": s.messages_received,
+                "message_errors": s.message_errors,
+                "last_message_age_seconds": s.last_message_age(),
                 "last_error": s.last_error,
             }
+        out["market_data"]["ticks"] = self.market.ticks_received
         out["market_data"]["subscriptions"] = len(self.market.subscriptions)
         out["market_data"]["market_status"] = dict(self.market.market_status)
         return out

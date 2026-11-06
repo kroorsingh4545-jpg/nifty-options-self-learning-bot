@@ -26,7 +26,8 @@ Every trading day, before 09:15 IST:
 - [ ] A valid Upstox token in `UPSTOX_ACCESS_TOKEN`: an analytics token (`UPSTOX_TOKEN_TYPE=analytics`, the
       default; valid about a year, PAPER only) or a fresh daily token (`UPSTOX_TOKEN_TYPE=daily`; expires at
       03:30 IST).
-- [ ] `python -m runtime check --connect` shows no FAIL and the token check passes.
+- [ ] `python -m runtime check --connect` shows no FAIL and the token check passes, including **PC clock**
+      (within ±2 s of Upstox server time; if not: `net start w32time` and `w32tm /resync` as admin).
 - [ ] `check` lists the strategy version you expect for each strategy (YAML or a learned PAPER deployment).
 - [ ] No persistent kill switch left from yesterday, or it was reviewed and reset by a named operator.
 - [ ] Start: `python -m runtime paper` (or `docker compose up -d`), then the dashboard.

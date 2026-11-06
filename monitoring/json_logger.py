@@ -136,6 +136,11 @@ def get_logger(name: str, **context: Any) -> ContextLogger:
     return ContextLogger(logging.getLogger(name), context)
 
 
+#: Third-party loggers held at WARNING or above whatever the root level is:
+#: APScheduler logs two INFO lines per run of every job (1-second jobs flood the log).
+QUIET_LOGGERS: dict[str, int] = {"apscheduler": logging.WARNING}
+
+
 def configure_logging(
     *,
     level: str = "INFO",
@@ -172,6 +177,8 @@ def configure_logging(
         setattr(handler, _HANDLER_MARK, True)
         root.addHandler(handler)
     root.setLevel(level)
+    for name, floor in QUIET_LOGGERS.items():
+        logging.getLogger(name).setLevel(max(floor, root.level))
     return root
 
 

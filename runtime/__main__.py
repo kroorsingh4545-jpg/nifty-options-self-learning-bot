@@ -1,6 +1,6 @@
 """PAPER trading launcher.
 
-    python -m runtime check                 # pre-flight checks + the strategy versions a session would trade
+    python -m runtime check                 # pre-flight checks (incl. PC clock vs Upstox server time) + versions
     python -m runtime check --connect       # ... and one Upstox market-data call (NIFTY LTP) to validate the token
     python -m runtime paper                 # start a real-time PAPER session (Ctrl+C to stop)
     python -m runtime paper --paused        # start with the engine PAUSED (start it from the dashboard)
@@ -22,15 +22,17 @@ from broker.upstox_rate_limiter import UpstoxRateLimiter
 from broker.upstox_rest import UpstoxRestClient
 from config.loader import ConfigError, load_config
 from config.settings import BotConfig
-from core.clock import now_ist
+from core.clock import ClockOffset, now_ist
 from core.enums import AutonomyLevel, TradingMode
 from data.storage.database import Database, DatabaseError
 from data.storage.repositories import Repositories
 from monitoring.json_logger import configure_from_config
 from runtime.paper import (
+    Check,
     PaperLaunchError,
     PaperSession,
     SessionOptions,
+    clock_offset_check,
     preflight,
     render_checks,
     render_versions,
@@ -118,6 +120,22 @@ async def _connect_check(cfg: BotConfig) -> str:
         await rest.aclose()
 
 
+async def measure_clock(cfg: BotConfig) -> ClockOffset:
+    """PC clock vs Upstox server time (3 rate-limited market-data LTP calls)."""
+    rest = UpstoxRestClient.from_config(cfg, UpstoxRateLimiter.from_config(cfg))
+    try:
+        return await rest.measure_clock_offset(cfg.settings.instruments.nifty_index_key)
+    finally:
+        await rest.aclose()
+
+
+def _clock_check(cfg: BotConfig) -> Check:
+    limit = cfg.settings.broker.max_clock_offset_seconds
+    if not cfg.env.upstox_credentials_present:
+        return Check("PC clock", False, "not measured: Upstox credentials missing (needed to read server time)")
+    return asyncio.run(clock_offset_check(lambda: measure_clock(cfg), limit))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -131,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if ok else 1
     configure_from_config(cfg)
     checks = preflight(cfg)
+    checks.append(_clock_check(cfg))
     print("PAPER pre-flight checks:")
     print(render_checks(checks))
     autonomy = AutonomyLevel(cfg.settings.app.autonomy_level)

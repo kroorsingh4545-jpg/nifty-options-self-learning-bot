@@ -122,3 +122,14 @@ def test_env_example_contains_no_values() -> None:
             assert value == "PAPER"
         else:
             assert value == "", f".env.example must not contain a value for {key}"
+
+
+def test_the_suite_never_reads_the_real_env_file() -> None:
+    """tests/conftest.py: no default .env, and the real one is refused even if passed explicitly."""
+    from config import loader
+
+    assert loader.DEFAULT_ENV_FILE is None
+    with pytest.raises(AssertionError, match="real .env"):
+        load_config(env_file=PROJECT_ROOT / ".env")
+    cfg = load_config()  # the default path now reads the scrubbed process environment only
+    assert not cfg.env.upstox_credentials_present and cfg.env.dashboard_username is None

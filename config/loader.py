@@ -21,6 +21,9 @@ from core.masking import DEFAULT_MASKER, SecretMasker
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_DIR = PROJECT_ROOT / "config"
+#: The ``.env`` used when no ``env_file`` is given. The test suite sets this to
+#: None (tests/conftest.py) so no test can ever read the developer's real secrets.
+DEFAULT_ENV_FILE: Path | None = PROJECT_ROOT / ".env"
 
 SETTINGS_FILE = "settings.yaml"
 RISK_FILE = "risk_limits.yaml"
@@ -92,7 +95,7 @@ def load_config(
     config_dir = Path(config_dir) if config_dir is not None else DEFAULT_CONFIG_DIR
     project_root = config_dir.resolve().parent
     if env_file is None and use_default_env_file:
-        env_file = PROJECT_ROOT / ".env"
+        env_file = DEFAULT_ENV_FILE
 
     env = load_env(env_file)
     # Register secrets before anything else can log or raise with them.

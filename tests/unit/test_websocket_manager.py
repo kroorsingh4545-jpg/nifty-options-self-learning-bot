@@ -86,6 +86,14 @@ async def test_live_enables_portfolio_stream() -> None:
     await mgr.stop()
 
 
+async def test_health_reports_ticks_errors_and_last_message_age() -> None:
+    cf = FakeConnector()
+    ws = WebSocketManager(authorizer=FakeAuthorizer(), market_data=MarketDataService(), connector=cf)
+    h = ws.health()["market_data"]
+    assert h["ticks"] == 0 and h["message_errors"] == 0 and h["last_message_age_seconds"] is None
+    assert h["connected"] is False
+
+
 def test_factory_wires_paper_broker_in_paper_mode() -> None:
     cfg = load_config(use_default_env_file=False)
     broker = create_broker(cfg, quotes=lambda k: None)

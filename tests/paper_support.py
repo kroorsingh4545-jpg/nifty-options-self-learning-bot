@@ -84,6 +84,7 @@ class FakeConnections:
         self.hooks: RiskHooks | None = None
         self.md: MarketDataService | None = None
         self.closed = False
+        self.clock_probe: Any = None  # None = no clock reference (the session skips the clock monitor)
 
     def __call__(self, cfg: BotConfig, hooks: RiskHooks) -> MarketConnections:
         self.hooks = hooks
@@ -94,7 +95,8 @@ class FakeConnections:
 
         return MarketConnections(self.md, self.source, self.feed,
                                  lambda: {"upstox": "fake", "upstox_connected": True, "websocket": "CONNECTED"},
-                                 lambda: {"standard": {"per_second": 0}}, aclose, evidence=EvidenceSource.SYNTHETIC)
+                                 lambda: {"standard": {"per_second": 0}}, aclose, evidence=EvidenceSource.SYNTHETIC,
+                                 clock_probe=self.clock_probe)
 
 
 def session(cfg: BotConfig, wall: FakeWallClock, conns: FakeConnections, **opts: Any) -> PaperSession:
