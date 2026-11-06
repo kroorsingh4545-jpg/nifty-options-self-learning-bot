@@ -96,6 +96,7 @@ class ResilientStream:
         self.reconnect_attempts = 0
         self.connect_count = 0
         self.messages_received = 0
+        self.message_errors = 0  # messages that failed to decode / handle
         self.last_message_at: float | None = None
         self.last_error: str | None = None
         self._state_listeners: list[Callable[[str, StreamState, StreamState], None]] = []
@@ -135,6 +136,12 @@ class ResilientStream:
         if not self.connected or self.last_message_at is None:
             return self.connected
         return self._clock.monotonic() - self.last_message_at > self.settings.stale_after_seconds
+
+    def last_message_age(self) -> float | None:
+        """Seconds since the last message (or since connect), None before the first connect."""
+        if self.last_message_at is None:
+            return None
+        return max(0.0, self._clock.monotonic() - self.last_message_at)
 
     # ------------------------------------------------------------------ #
     async def run(self) -> None:
@@ -226,7 +233,9 @@ class ResilientStream:
             try:
                 await self.handle_message(message)
             except Exception:
-                log.exception("failed to handle websocket message", extra={"stream": self.kind})
+                self.message_errors += 1
+                log.exception("failed to handle websocket message",
+                              extra={"stream": self.kind, "message_errors": self.message_errors})
 
     async def _heartbeat_loop(self, conn: StreamConnection) -> None:
         while True:
@@ -274,6 +283,8 @@ class MarketDataStream(ResilientStream):
         self._tick_listeners: list[Callable[[list[Tick]], None]] = [on_ticks] if on_ticks else []
         self._reconnect_listeners: list[Callable[[], None]] = []
         self.sent_requests: int = 0
+        self.ticks_received: int = 0
+        self._first_tick_pending = True
 
     def add_tick_listener(self, fn: Callable[[list[Tick]], None]) -> None:
         self._tick_listeners.append(fn)
@@ -322,6 +333,7 @@ class MarketDataStream(ResilientStream):
 
     async def _send(self, conn: StreamConnection, method: str, keys: Sequence[str], mode: str | None) -> None:
         size = self.settings.subscribe_chunk_size
+        frames = 0
         for i in range(0, len(keys), size):
             data: dict[str, Any] = {"instrumentKeys": list(keys[i : i + size])}
             if mode is not None:
@@ -330,8 +342,13 @@ class MarketDataStream(ResilientStream):
             # Upstox requires subscription requests as *binary* frames.
             await conn.send(json.dumps(payload).encode("utf-8"))
             self.sent_requests += 1
+            frames += 1
+        log.info("market data subscription request sent",
+                 extra={"stream": self.kind, "method": method, "feed_mode": mode, "instruments": len(keys),
+                        "frames": frames, "total_subscriptions": len(self.subscriptions)})
 
     async def on_connected(self, conn: StreamConnection) -> None:
+        self._first_tick_pending = True
         by_mode: dict[str, list[str]] = defaultdict(list)
         for key, mode in self.subscriptions.items():
             by_mode[mode].append(key)
@@ -348,8 +365,17 @@ class MarketDataStream(ResilientStream):
             return
         msg_type, ticks, segments = decode_feed_response(message)
         if segments:
+            changed = {seg: st for seg, st in segments.items() if self.market_status.get(seg) != st}
             self.market_status.update(segments)
+            if changed:
+                log.info("market status update", extra={"stream": self.kind, "segments": changed})
         if ticks:
+            self.ticks_received += len(ticks)
+            if self._first_tick_pending:
+                self._first_tick_pending = False
+                log.info("first market data ticks after connect",
+                         extra={"stream": self.kind, "message_type": msg_type, "instruments": len(ticks),
+                                "connect_count": self.connect_count})
             for fn in list(self._tick_listeners):
                 fn(ticks)
 

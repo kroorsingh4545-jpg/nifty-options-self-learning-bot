@@ -112,12 +112,13 @@ The engine's entry decision for that signal, followed by the resulting PAPER tra
 
 | Job | Every | Purpose |
 |---|---|---|
-| `candle_flush` | 1 s | close candles whose interval ended without a further tick |
+| `candle_flush` | 1 s | close candles whose interval ended `websocket.candle_flush_grace_seconds` (2 s) ago without a further tick; a bucket is published once, later ticks for it are dropped as late |
 | `expire_entries` | 5 s | cancel entry orders unfilled after 30 s |
 | `square_off` | 5 s | mandatory 15:10–15:20 flatten, with escalation |
 | `recenter` | 30 s | keep ATM ± 3 strikes (CE and PE) subscribed; held contracts are never dropped |
 | `reconcile` | 300 s | periodic broker reconciliation |
 | `new_day` | 09:00 Mon–Fri | clear kill events and PAUSED/KILLED statuses from **previous** days only |
+| `feed_health` | 60 s | PAPER session: INFO feed summary (messages, ticks, decode errors, late ticks, lag); WARNING once when the NIFTY feed lag exceeds `websocket.max_feed_lag_seconds` |
 
 ## Engine states
 

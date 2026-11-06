@@ -129,3 +129,57 @@ def test_new_day_resets_volume_baseline() -> None:
 def test_invalid_timeframes() -> None:
     with pytest.raises(ValueError):
         CandleBuilder(timeframes=[0])
+
+# --------------------------------------------------------------------------- #
+# Flush vs exchange time (local clock ahead of the exchange)
+# --------------------------------------------------------------------------- #
+
+
+def test_tick_after_flush_never_republishes_the_bucket() -> None:
+    """A bucket closed by the timer is published once: a later tick that still
+    belongs to it (exchange time behind the local clock) is dropped as late,
+    not turned into a second candle for the same minute."""
+    b = CandleBuilder(timeframes=[1])
+    got: list[Candle] = []
+    b.add_listener(got.append)
+    b.on_tick(tick(at(9, 15, 50), 100))
+    (closed,) = b.flush(at(9, 16, 0))
+    assert b.on_tick(tick(at(9, 15, 55), 500)) == []
+    assert b.flush(at(9, 16, 1)) == []
+    assert b.current(K, 1) is None and b.dropped_late == 1
+    assert [c.start for c in got] == [at(9, 15)] and closed.high == 100
+
+
+def test_local_clock_seven_seconds_ahead_gives_one_candle_per_bucket() -> None:
+    """The 2026-11-06 PAPER session: the PC clock ran ~7 s ahead and the 1 s
+    flush timer produced ~8 'complete' candles per minute. Now each bucket is
+    published exactly once, for every timeframe."""
+    b = CandleBuilder(timeframes=[1, 3, 5], flush_grace_seconds=2.0)
+    got: list[Candle] = []
+    b.add_listener(got.append)
+    skew = timedelta(seconds=7)
+    exch = at(9, 15, 0)
+    px = 100.0
+    while exch < at(9, 30):
+        b.on_tick(tick(exch, px))
+        b.flush(exch + skew)  # the 1 s timer runs on the (fast) local clock
+        exch += timedelta(seconds=1)
+        px += 0.5
+    for tf, expected in ((1, 15), (3, 5), (5, 3)):  # 09:15-09:29, all closed by the last flush
+        starts = [c.start for c in got if c.timeframe_minutes == tf]
+        assert len(starts) == len(set(starts)) == expected, (tf, starts)
+    assert b.dropped_late > 0
+
+
+def test_flush_grace_delays_the_timer_close() -> None:
+    b = CandleBuilder(timeframes=[1], flush_grace_seconds=2.0)
+    b.on_tick(tick(at(9, 15, 30), 100))
+    assert b.flush(at(9, 16, 1)) == []
+    b.on_tick(tick(at(9, 15, 59), 104))  # last tick of the bucket arrives within the grace
+    (c,) = b.flush(at(9, 16, 2))
+    assert c.close == 104 and c.tick_count == 2
+
+
+def test_negative_flush_grace_rejected() -> None:
+    with pytest.raises(ValueError):
+        CandleBuilder(flush_grace_seconds=-1)

@@ -111,3 +111,29 @@ async def test_snapshot_does_not_overwrite_live_tick() -> None:
     md.on_tick(tick("A", 42, wall))
     await md.recover_snapshot(["A"])
     assert md.ltp("A") == 42
+
+def test_feed_lag_is_median_of_live_ticks_only() -> None:
+    wall = FakeWallClock(T0)
+    md = MarketDataService(now_fn=wall)
+    assert md.feed_lag("A") is None
+    for lag in (7.0, 7.4, 8.5):  # the median ignores one slow message
+        wall.now += timedelta(seconds=5)
+        md.on_tick(Tick(instrument_key="A", ltp=1, exchange_time=wall.now - timedelta(seconds=lag),
+                        received_at=wall.now))
+    assert md.feed_lag("A") == 7.4
+    md.on_tick(Tick(instrument_key="B", ltp=1, exchange_time=wall.now - timedelta(seconds=99),
+                    received_at=wall.now, is_snapshot=True))
+    assert md.feed_lag("B") is None
+
+
+def test_quote_status_reports_price_freshness_and_age() -> None:
+    wall = FakeWallClock(T0)
+    md = MarketDataService(now_fn=wall, stale_after_seconds=10)
+    assert md.quote_status("A") == {"ltp": None, "fresh": False, "age_seconds": None, "exchange_time": None,
+                                    "snapshot": False}
+    md.on_tick(tick("A", 24850.5, wall))
+    q = md.quote_status("A")
+    assert q["ltp"] == 24850.5 and q["fresh"] and q["age_seconds"] == 0 and not q["snapshot"]
+    wall.now += timedelta(seconds=12)
+    q = md.quote_status("A")
+    assert not q["fresh"] and q["age_seconds"] == 12

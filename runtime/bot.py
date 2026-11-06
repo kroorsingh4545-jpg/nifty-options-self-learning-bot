@@ -160,7 +160,8 @@ class TradingBot:
         self.learning: LearningRecorder | None = None
         self.scheduler = scheduler or TradingScheduler()
         session = cfg.settings.market_session
-        self.candles = CandleBuilder(session_open=session.market_open, session_close=session.market_close)
+        self.candles = CandleBuilder(session_open=session.market_open, session_close=session.market_close,
+                                     flush_grace_seconds=cfg.settings.websocket.candle_flush_grace_seconds)
         self.strategies: list[BaseStrategy] = []
         self.universe: OptionUniverse | None = None
         self.engine: TradingEngine | None = None

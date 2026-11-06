@@ -162,6 +162,14 @@ class WebSocketSection(_Frozen):
     subscribe_chunk_size: int = Field(default=100, ge=1, le=500)
     market_data_mode: MarketDataMode = "full"
     portfolio_update_types: tuple[PortfolioUpdateType, ...] = ("order", "position")
+    # Candles are bucketed by exchange time but flushed by the local clock: a
+    # bucket is closed by the timer only this long after it ended.
+    candle_flush_grace_seconds: NonNegativeFloat = Field(default=2.0, le=30.0)
+    # Median (local receipt - exchange time) of NIFTY index ticks above this
+    # logs a WARNING and shows on the dashboard (usually a PC clock offset).
+    max_feed_lag_seconds: PositiveFloat = 2.0
+    # How often the PAPER session logs a market-data feed summary (INFO).
+    feed_summary_interval_seconds: PositiveFloat = 60.0
 
 
 class PaperBrokerSection(_Frozen):

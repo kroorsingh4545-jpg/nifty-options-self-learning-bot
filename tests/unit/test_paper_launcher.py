@@ -8,6 +8,8 @@ deployed versions come from FABRICATED validation reports.
 from __future__ import annotations
 
 import asyncio
+import logging
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -17,11 +19,13 @@ from backtest.backtester import with_strategy_overrides
 from broker.paper_broker import PaperBroker
 from config.settings import BotConfig
 from core.enums import AutonomyLevel, EvidenceSource, OptionType, TradeStatus, TradingMode
+from data.market_data import MarketDataService
 from data.storage.database import SCHEMA_VERSION, Database
 from data.storage.repositories import Repositories
 from risk.kill_switch import KillReason
 from runtime import __main__ as cli
 from runtime.paper import (
+    FeedHealthMonitor,
     PaperLaunchError,
     PaperSession,
     RiskHooks,
@@ -31,7 +35,7 @@ from runtime.paper import (
 )
 from tests.fakes import FakeWallClock
 from tests.paper_support import SID, FakeConnections, deploy_version, drive, paper_cfg, session
-from tests.synthetic import at
+from tests.synthetic import INDEX, at, tick
 from tests.unit.test_bot_integration import ORB_DAY
 
 A = AutonomyLevel
@@ -251,7 +255,10 @@ async def test_upstox_connections_are_read_only(tmp_path: Path) -> None:
         feed = conn.feed
         assert getattr(feed, "portfolio", "missing") is None  # no portfolio stream in PAPER
         assert conn.evidence is EvidenceSource.LIVE_FEED
-        assert conn.status()["upstox_connected"] is False  # not connected until started
+        status = conn.status()
+        assert status["upstox_connected"] is False  # not connected until started
+        assert status["websocket_connected"] is False and status["websocket_state"] == "IDLE"
+        assert status["feed_lag_seconds"] is None and status["feed_lag_limit_seconds"] == 2.0
         from broker.errors import LiveTradingDisabledError
 
         with pytest.raises(LiveTradingDisabledError):
@@ -312,3 +319,69 @@ def test_no_secret_reaches_the_check_output(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setattr(cli, "configure_from_config", lambda _cfg: None)
     cli.main(["check"])
     assert "super-secret-token-value" not in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# Feed health
+# --------------------------------------------------------------------------- #
+
+
+async def test_session_publishes_prices_and_schedules_the_feed_health_job(tmp_path: Path) -> None:
+    cfg = paper_cfg(tmp_path)
+    wall = FakeWallClock(at(9, 14))
+    conns = FakeConnections(wall)
+    s = session(cfg, wall, conns)
+    bot = await s.start()
+    try:
+        assert "feed_health" in bot.scheduler.jobs
+        assert bot.scheduler.jobs["feed_health"].every_seconds == 60
+        wall.now = at(9, 16)
+        assert conns.md is not None
+        conns.md.on_tick(tick(INDEX, 24881.65, wall.now))
+        state = await bot.control.build_state()
+        assert state["market"]["index"]["ltp"] == 24881.65 and state["market"]["index"]["fresh"]
+        assert state["market"]["future"]["key"] == bot.futures.instrument_key  # type: ignore[union-attr]
+        assert state["connections"]["websocket_connected"] is False  # the fake status has no structured field
+        assert s.feed_monitor is not None
+        summary = s.feed_monitor.check()
+        assert summary["subscriptions"] >= 1 and summary["feed_lag_seconds"] == 0.0
+    finally:
+        await s.shutdown()
+
+
+class _Feed:
+    def __init__(self) -> None:
+        self.messages = 0
+
+    def health(self) -> dict[str, object]:
+        return {"market_data": {"state": "CONNECTED", "connected": True, "messages": self.messages}}
+
+
+def test_feed_lag_warns_once_and_reports_recovery(caplog: pytest.LogCaptureFixture) -> None:
+    wall = FakeWallClock(at(9, 20))
+    md = MarketDataService(now_fn=wall)
+    feed = _Feed()
+    mon = FeedHealthMonitor(feed, md, reference_key=INDEX, max_lag_seconds=2.0,  # type: ignore[arg-type]
+                            late_ticks=lambda: 3)
+
+    def ticks(lag: float) -> None:
+        for _ in range(30):
+            wall.now += timedelta(seconds=1)
+            md.on_tick(tick(INDEX, 24880.0, wall.now - timedelta(seconds=lag)).model_copy(
+                update={"received_at": wall.now}))
+        feed.messages += 30
+
+    with caplog.at_level(logging.INFO, logger="runtime.paper"):
+        assert mon.check()["feed_lag_seconds"] is None  # no ticks yet: no verdict
+        ticks(7.2)
+        first = mon.check()
+        mon.check()
+        ticks(0.1)
+        mon.check()
+    assert first["feed_lag_seconds"] == pytest.approx(7.2) and first["messages_since_last"] == 30
+    assert first["late_ticks_dropped"] == 3
+    msgs = [r.getMessage() for r in caplog.records]
+    assert sum(m.startswith("market data feed lag high") for m in msgs) == 1
+    assert msgs.count("market data feed lag back to normal") == 1
+    assert msgs.count("market data feed summary") == 4
+    assert not mon.lag_high

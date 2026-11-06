@@ -103,6 +103,7 @@ def live(cfg: BotConfig, repos: Repositories, client: CommandClient) -> None:
     with top[3]:
         control_bar.autonomy(st, client, view)
     control_bar.status_strip(st, view)
+    control_bar.market_strip(st, view)
     control_bar.kill_banner_and_reset(st, client, view)
     if st.session_state.get(LIVE_TOGGLE):
         control_bar.live_panel(st, cfg, client, view)

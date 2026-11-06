@@ -70,6 +70,9 @@ websocket:
   stale_after_seconds: 10        # connected but silent this long -> data marked stale
   subscribe_chunk_size: 100
   market_data_mode: full         # ltpc | full | option_greeks | full_d30
+  candle_flush_grace_seconds: 2  # timer closes a candle this long after its bucket ended (clock offset / latency)
+  max_feed_lag_seconds: 2        # NIFTY tick lag (receipt - exchange time) above this -> WARNING (check PC clock)
+  feed_summary_interval_seconds: 60  # INFO feed summary (messages, ticks, decode errors, lag)
   portfolio_update_types: [order, position]
 
 paper_broker:

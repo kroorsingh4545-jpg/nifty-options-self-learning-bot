@@ -30,7 +30,7 @@ REQUIRED_METRICS = {
     "Max drawdown", "Upstox", "WebSocket", "Market session", "Square-off in", "Autonomy", "Bot",
     "Global daily loss limit", "Per-strategy daily loss limit", "Per-trade risk", "Open exposure", "Margin usage",
     "WebSocket subscriptions", "API rate-limit usage", "ML / RL models", "Learning-loop candidates",
-    "Pending approvals",
+    "Pending approvals", "NIFTY index", "NIFTY future", "Feed lag",
 }
 
 
