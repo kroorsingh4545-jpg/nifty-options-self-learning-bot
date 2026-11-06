@@ -38,3 +38,6 @@ dist/
 
 # Playwright MCP snapshots / screenshots (local QA output)
 .playwright-mcp/
+
+# Claude Code agent worktrees (local only)
+.claude/worktrees/

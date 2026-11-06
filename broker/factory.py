@@ -16,7 +16,7 @@ from broker.paper_broker import PaperBroker, QuoteLookup
 from config import hard_limits
 from config.settings import BotConfig
 from core.clock import now_ist
-from core.enums import TradingMode
+from core.enums import TradingMode, UpstoxTokenType
 from core.models import Instrument
 
 
@@ -30,6 +30,9 @@ def create_broker(cfg: BotConfig, *, quotes: QuoteLookup, instruments: Iterable[
             instruments=instruments,
             now_fn=now_fn,
         )
+    if cfg.env.upstox_token_type is UpstoxTokenType.ANALYTICS:
+        raise LiveTradingDisabledError("LIVE broker refused: the Upstox Analytics Token is read-only and "
+                                       "cannot place orders")
     if not hard_limits.LIVE_TRADING_AVAILABLE:
         raise LiveTradingDisabledError("LIVE broker is not available in this build")
     raise LiveTradingDisabledError("LIVE broker is not implemented")  # pragma: no cover

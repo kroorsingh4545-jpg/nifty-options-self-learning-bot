@@ -141,7 +141,8 @@ class TradingBot:
         self.stack: ExecutionStack = build_stack(cfg, repos=self.repos, broker=broker, market_data=market_data,
                                                  alert_sinks=tuple(alert_sinks), now_fn=now_fn, sleep=sleep,
                                                  reconcile_confirm_delay=reconcile_confirm_delay)
-        self.mode = ModeController(live_available=False, autonomy=cfg.settings.app.autonomy_level, now_fn=now_fn)
+        self.mode = ModeController(live_available=False, autonomy=cfg.settings.app.autonomy_level,
+                                   token_type=cfg.env.upstox_token_type, now_fn=now_fn)
         self.filter: SignalFilter = signal_filter or PassThroughFilter()
         self._filter_injected = signal_filter is not None
         # Per-strategy ML models (HISTORICAL production models; research=True

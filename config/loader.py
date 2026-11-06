@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from config import hard_limits
 from config.settings import AppSettings, BotConfig, EnvSettings, RiskLimits, StrategyDefaults
-from core.enums import TradingMode
+from core.enums import TradingMode, UpstoxTokenType
 from core.masking import DEFAULT_MASKER, SecretMasker
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -98,6 +98,12 @@ def load_config(
     # Register secrets before anything else can log or raise with them.
     masker.register_many(env.secret_values())
 
+    if env.trading_mode is TradingMode.LIVE and env.upstox_token_type is UpstoxTokenType.ANALYTICS:
+        # Independent of LIVE_TRADING_AVAILABLE: a read-only analytics token can never trade.
+        raise LiveModeNotPermittedError(
+            "TRADING_MODE=LIVE is not permitted with UPSTOX_TOKEN_TYPE=analytics: the Upstox Analytics "
+            "Token is read-only and cannot place orders. Use PAPER."
+        )
     if env.trading_mode is TradingMode.LIVE and not hard_limits.LIVE_TRADING_AVAILABLE:
         raise LiveModeNotPermittedError(
             "TRADING_MODE=LIVE is not permitted: LIVE order routing and the LIVE "

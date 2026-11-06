@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from core.engine import TradingEngine
-from core.enums import AutonomyLevel, OptionType, TradingMode
+from core.enums import AutonomyLevel, OptionType, TradingMode, UpstoxTokenType
 from core.event_bus import EventBus, Topic
 from core.interfaces import ContractChoice, EntryResult, FilterDecision, PassThroughFilter
 from core.mode_controller import LIVE_CONFIRMATION_PHRASE, LivePreconditions, ModeController
@@ -284,7 +284,10 @@ def test_default_paper_and_live_always_refused_in_this_build() -> None:
     assert m.mode is TradingMode.PAPER and m.autonomy is AutonomyLevel.PAPER_AUTO_IMPROVE
     r = m.request_live(LIVE_CONFIRMATION_PHRASE, ALL_OK)
     assert not r.approved and m.mode is TradingMode.PAPER
-    assert r.reasons == ("LIVE order routing is not available in this build",)
+    assert r.reasons == ("LIVE order routing is not available in this build",
+                         "the Upstox Analytics Token is read-only and cannot place orders")  # default token type
+    daily = ModeController(token_type=UpstoxTokenType.DAILY).request_live(LIVE_CONFIRMATION_PHRASE, ALL_OK)
+    assert daily.reasons == ("LIVE order routing is not available in this build",)
 
 
 def test_live_request_lists_every_unmet_precondition() -> None:

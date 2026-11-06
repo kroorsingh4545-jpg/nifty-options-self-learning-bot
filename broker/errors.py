@@ -19,6 +19,11 @@ class TokenExpiredError(AuthError):
     """Access token expired or invalid (HTTP 401 / UDAPI100050 / daily expiry)."""
 
 
+class TokenScopeError(BrokerError):
+    """The configured token may not call this endpoint (an analytics token
+    reaches market-data APIs only). Refused locally; nothing was sent."""
+
+
 class RateLimitError(BrokerError):
     """Could not obtain a rate-limit slot within the allowed wait."""
 

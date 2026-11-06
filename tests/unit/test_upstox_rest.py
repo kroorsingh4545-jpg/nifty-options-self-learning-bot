@@ -23,7 +23,7 @@ from broker.upstox_rest import UpstoxRestClient, next_token_expiry
 from config.loader import load_config
 from config.settings import BrokerSection, CircuitBreakerSection
 from core.clock import IST
-from core.enums import TradingMode
+from core.enums import TradingMode, UpstoxTokenType
 from core.masking import SecretMasker
 from tests.fakes import FakeClock, FakeWallClock, chain_row, option_contract
 
@@ -44,7 +44,8 @@ def err(status: int, code: str, message: str = "error", headers: dict[str, str] 
 
 class Harness:
     def __init__(self, handler: Handler, *, mode: TradingMode = TradingMode.PAPER, token: str | None = TOKEN,
-                 now: FakeWallClock | None = None, **settings: Any) -> None:
+                 now: FakeWallClock | None = None, token_type: UpstoxTokenType = UpstoxTokenType.DAILY,
+                 **settings: Any) -> None:
         self.requests: list[httpx.Request] = []
         self.clock = FakeClock()
         self.auth_failures: list[str] = []
@@ -61,6 +62,7 @@ class Harness:
             token_provider=lambda: token,
             limiter=self.limiter,
             mode=mode,
+            token_type=token_type,
             settings=BrokerSection(**settings),
             http=self.http,
             clock=self.clock,

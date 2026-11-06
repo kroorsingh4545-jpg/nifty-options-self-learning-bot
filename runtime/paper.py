@@ -49,7 +49,7 @@ from config import hard_limits
 from config.settings import BotConfig
 from core.autonomy import may_auto_deploy_paper
 from core.clock import IST, now_ist
-from core.enums import AutonomyLevel, EvidenceSource, TradingMode
+from core.enums import AutonomyLevel, EvidenceSource, TradingMode, UpstoxTokenType
 from data.market_data import MarketDataService
 from data.storage.bootstrap import sync_strategies
 from data.storage.database import SCHEMA_VERSION, Database
@@ -96,6 +96,20 @@ def _inside(path: Path, parent: Path) -> bool:
     return True
 
 
+def _credentials_check(cfg: BotConfig, need_upstox: bool) -> Check:
+    env = cfg.env
+    if env.upstox_token_type is UpstoxTokenType.ANALYTICS:
+        detail = ("UPSTOX_ACCESS_TOKEN set (analytics token: market-data APIs only, no daily expiry)"
+                  if env.upstox_credentials_present else
+                  "set UPSTOX_ACCESS_TOKEN in .env to your Upstox Analytics Token (see README)")
+    else:
+        detail = ("UPSTOX_API_KEY and UPSTOX_ACCESS_TOKEN set (daily token, used for read-only market data; it "
+                  "expires daily at " + cfg.settings.broker.token_expiry_time.strftime("%H:%M") + " IST)"
+                  if env.upstox_credentials_present else
+                  "set UPSTOX_API_KEY and UPSTOX_ACCESS_TOKEN in .env (see README: token generation)")
+    return Check("Upstox credentials", env.upstox_credentials_present, detail, fatal=need_upstox)
+
+
 def preflight(cfg: BotConfig, *, now: datetime | None = None, need_upstox: bool = True) -> list[Check]:
     """Offline checks (no network). Fatal failures block the launch."""
     now = (now or now_ist()).astimezone(IST)
@@ -106,12 +120,7 @@ def preflight(cfg: BotConfig, *, now: datetime | None = None, need_upstox: bool 
         Check("No LIVE order routing", not hard_limits.LIVE_TRADING_AVAILABLE,
               "this build cannot place real orders (PaperBroker only)" if not hard_limits.LIVE_TRADING_AVAILABLE
               else "LIVE routing is present: this launcher refuses to run"),
-        Check("Upstox credentials", cfg.env.upstox_credentials_present,
-              "UPSTOX_API_KEY and UPSTOX_ACCESS_TOKEN set (used for read-only market data; the token expires "
-              "daily at " + cfg.settings.broker.token_expiry_time.strftime("%H:%M") + " IST)"
-              if cfg.env.upstox_credentials_present else
-              "set UPSTOX_API_KEY and UPSTOX_ACCESS_TOKEN in .env (see README: token generation)",
-              fatal=need_upstox),
+        _credentials_check(cfg, need_upstox),
         Check("NSE holiday calendar", session.holidays_known_for(now.year),
               f"holidays configured for {now.year}" if session.holidays_known_for(now.year) else
               f"no holidays for {now.year} in market_session.holidays: every new entry is blocked", fatal=False),

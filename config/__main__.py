@@ -33,6 +33,7 @@ def main() -> int:
     print(f"  UPSTOX_API_KEY        : {secret(env.upstox_api_key)}")
     print(f"  UPSTOX_API_SECRET     : {secret(env.upstox_api_secret)}")
     print(f"  UPSTOX_ACCESS_TOKEN   : {secret(env.upstox_access_token)}")
+    print(f"  UPSTOX_TOKEN_TYPE     : {env.upstox_token_type.value}")
     print(f"  TELEGRAM_BOT_TOKEN    : {secret(env.telegram_bot_token)}")
     print(f"  DASHBOARD auth        : {'configured' if env.dashboard_username else '(not set)'}")
     print(f"  capital total/strategy: {risk.capital.total_capital:,.0f} / {risk.capital.per_strategy_capital:,.0f}")

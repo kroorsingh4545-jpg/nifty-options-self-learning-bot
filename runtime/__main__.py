@@ -1,7 +1,7 @@
 """PAPER trading launcher.
 
     python -m runtime check                 # pre-flight checks + the strategy versions a session would trade
-    python -m runtime check --connect       # ... and a read-only Upstox call to validate the access token
+    python -m runtime check --connect       # ... and one Upstox market-data call (NIFTY LTP) to validate the token
     python -m runtime paper                 # start a real-time PAPER session (Ctrl+C to stop)
     python -m runtime paper --paused        # start with the engine PAUSED (start it from the dashboard)
     python -m runtime paper --stop-at 15:40 # end the session at 15:40 IST today
@@ -50,7 +50,8 @@ def _parser() -> argparse.ArgumentParser:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("check", help="pre-flight checks (no orders, no trading)")
-    c.add_argument("--connect", action="store_true", help="also call Upstox (read-only) to validate the token")
+    c.add_argument("--connect", action="store_true",
+                   help="also make one Upstox market-data call (NIFTY LTP) to validate the token")
     c.add_argument("--baseline", action="store_true", help="show versions as with paper --baseline")
     r = sub.add_parser("paper", help="run a real-time PAPER session")
     r.add_argument("--paused", action="store_true", help="start with the engine PAUSED")
@@ -99,12 +100,20 @@ def _versions_preview(cfg: BotConfig, autonomy: AutonomyLevel, baseline: bool) -
 
 
 async def _connect_check(cfg: BotConfig) -> str:
+    """One market-data call (REST LTP of the NIFTY index). Works with both an
+    analytics and a daily token; never touches user, funds, portfolio or
+    order APIs."""
+    key = cfg.settings.instruments.nifty_index_key
+    kind = cfg.env.upstox_token_type.value
     rest = UpstoxRestClient.from_config(cfg, UpstoxRateLimiter.from_config(cfg))
     try:
-        funds = await rest.get_funds()
-        return f"[PASS] Upstox token: valid (read-only funds call ok; available margin {funds.available_margin:,.2f})"
+        prices = await rest.get_ltp([key])
+        if not prices:
+            return f"[FAIL] Upstox token ({kind}): market-quote call returned no LTP for {key}"
+        ltp = next(iter(prices.values()))
+        return f"[PASS] Upstox token ({kind}): valid (market-data LTP call ok; {key} LTP {ltp:,.2f})"
     except Exception as exc:  # report, never raise: this is a check
-        return f"[FAIL] Upstox token: {type(exc).__name__}: {exc}"
+        return f"[FAIL] Upstox token ({kind}): {type(exc).__name__}: {exc}"
     finally:
         await rest.aclose()
 
@@ -129,7 +138,10 @@ def main(argv: list[str] | None = None) -> int:
     print(_versions_preview(cfg, autonomy, args.baseline))
     failed = [c for c in checks if not c.ok and c.fatal]
     if args.cmd == "check":
-        if args.connect and cfg.env.upstox_credentials_present:
+        if args.connect:
+            if not cfg.env.upstox_credentials_present:
+                print("\n[FAIL] Upstox token: not checked, credentials missing (see the pre-flight item above)")
+                return 1
             line = asyncio.run(_connect_check(cfg))
             print("\n" + line)
             if line.startswith("[FAIL]"):
