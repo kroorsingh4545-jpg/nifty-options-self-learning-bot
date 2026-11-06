@@ -73,12 +73,14 @@ After the close:
    while it runs, the heartbeat can be slower.
 10. **Holiday calendar is manual.** Add each year's NSE holidays; without them every entry is blocked.
 11. **Telegram is outbound only** (no commands). A failure that logs CRITICAL and also raises its own
-    CRITICAL alert (e.g. an exit failure) can produce two messages.
+    CRITICAL alert (e.g. an exit failure, or every kill-switch flatten) can produce two messages. The learning
+    loop's backtests never produce alerts: they log at most WARNING, tagged `research_run`.
 12. **Docker was not built on the development machine for this release** (Docker is not installed there).
     The Dockerfile and compose file are syntax-checked only; build and run `docker compose run --rm bot
     python -m runtime check` before relying on them.
 
-**Carried audit warnings** (see `docs/audits/phase-10-risk-execution-audit.md` for the full list)
+**Carried audit warnings** (see [`docs/audits/phase-10-final-audit.md`](audits/phase-10-final-audit.md) for the
+full list)
 
 13. An RL management decision is persisted after it is applied; if that write fails, one applied action per
     strategy per session has no audit row (RL is then suspended for the strategy).

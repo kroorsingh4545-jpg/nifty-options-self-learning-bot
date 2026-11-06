@@ -13,6 +13,9 @@
   stops the next PAPER_READY decision or deployment immediately;
 * it runs in a worker thread with its own database connection and event
   loop, so the bot's heartbeat and control plane keep running;
+* everything it logs is at most WARNING and tagged ``research_run``
+  (``monitoring.json_logger.research_logging``): the simulated bots in its
+  backtests never raise ERROR / CRITICAL lines, Telegram or dashboard alerts;
 * a deployment it makes takes effect at the NEXT bot start (the launcher
   applies deployments at start-up only), never inside the running session.
 
@@ -37,7 +40,7 @@ from data.storage.database import Database
 from data.storage.repositories import Repositories
 from learning.loop import LoopRefused, LoopResult, ReflectiveLoop, load_verification_data, render_loop_markdown
 from learning.validation_engine import ValidationEngine, ValidationPlan
-from monitoring.json_logger import get_logger
+from monitoring.json_logger import get_logger, research_logging
 
 if TYPE_CHECKING:
     from runtime.bot import TradingBot
@@ -111,16 +114,20 @@ class LearningLoopRunner:
         return res
 
     def _run_in_worker(self, data_dir: Path, start: date, end: date) -> LoopResult:
-        ds = load_verification_data(data_dir)
-        db = Database.open_existing(self.cfg.database_path)  # this thread's own connection
-        try:
-            repos = Repositories(db, TradingMode.PAPER)
-            loop = self.build_loop(repos, lambda prod: ValidationEngine(prod, ds, plan=self.plan))
-            since = datetime.combine(start, time(0, 0), tzinfo=IST)
-            until = datetime.combine(end + timedelta(days=1), time(0, 0), tzinfo=IST)
-            return asyncio.run(loop.run(repos.journal.list(since=since, until=until), start, end))
-        finally:
-            db.close()
+        # The VERIFY backtests build simulated bots whose kills, exit failures and CRITICALs are not the
+        # running bot's: nothing logged in here is ERROR / CRITICAL or becomes an alert (Telegram, dashboard).
+        # A failure of the loop itself still propagates and is logged at ERROR by run_once (main thread).
+        with research_logging(f"learning-loop {start}..{end}"):
+            ds = load_verification_data(data_dir)
+            db = Database.open_existing(self.cfg.database_path)  # this thread's own connection
+            try:
+                repos = Repositories(db, TradingMode.PAPER)
+                loop = self.build_loop(repos, lambda prod: ValidationEngine(prod, ds, plan=self.plan))
+                since = datetime.combine(start, time(0, 0), tzinfo=IST)
+                until = datetime.combine(end + timedelta(days=1), time(0, 0), tzinfo=IST)
+                return asyncio.run(loop.run(repos.journal.list(since=since, until=until), start, end))
+            finally:
+                db.close()
 
     def write_report(self, res: LoopResult, day: date) -> Path:
         out = self.cfg.resolve_path(self.cfg.settings.learning.loop.reports_dir)

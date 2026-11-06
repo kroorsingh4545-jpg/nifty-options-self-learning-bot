@@ -308,7 +308,9 @@ class ControlService:
                 payload = e.payload.model_dump(mode="json") if hasattr(e.payload, "model_dump") else e.payload
                 events.append({"at": e.at.isoformat(), "topic": topic.value, "payload": payload})
         events.sort(key=lambda x: x["at"], reverse=True)
-        alerts = [{"at": a.at.isoformat(), "severity": a.severity.value, "title": a.title, "message": a.message,
+        # Alert text is shown on the dashboard: masked again here, whatever produced it.
+        alerts = [{"at": a.at.isoformat(), "severity": a.severity.value, "kind": a.kind.value,
+                   "title": DEFAULT_MASKER.mask_text(a.title), "message": DEFAULT_MASKER.mask_text(a.message),
                    "strategy_id": a.strategy_id} for a in list(s.alerts.alerts)[-50:]][::-1]
         exposure = sum(t.open_qty * t.avg_entry for t in s.positions.open_trades())
         conn = self._connection() if self._connection else {}

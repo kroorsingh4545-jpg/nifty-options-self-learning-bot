@@ -20,7 +20,8 @@ from typing import Any, Protocol
 
 from core.clock import now_ist
 from core.enums import RiskSeverity
-from monitoring.json_logger import get_logger
+from core.masking import DEFAULT_MASKER, SecretMasker
+from monitoring.json_logger import get_logger, is_research_record
 
 log = get_logger("alerts")
 
@@ -87,11 +88,18 @@ EXCLUDED_LOGGERS = ("alerts", "monitoring.telegram", "httpx", "httpcore", "risk.
 
 class AlertLogHandler(logging.Handler):
     """ERROR / CRITICAL log records -> ERROR alerts, de-duplicated by
-    (logger, message) within ``dedupe_seconds``. Never raises."""
+    (logger, message) within ``dedupe_seconds``. Never raises.
 
-    def __init__(self, sink: AlertSink, *, dedupe_seconds: float = 300.0, level: int = logging.ERROR) -> None:
+    The alert text (message and exception) is passed through the secret
+    masker here, before any sink sees it. Records logged inside a
+    ``research_logging`` context (the learning loop's backtests) never become
+    alerts."""
+
+    def __init__(self, sink: AlertSink, *, dedupe_seconds: float = 300.0, level: int = logging.ERROR,
+                 masker: SecretMasker = DEFAULT_MASKER) -> None:
         super().__init__(level)
         self.sink = sink
+        self._masker = masker
         self.dedupe_seconds = dedupe_seconds
         self._seen: dict[tuple[str, str], float] = {}
         self._guard = threading.local()
@@ -101,10 +109,10 @@ class AlertLogHandler(logging.Handler):
         return any(name == x or name.startswith(x + ".") for x in EXCLUDED_LOGGERS)
 
     def emit(self, record: logging.LogRecord) -> None:
-        if self._excluded(record.name) or getattr(self._guard, "active", False):
+        if self._excluded(record.name) or getattr(self._guard, "active", False) or is_research_record(record):
             return
         try:
-            msg = record.getMessage()
+            msg = self._masker.mask_text(record.getMessage())
             key = (record.name, msg)
             now = wall_time.monotonic()
             with self._lock:
@@ -119,6 +127,7 @@ class AlertLogHandler(logging.Handler):
                 detail += f": {record.exc_info[0].__name__}: {record.exc_info[1]}"
             sev = RiskSeverity.CRITICAL if record.levelno >= logging.CRITICAL else RiskSeverity.WARNING
             sid = getattr(record, "strategy_id", None)
+            detail = self._masker.mask_text(detail)
             self._guard.active = True
             try:
                 self.sink.send(Alert(sev, msg[:200], detail[:1000], strategy_id=sid if isinstance(sid, str) else None,

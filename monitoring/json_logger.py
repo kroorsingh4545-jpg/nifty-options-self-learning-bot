@@ -16,7 +16,9 @@ import json
 import logging
 import logging.handlers
 import sys
-from collections.abc import MutableMapping
+from collections.abc import Iterator, MutableMapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,52 @@ _STD_ATTRS = frozenset(vars(logging.LogRecord("x", 0, "x", 0, "x", None, None)))
 _HANDLER_MARK = "_nifty_bot_handler"
 
 _state: dict[str, Any] = {"mode": TradingMode.PAPER.value}
+
+# --------------------------------------------------------------------------- #
+# Research runs inside the trading process (the learning loop's backtests)
+# --------------------------------------------------------------------------- #
+# A backtest builds a whole simulated PAPER bot; its kill switches, exit
+# failures and missing-model CRITICALs are about the SIMULATION, not the
+# running bot. Inside ``research_logging`` (a context variable, so it covers
+# the calling thread and every asyncio task started under it, and nothing
+# else) every record above WARNING is written at WARNING, tagged
+# ``research_run`` and ``original_level``. Nothing logged there reaches
+# ERROR / CRITICAL handlers or becomes an alert (``AlertLogHandler`` also
+# ignores tagged records).
+
+_RESEARCH_RUN: ContextVar[str | None] = ContextVar("research_run", default=None)
+_base_record_factory = logging.getLogRecordFactory()
+
+
+def _record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
+    record = _base_record_factory(*args, **kwargs)
+    label = _RESEARCH_RUN.get()
+    if label is not None:
+        record.research_run = label
+        if record.levelno > logging.WARNING:
+            record.original_level = record.levelname
+            record.levelno = logging.WARNING
+            record.levelname = "WARNING"
+    return record
+
+
+if not getattr(logging.getLogRecordFactory(), "_research_aware", False):
+    _record_factory._research_aware = True  # type: ignore[attr-defined]
+    logging.setLogRecordFactory(_record_factory)
+
+
+@contextmanager
+def research_logging(label: str) -> Iterator[None]:
+    """Log a research run (e.g. VERIFY backtests) without ERROR / CRITICAL records or alerts."""
+    token = _RESEARCH_RUN.set(label)
+    try:
+        yield
+    finally:
+        _RESEARCH_RUN.reset(token)
+
+
+def is_research_record(record: logging.LogRecord) -> bool:
+    return getattr(record, "research_run", None) is not None
 
 
 def _json_default(obj: Any) -> Any:
