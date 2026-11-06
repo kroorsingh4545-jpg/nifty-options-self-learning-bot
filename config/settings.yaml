@@ -142,6 +142,24 @@ learning:
     verify_data: null              # e.g. data/historical/nifty-2026q3
     reports_dir: reports/learning
 
+# Phase 10 alerts. Telegram sends only when TELEGRAM_BOT_TOKEN and
+# TELEGRAM_CHAT_ID are set in .env. Kill-switch, daily-loss and other CRITICAL
+# alerts are always sent while Telegram is enabled.
+alerts:
+  telegram:
+    enabled: true
+    entries: true
+    exits: true
+    errors: true                   # ERROR / CRITICAL log lines, de-duplicated
+    eod_summary: true
+    min_severity: WARNING          # for every other alert (strategy paused, order rejected, ...)
+    min_interval_seconds: 1.1      # Telegram allows about one message per second per chat
+    queue_size: 200                # bounded; sending never blocks trading
+    max_attempts: 3
+    request_timeout_seconds: 10
+    error_dedupe_seconds: 300
+  eod_summary_time: "15:35"        # IST, after the square-off window
+
 logging:
   level: INFO
   directory: logs

@@ -362,6 +362,13 @@ class TradeRepository(_ModeScoped):
         rows = self.db.query("SELECT * FROM trades WHERE mode = ? AND status = 'OPEN' ORDER BY id", (self.mode.value,))
         return [TradeRecord.from_row(r) for r in rows]
 
+    def list_closed_on(self, day: date) -> list[TradeRecord]:
+        """Trades closed on this (IST) trading day, oldest exit first."""
+        rows = self.db.query(
+            "SELECT * FROM trades WHERE mode = ? AND status = 'CLOSED' AND substr(exit_time, 1, 10) = ? "
+            "ORDER BY exit_time, id", (self.mode.value, day.isoformat()))
+        return [TradeRecord.from_row(r) for r in rows]
+
     def count_entries_on(self, strategy_id: str, day: date) -> int:
         row = self.db.query_one(
             "SELECT COUNT(*) AS n FROM trades WHERE mode = ? AND strategy_id = ? AND substr(entry_time, 1, 10) = ?",

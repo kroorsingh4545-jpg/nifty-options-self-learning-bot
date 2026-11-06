@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import signal
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -56,10 +57,12 @@ from data.storage.repositories import Repositories
 from data.websocket_manager import WebSocketManager
 from learning.autonomy_source import persisted_autonomy
 from learning.deployment_controller import DeploymentController, VersionInUse
-from monitoring.alerts import AlertSink
+from monitoring.alerts import AlertLogHandler, AlertSink
 from monitoring.json_logger import get_logger
+from monitoring.telegram import TelegramAlertSink
 from runtime.bot import TradingBot
 from runtime.learning_loop import LearningLoopRunner
+from runtime.notifications import TradeNotifier, send_end_of_day
 
 log = get_logger(__name__)
 
@@ -143,6 +146,8 @@ def preflight(cfg: BotConfig, *, now: datetime | None = None, need_upstox: bool 
                      f"Rs {risk.per_strategy.max_daily_loss:,.0f}, global/day Rs {risk.global_.max_daily_loss:,.0f}, "
                      f"max open {risk.global_.max_open_trades}, no entries after {tr.no_new_entries_after:%H:%M}, "
                      f"square-off {tr.square_off_start:%H:%M}-{tr.square_off_end:%H:%M}; kill switch armed"))
+    tg = telegram_status(cfg)
+    out.append(Check("Telegram alerts", tg == "configured", tg, fatal=False))
     out.append(Check("Dashboard login", bool(cfg.env.dashboard_username),
                      "DASHBOARD_USERNAME / DASHBOARD_PASSWORD set" if cfg.env.dashboard_username else
                      "dashboard login not configured (streamlit run dashboard/app.py refuses to start)", fatal=False))
@@ -151,6 +156,28 @@ def preflight(cfg: BotConfig, *, now: datetime | None = None, need_upstox: bool 
 
 def render_checks(checks: Iterable[Check]) -> str:
     return "\n".join(f"[{c.label}] {c.name}: {c.detail}" for c in checks)
+
+
+# --------------------------------------------------------------------------- #
+# Alert channels
+# --------------------------------------------------------------------------- #
+
+
+def telegram_status(cfg: BotConfig) -> str:
+    if not cfg.settings.alerts.telegram.enabled:
+        return "off (alerts.telegram.enabled: false)"
+    if cfg.env.telegram_bot_token is None or not cfg.env.telegram_chat_id:
+        return "not configured (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)"
+    return "configured"
+
+
+def default_alert_sinks(cfg: BotConfig) -> tuple[AlertSink, ...]:
+    """Telegram when it is enabled and both credentials are set."""
+    if telegram_status(cfg) != "configured":
+        return ()
+    assert cfg.env.telegram_bot_token is not None and cfg.env.telegram_chat_id
+    return (TelegramAlertSink(token=cfg.env.telegram_bot_token.get_secret_value(), chat_id=cfg.env.telegram_chat_id,
+                              settings=cfg.settings.alerts.telegram, mode=cfg.mode),)
 
 
 # --------------------------------------------------------------------------- #
@@ -277,7 +304,7 @@ class PaperSession:
         self.yaml_cfg = cfg
         self.options = options or SessionOptions()
         self._connections = connections
-        self._alert_sinks = tuple(alert_sinks or ())
+        self._alert_sinks = tuple(alert_sinks) if alert_sinks is not None else default_alert_sinks(cfg)
         self._now = now_fn
         self._signals = install_signal_handlers
         self._run_scheduler = run_scheduler
@@ -292,6 +319,7 @@ class PaperSession:
         self.stop_reason = ""
         self._timers: list[asyncio.TimerHandle] = []
         self._closed = False
+        self._log_handler: AlertLogHandler | None = None
         self.learning_loop: LearningLoopRunner | None = None
 
     # Hooks into the bot's risk manager --------------------------------------
@@ -317,6 +345,8 @@ class PaperSession:
 
     def _alert_channels(self) -> dict[str, Any]:
         out: dict[str, Any] = {"dashboard": "on", "log": "on"}
+        if not any(getattr(s, "channel", "") == "telegram" for s in self._alert_sinks):
+            out["telegram"] = telegram_status(self.yaml_cfg)
         for s in self._alert_sinks:
             describe = getattr(s, "describe", None)
             out[getattr(s, "channel", type(s).__name__)] = describe() if callable(describe) else "on"
@@ -358,8 +388,15 @@ class PaperSession:
             starter = getattr(sink, "start", None)
             if starter is not None:
                 await starter()
+        assert bot.stack.notify is not None
+        self._log_handler = AlertLogHandler(
+            bot.stack.notify, dedupe_seconds=self.yaml_cfg.settings.alerts.telegram.error_dedupe_seconds)
+        logging.getLogger().addHandler(self._log_handler)
+        TradeNotifier(bot)
         await bot.prepare()
         bot.schedule()
+        bot.scheduler.daily("eod_summary", self.yaml_cfg.settings.alerts.eod_summary_time,
+                            lambda: send_end_of_day(bot))
         loop_cfg = self.yaml_cfg.settings.learning.loop
         if loop_cfg.enabled:
             self.learning_loop = LearningLoopRunner(bot, self.yaml_cfg)
@@ -436,6 +473,9 @@ class PaperSession:
                             extra={"trades": [t.trade_uid for t in open_trades]})
             with contextlib.suppress(Exception):
                 await bot.control.publish_state()
+        if self._log_handler is not None:
+            logging.getLogger().removeHandler(self._log_handler)
+            self._log_handler = None
         if self.conn is not None:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self.conn.feed.stop(), timeout)

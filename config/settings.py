@@ -260,6 +260,29 @@ class LearningSection(_Frozen):
     loop: LearningLoopSection = LearningLoopSection()
 
 
+class TelegramSection(_Frozen):
+    """Telegram alerts (sent only when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
+    are set). CRITICAL alerts (kill switch, daily-loss breach, exit failure)
+    are always sent while the channel is enabled."""
+
+    enabled: bool = True
+    entries: bool = True
+    exits: bool = True
+    errors: bool = True
+    eod_summary: bool = True
+    min_severity: Literal["INFO", "WARNING", "CRITICAL"] = "WARNING"  # for other alerts
+    min_interval_seconds: float = Field(default=1.1, ge=1.0, le=60.0)  # Telegram: ~1 message/s per chat
+    queue_size: int = Field(default=200, ge=10, le=10_000)
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    request_timeout_seconds: PositiveFloat = 10.0
+    error_dedupe_seconds: NonNegativeFloat = 300.0
+
+
+class AlertsSection(_Frozen):
+    telegram: TelegramSection = TelegramSection()
+    eod_summary_time: HHMM = time(15, 35)  # IST, trading days, after the square-off window
+
+
 class AppSettings(_Frozen):
     app: AppSection = AppSection()
     market_session: MarketSession = MarketSession()
@@ -273,6 +296,7 @@ class AppSettings(_Frozen):
     logging: LoggingSection = LoggingSection()
     ml: MLSection = MLSection()
     learning: LearningSection = LearningSection()
+    alerts: AlertsSection = AlertsSection()
 
 
 # --------------------------------------------------------------------------- #
@@ -698,6 +722,8 @@ class BotConfig(_Frozen):
             raise ValueError("sum of strategy allocated_capital exceeds total_capital")
         if risk.time_rules.square_off_end > session.market_close:
             raise ValueError("square_off_end is after market_close")
+        if self.settings.alerts.eod_summary_time <= risk.time_rules.square_off_end:
+            raise ValueError("alerts.eod_summary_time must be after square_off_end")
         if self.settings.learning.loop.run_at < session.market_close:
             raise ValueError("learning.loop.run_at must be at or after market_close (the loop never runs "
                              "during the session)")
