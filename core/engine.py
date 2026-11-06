@@ -42,6 +42,7 @@ from core.interfaces import (
 )
 from core.models import Candle, Signal, Tick
 from core.state_manager import EngineState, StateManager
+from core.tasks import wait_for_tasks
 
 log = logging.getLogger(__name__)
 
@@ -152,8 +153,7 @@ class TradingEngine:
         task.add_done_callback(self._tasks.discard)
 
     async def drain(self) -> None:
-        while self._tasks:
-            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        await wait_for_tasks(self._tasks)
         await self.bus.drain()
 
     # ------------------------------------------------------------------ #

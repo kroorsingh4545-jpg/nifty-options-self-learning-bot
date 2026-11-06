@@ -44,7 +44,10 @@ def strategy_cards(st: Any, client: CommandClient, view: RuntimeView) -> None:
     for col, s in zip(cols, strategies, strict=True):
         sid = s["strategy_id"]
         with col, st.container(border=True):
+            source = s.get("version_source") or "YAML"
+            origin = "YAML config" if source == "YAML" else f"learned PAPER deployment `{source}`"
             st.markdown(f"**{s['name']}** · `{sid}` · v{s['version']}")
+            st.caption(f"Version: {origin} (applied at bot start-up)")
             st.markdown(f"{_status_label(s.get('status'))} · {'enabled' if s['enabled'] else 'disabled'} in "
                         f"config · mode {s['mode']}")
             a = st.columns(3)

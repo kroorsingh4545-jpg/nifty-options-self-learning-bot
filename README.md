@@ -2,223 +2,356 @@
 
 A NIFTY weekly options intraday trading bot for Indian markets, using the Upstox Developer API.
 
-> **Status: Phase 8 (RL trade management) complete.** On top of Phases 1–7: a Stable-Baselines3 PPO trade
-> manager (Gymnasium environment, versioned reward, 5+ seeds, walk-forward + holdout, judged on equity,
-> drawdown and risk compliance). It can veto setups and tighten stops, take a partial profit or exit. It can
-> never touch loss limits, exposure, the kill switch, credentials or square-off timing. **There is no real
-> historical data yet: every ML and RL model so far is trained on SYNTHETIC data and can never be
-> promoted.** ML and RL are off by default. PAPER is the default, and LIVE is always refused in this build.
-> **No real orders can be placed.**
-> Roadmap: [`docs/build-plan.md`](docs/build-plan.md). ML: [`docs/ml-layer.md`](docs/ml-layer.md).
-> RL: [`docs/rl-layer.md`](docs/rl-layer.md).
-> Backtesting: [`docs/backtesting.md`](docs/backtesting.md). Dashboard: [`docs/dashboard.md`](docs/dashboard.md).
-> Strategies and engine: [`docs/strategies.md`](docs/strategies.md). Risk audits: [`docs/audits/`](docs/audits/).
+> **Status: Phase 10 (finalization) complete. This build trades in PAPER mode only.**
+> Real Upstox market data goes in; every order is simulated by `PaperBroker`. There is no LIVE order
+> routing in this build: `TRADING_MODE=LIVE` is refused at config load, the Upstox client's order methods
+> always refuse, and no flag, setting or environment variable changes that.
+> **There is no real historical data yet**: every ML / RL model and learning-loop result so far comes from
+> SYNTHETIC data and can never be promoted.
 
-## RL trade manager (Phase 8)
+What it does:
 
-```bash
-python -m ml train-rl --synthetic --lot-units 65 --days 60 --strategy vwap_ema --timesteps 30000   # SYNTHETIC
-python -m ml train-rl --data path/to/dataset --strategy vwap_ema --events strategy                # your data
-```
+* Two isolated strategies (ORB options, VWAP+EMA on the NIFTY future), ₹1,00,000 capital each.
+* One risk gate for every entry: per-trade, per-strategy and global daily loss limits, trade caps,
+  cooldowns, no entries after 14:45, forced square-off 15:10–15:20, and a kill switch.
+* Optional ML signal filter (LightGBM) and PPO RL trade manager, both bounded by the risk layer.
+* The Reflective Loop: `LOG → REFLECT → HYPOTHESIZE → MUTATE → VERIFY → PROMOTE / REJECT`, which can deploy
+  improved strategy versions to PAPER (never to LIVE).
+* A Streamlit dashboard, Telegram alerts, Docker deployment.
 
-Discrete actions: HOLD, TIGHTEN_STOP, MOVE_STOP_TO_BREAKEVEN, TRAIL_STOP, TAKE_PARTIAL_PROFIT, EXIT_FULL,
-ENTER (valid setup only) and SKIP_SETUP. Stops only tighten. In training, a frozen risk envelope built from
-`risk_limits.yaml` sizes every entry and enforces the daily loss limit, trade caps, cooldown, the 14:45
-cut-off and the 15:10 square-off. In the bot, `PositionManager.apply_advice` re-validates every proposal,
-and the risk gate still checks every entry. RL is off per strategy (`rl.enabled: false`). See
-[`docs/rl-layer.md`](docs/rl-layer.md) for the environment, observation and action schemas, the reward and
-the evaluation plan.
+Contents: [Setup](#setup) · [Upstox app](#create-an-upstox-app) · [Access token](#generate-an-access-token) ·
+[PAPER trading](#paper-trading) · [Telegram](#telegram-alerts) · [Dashboard](#dashboard) ·
+[Docker](#docker) · [Backtesting](#backtesting) · [ML / RL training](#ml-and-rl-training) ·
+[Learning loop](#self-learning-loop) · [LIVE safety checklist](#live-mode-safety-checklist) ·
+[Configuration](#configuration) · [Project layout](#project-layout)
 
-## ML layer (Phase 7)
+Deeper docs: [deployment checklist and known limitations](docs/deployment.md) ·
+[safety policy](docs/safety-policy.md) · [strategies](docs/strategies.md) · [backtesting](docs/backtesting.md) ·
+[ML](docs/ml-layer.md) · [RL](docs/rl-layer.md) · [learning loop](docs/learning-loop.md) ·
+[dashboard](docs/dashboard.md) · [risk audits](docs/audits/) · [build plan](docs/build-plan.md)
 
-```bash
-python -m ml train --synthetic --lot-units 65 --days 30 --strategy orb_options --kind all   # SYNTHETIC research run
-python -m ml train --data path/to/dataset --strategy vwap_ema --kind signal_filter        # your historical data
-python -m ml list --research
-```
+## Setup
 
-Features are computed only from data available at the decision time, by the same function in training and
-live inference. Labels use a triple barrier (target / stop-loss / time, capped at the square-off start).
-Validation is chronological, purged and embargoed, with a final untouched holdout and at least 5 seeds.
-The signal filter can only veto, delay or shrink an entry (threshold 0.60). It never touches stops or risk
-limits, and the risk manager re-checks every entry. Models trained on SYNTHETIC data are refused for
-validation, promotion and trading by the database, the registry and the inference service. See
-[`docs/ml-layer.md`](docs/ml-layer.md) for the feature dictionary, pipeline and registry schema.
-
-## Backtesting (Phase 6)
+Requires **Python 3.11+** (Phases 1–9 were developed on 3.11; this release was tested on 3.13; the Docker
+image uses 3.11).
 
 ```bash
-python -m backtest synthetic --lot-units 65 --days 20 --seed 7 --out reports/synthetic   # SYNTHETIC demo data
-python -m backtest run --data path/to/dataset --out reports/run1              # your historical data
-python -m backtest walk-forward --data path/to/dataset --train 10 --test 5 --embargo 1 --holdout 5 --out reports/wf
-```
-
-The backtest runs the same strategy, risk and execution code as PAPER trading, on a simulated clock: every
-order, fill, position, trade and strategy timestamp is simulated time. Reports cover returns, a CAGR-like
-daily metric, win rate, profit factor, drawdown, Sharpe, trade duration, cost impact (brokerage, STT,
-exchange, SEBI, stamp duty, GST, spread, slippage), risk compliance and per-strategy results. See
-[`docs/backtesting.md`](docs/backtesting.md) for the dataset format and the fill model.
-
-## Dashboard (Phase 5)
-
-```bash
-# DASHBOARD_USERNAME / DASHBOARD_PASSWORD must be set in .env
-streamlit run dashboard/app.py
-```
-
-The bot publishes its state to SQLite every second, and the dashboard queues commands that the bot runs
-through `execution/operator_controls.py`. The dashboard never talks to the broker. See
-[`docs/dashboard.md`](docs/dashboard.md).
-
-## Risk & execution (Phase 3)
-
-- **`risk/risk_manager.py`** is the only gate from a signal to an order. It checks the kill switch, strategy status, session time (entry window, no entries after 14:45, none in square-off), daily guard, open-trade caps (2 per strategy, 4 total), quote freshness, spread, premium bounds, stop/target levels, and the risk budget, then sizes the position.
-- **`risk/position_sizer.py`**: whole lots from the rupee risk budget (≤ ₹2,000 and ≤ the remaining daily budget), stop distance, slippage, round-trip charges, and margin. The ML multiplier can only shrink size.
-- **`risk/stop_loss_manager.py`** and **`risk/trailing_stop_manager.py`**: initial SL/TP plus trailing in PREMIUM_PERCENT, POINTS, R_MULTIPLE and STRUCTURAL (NIFTY level) modes. Stops only tighten, and the database refuses widening.
-- **`risk/daily_loss_guard.py`**: ₹5,000 per strategy and ₹10,000 global, both including mark-to-market. Also enforces 4 trades/day, a 15-minute cooldown after a loss, and a pause after 3 consecutive losses. State persists and is restored after a restart.
-- **`risk/kill_switch.py`**: global or per-strategy. It cancels pending orders, exits positions, disables strategies, alerts, and writes an audit record. Triggers: loss breach, API failure, rate-limit lock, auth failure, WebSocket down past the grace period, reconciliation mismatch, abnormal spread, repeated rejections, exit failure, incomplete square-off, and manual. Reset requires a named operator.
-- **`execution/order_manager.py`**: lifecycle CREATED → SUBMITTED → OPEN → PARTIALLY_FILLED → COMPLETE / REJECTED / CANCELLED, plus UNKNOWN on timeouts, which is reconciled and never blindly re-sent. Exits retry safely.
-- **`execution/position_manager.py`**: per-strategy trades from fills, an exchange-side SL-M protective stop per position, and tick-based SL/TP/trailing monitoring.
-- **`execution/reconciliation.py`**: runs at startup, after order updates (debounced), every 5 minutes, and before and after square-off.
-- **`execution/square_off.py`**: forced square-off from 15:10 to 15:20, escalating if anything is still open.
-- **`execution/stack.py`** wires it all together.
-
-## Market data & broker layer (Phase 2)
-
-| Module | Role |
-|---|---|
-| `broker/upstox_rate_limiter.py` | The single gate for every Upstox REST call. Order and standard budgets each enforce 1 s / 60 s / 30 min sliding windows at 80% of the official limits. Requests queue FIFO. HTTP 429 opens a circuit breaker with exponential cooldown that respects `Retry-After`. Repeated 429s lock it until a manual reset. Includes debounce (`RequestCoalescer`) and batching (`KeyBatcher`). |
-| `broker/upstox_rest.py` | Official REST endpoints for option contracts, option chain, LTP, intraday candles, positions, funds, order book, and feed authorize. Retries GETs only. Auth failures and the daily 03:30 token expiry fail fast without looping. **Order methods always refuse.** |
-| `broker/upstox_websocket.py` | Market feed V3 (Protobuf, official `.proto` in `broker/proto/`) and the portfolio stream. Handles subscribe/unsubscribe/change_mode, heartbeat, reconnect with backoff, and re-authorize plus re-subscribe after every reconnect. Limited to one stream of each kind per process. |
-| `broker/paper_broker.py` | Simulates fills against live quotes, with slippage, partial fills, and Indian F&O charges (`broker/charges.py`). Never fills on stale data and refuses naked selling. |
-| `data/` | `market_data.py` (tick cache and staleness), `candle_builder.py` (1/3/5/15-minute candles), `option_chain.py` (chain, strike selection, liquidity filter), `websocket_manager.py`. |
-
-Settings live in `config/settings.yaml` under `broker`, `websocket`, `paper_broker`, and `costs`.
-**Verify the cost rates against the current Upstox/NSE charge sheets.** To regenerate the
-Protobuf module, see `broker/proto/__init__.py`.
-
-## Setup (Phase 1)
-
-Requires **Python 3.11+**.
-
-```bash
-# 1. Create a virtual environment and install (with dev tools)
+# 1. Virtual environment
 python -m venv .venv
-# Windows:  .venv\Scripts\activate      macOS/Linux:  source .venv/bin/activate
+# Windows:  .venv\Scripts\activate        macOS/Linux:  source .venv/bin/activate
+
+# 2. Install. CPU-only PyTorch first if you have no GPU (much smaller download):
+pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -e ".[dev]"
 
-# 2. Create your local .env (never commit it)
-cp .env.example .env          # Windows PowerShell: Copy-Item .env.example .env
-#    Leave TRADING_MODE=PAPER. Upstox credentials are not needed until Phase 2.
+# 3. Local secrets (never commit .env)
+cp .env.example .env              # Windows PowerShell: Copy-Item .env.example .env
+#    Leave TRADING_MODE=PAPER. Fill in Upstox (below), Telegram and dashboard values.
 
-# 3. Validate configuration (prints a masked summary; exits non-zero if invalid)
+# 4. Validate the configuration (prints a masked summary; exits non-zero if invalid)
 python -m config
 
-# 4. Create the SQLite database (data/trading.db) and register strategies
+# 5. Create / migrate the trading database (data/trading.db) and register the strategies
 python -m data.storage init
-python -m data.storage schema     # print the live schema
 
-# 5. Run tests, lint, and type checks
+# 6. Tests, lint, type checks
 pytest
 ruff check .
 mypy .
 ```
 
-### Configuration
+Moving to another computer: delete `.venv` and recreate it there (a venv is tied to the Python install it
+was created with). `.env` and `data/trading.db` are local files; copy them yourself if you need them.
+
+## Create an Upstox app
+
+1. Open an Upstox account (with F&O enabled) and sign in to the developer console:
+   <https://account.upstox.com/developer/apps>.
+2. **Create new app.** Give it a name and a **Redirect URL** you control, for example
+   `http://127.0.0.1:5000/callback` (it only has to match exactly in the token step; nothing needs to run
+   there).
+3. Copy the **API Key** and **API Secret** into `.env`:
+
+   ```
+   UPSTOX_API_KEY=...
+   UPSTOX_API_SECRET=...
+   ```
+
+The bot uses the official REST API (`https://api.upstox.com`) and the Market Data Feed V3 WebSocket, through
+a central rate limiter set 20% below Upstox's published limits. In PAPER mode it calls only read endpoints:
+the instrument list, market-feed authorisation, LTP recovery and (for `--connect`) funds.
+
+## Generate an access token
+
+Upstox access tokens are issued per day and **expire at 03:30 IST the next morning**. Generate one each
+trading day before starting the bot. (Check the current flow in the Upstox API docs, "Authentication".)
+
+1. Open this URL in a browser (your API key and the exact redirect URL from the app):
+
+   ```
+   https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=<API_KEY>&redirect_uri=<REDIRECT_URL>
+   ```
+
+2. Log in and approve. The browser is sent to `<REDIRECT_URL>?code=<CODE>`; copy the `code` value (it is
+   single-use and short-lived).
+3. Exchange it for a token:
+
+   ```bash
+   curl -X POST https://api.upstox.com/v2/login/authorization/token \
+     -H "Content-Type: application/x-www-form-urlencoded" -H "Accept: application/json" \
+     -d "code=<CODE>" -d "client_id=<API_KEY>" -d "client_secret=<API_SECRET>" \
+     -d "redirect_uri=<REDIRECT_URL>" -d "grant_type=authorization_code"
+   ```
+
+4. Put the `access_token` from the response into `.env` as `UPSTOX_ACCESS_TOKEN=...`, then check it:
+
+   ```bash
+   python -m runtime check --connect
+   ```
+
+Never paste the token into chat, tickets or code. It is masked in every log line. When the token expires
+mid-session, the next Upstox call fails, the kill switch trips with `AUTH_FAILURE` (persistent), and new
+entries stop until a named operator resets it after you restart with a fresh token.
+
+## PAPER trading
+
+```bash
+python -m runtime check                  # pre-flight checks + which strategy version each strategy will trade
+python -m runtime paper                  # start a real-time PAPER session (Ctrl+C for an orderly stop)
+python -m runtime paper --paused         # start with the engine PAUSED; start it from the dashboard
+python -m runtime paper --stop-at 15:40  # end the session at 15:40 IST today
+python -m runtime paper --baseline       # trade the YAML config, ignoring learned PAPER deployments
+python -m runtime health                 # exit 0 if the bot's heartbeat is fresh (used by Docker)
+```
+
+**Pre-flight** (`check`, and again at start-up). FAIL items block the launch: not PAPER, LIVE routing
+present, missing Upstox credentials, a database with a newer schema, or a database inside a research
+directory. WARN items do not: no NSE holidays for this year (every entry is then blocked), not a trading
+day, Telegram or dashboard login not configured.
+
+**Start-up**, in order: open and migrate the database; choose the autonomy level (the most restrictive of
+`app.autonomy_level` and the last level applied from the dashboard); resolve the strategy versions; connect
+the read-only Upstox clients; build the bot with `PaperBroker`; load today's instrument list (lot sizes,
+expiries, the current NIFTY future); restore open PAPER trades, the daily loss guard and the kill switch;
+reconcile; subscribe the index, the future and ATM ±3 strikes; start the scheduler and the engine.
+
+**Which version trades.** Each strategy runs its YAML config unless the learning loop has deployed a
+PAPER version of it. Deployed versions are applied **only at start-up**: the YAML config with the
+deployment overlaid, re-checked so that only whitelisted parameters may differ and every validator passes.
+A deployment that no longer fits the YAML falls back to the YAML config with a CRITICAL log. Under
+`OBSERVE_ONLY`, or with `--baseline`, every strategy runs its YAML version and the deployment records stay
+as they are. `check` lists the version each strategy will run and why.
+
+**During the session** (all IST): candles and signals from the live feed; entries only through the risk
+gate; an exchange-style SL-M stop per position plus tick-level stop / target / trailing; reconciliation at
+least every 5 minutes; no entries after 14:45; forced square-off 15:10–15:20; end-of-day summary at 15:35;
+the learning loop at 15:45 if enabled. The dashboard heartbeat is published every second.
+
+**Stopping.** Ctrl+C or SIGTERM: no new entries, background work settles, pending trades are journaled,
+the final state is published, then the feed and database close. Positions still open stay in the database
+and are restored at the next start, but their stops are monitored only while the bot runs, so stop after
+the square-off. Run one session per trading day (the access token is daily).
+
+The kill switch trips on: a daily loss breach (cleared automatically the next trading day), WebSocket down
+for more than 30 s or reconnects exhausted, Upstox auth failure, the rate-limit circuit locking, repeated API
+failures or order rejections, an exit or square-off that cannot complete, a reconciliation mismatch, an
+abnormal spread on a held contract, or a manual kill. Every reason except daily loss needs a named
+operator to reset it (dashboard).
+
+## Telegram alerts
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`) and copy its token.
+2. Send your bot a message, then read your chat id from
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` (`"chat":{"id":...}`).
+3. Set both in `.env` (they must be set together):
+
+   ```
+   TELEGRAM_BOT_TOKEN=123456789:AA...
+   TELEGRAM_CHAT_ID=987654321
+   ```
+
+The bot sends: **entries**, **exits** (reason, net P&L after charges, R-multiple), **errors** (ERROR and
+CRITICAL log lines, de-duplicated over 5 minutes), **daily loss breaches**, **kill switch** triggers,
+escalations and failed flattens, and the **end-of-day summary** (per-strategy trades and P&L, loss used vs
+limit, open trades after the close, kill-switch state). Tune it under `alerts:` in
+`config/settings.yaml`; CRITICAL alerts are always sent while Telegram is enabled.
+
+Sending never blocks trading: alerts go through a bounded queue drained in the background, paced to about one
+message per second, with HTTP 429 `retry_after` honoured. A rejected token or chat disables the channel with
+one ERROR log. Messages pass through the secret masker.
+
+## Dashboard
+
+```bash
+# DASHBOARD_USERNAME / DASHBOARD_PASSWORD (8+ characters) must be set in .env
+streamlit run dashboard/app.py           # from the project root; http://127.0.0.1:8501
+```
+
+It shows mode, autonomy, connections, rate-limit usage, P&L and loss limits per strategy, open positions,
+the kill switch, the strategy version each strategy runs (and whether it is a learned deployment), alerts and
+logs, and the learning loop's candidates. It queues commands (kill switch and named reset, exit a position,
+engine start / pause / stop, autonomy level) that the bot runs through `execution/operator_controls.py`; the
+dashboard never talks to the broker. It listens on 127.0.0.1 only. A LIVE request is evaluated and always
+refused in this build. See [`docs/dashboard.md`](docs/dashboard.md).
+
+## Docker
+
+```bash
+cp .env.example .env                            # fill it in (TRADING_MODE stays PAPER)
+docker compose build
+docker compose run --rm bot python -m runtime check --connect
+docker compose up -d                            # bot + dashboard
+docker compose logs -f bot
+# dashboard: http://127.0.0.1:8501 (bound to localhost on the host)
+docker compose stop bot                         # SIGTERM -> orderly shutdown (60 s grace)
+```
+
+`TRADING_MODE` is pinned to `PAPER` in the image and in `docker-compose.yml`. The database lives on the
+`bot-db` volume (`DATABASE_PATH=/app/var/trading.db`), shared by the bot and the dashboard; research runs,
+logs, reports and models have their own volumes. The three YAML config files are mounted read-only from the
+host, so you can change config and restart without rebuilding. The bot container's health check is
+`python -m runtime health` (heartbeat younger than 30 s). Inside the container the dashboard listens on
+0.0.0.0 so the port mapping works (hence `--allow-remote`); the host side is bound to 127.0.0.1 only. Put a
+TLS reverse proxy in front before exposing it anywhere else.
+
+## Backtesting
+
+```bash
+python -m backtest synthetic --lot-units 65 --days 20 --seed 7 --out reports/synthetic   # SYNTHETIC demo data
+python -m backtest run --data path/to/dataset --out reports/run1                          # your data
+python -m backtest walk-forward --data path/to/dataset --train 10 --test 5 --embargo 1 --holdout 5 --out reports/wf
+```
+
+The backtest runs the same strategy, risk and execution code as PAPER trading on a simulated clock, through
+`PaperBroker` fills with slippage and Indian F&O charges. It never connects to Upstox and refuses the trading
+database. A dataset is a directory with `instruments.json`, `candles.csv` (1-minute candles, IST offsets) and
+`meta.json` stating `"source": "HISTORICAL"` or `"SYNTHETIC"`. See [`docs/backtesting.md`](docs/backtesting.md).
+
+## ML and RL training
+
+```bash
+# ML signal filter / outcome predictor / regime classifier (LightGBM)
+python -m ml train --synthetic --lot-units 65 --days 30 --strategy orb_options --kind all   # SYNTHETIC research
+python -m ml train --data path/to/dataset --strategy vwap_ema --kind signal_filter        # HISTORICAL data
+python -m ml list --research
+
+# PPO RL trade manager (Stable-Baselines3)
+python -m ml train-rl --synthetic --lot-units 65 --days 60 --strategy vwap_ema --timesteps 30000
+python -m ml train-rl --data path/to/dataset --strategy vwap_ema --events strategy
+```
+
+Features are computed only from data available at decision time, by the same code in training and in the
+bot. Validation is chronological, purged and embargoed, with an untouched holdout and at least 5 seeds.
+Models trained on SYNTHETIC data go to a separate research registry and are refused for promotion and
+trading by the database, the registry and the inference service. The ML filter can only veto, delay or
+shrink an entry; the RL agent can veto entries and tighten stops, take a partial profit or exit, and never
+touches loss limits, exposure, the kill switch, credentials or square-off timing. Both are off per strategy
+until you enable them (`ml.enabled`, `rl.enabled`). See [`docs/ml-layer.md`](docs/ml-layer.md) and
+[`docs/rl-layer.md`](docs/rl-layer.md).
+
+## Self-learning loop
+
+```bash
+python -m learning synthetic --lot-units 65 --paper-days 25 --verify-days 12 --min-trades 5 --out reports/learning
+python -m learning run --data path/to/historical-dataset      # on the trading database, after the close
+```
+
+Every closed PAPER trade is journaled with its features at entry and exit. The loop reflects on the journal,
+proposes changes to **whitelisted** parameters only (entry thresholds, stops, targets, trailing, time
+windows, strike rules, ML threshold, a size multiplier that can only shrink size), verifies each candidate
+by backtest, walk-forward, out-of-sample, stress, multi-seed and no-trade comparisons, and promotes passing
+candidates to `PAPER_READY` **only on HISTORICAL evidence**. Capital, loss limits, exposure, the kill switch,
+square-off and credentials are never mutable.
+
+The loop reads the **running bot's autonomy level at every promotion step**: inside the PAPER session
+(`learning.loop.enabled`, 15:45 IST, HISTORICAL dataset in `learning.loop.verify_data`) it reads the bot's
+live level; `python -m learning run` in another process reads the bot's published heartbeat and, when the
+bot is not running, the level the bot would start with. A switch to `OBSERVE_ONLY` on the dashboard stops the
+next promotion or deployment immediately.
+
+| autonomy level | PAPER_READY | auto PAPER deploy | LIVE_CANDIDATE | LIVE |
+|---|---|---|---|---|
+| `OBSERVE_ONLY` | no | no (and sessions run the YAML baseline) | no | never |
+| `PAPER_AUTO_IMPROVE` (default) | yes | yes | no | never |
+| `LIVE_CANDIDATE_APPROVAL` | yes | yes | yes, after the PAPER validation period | never |
+
+A PAPER deployment takes effect at the next session start. LIVE approval needs a named human and a typed
+confirmation, and even then nothing in this build deploys to LIVE. See
+[`docs/learning-loop.md`](docs/learning-loop.md).
+
+## LIVE mode safety checklist
+
+**LIVE trading is not available in this build and must not be enabled by editing code or config.** Before
+any future LIVE build is even considered, every item below must be true and verified by a person
+([`docs/safety-policy.md`](docs/safety-policy.md)):
+
+1. LIVE order routing is implemented in `execution/` only, reviewed, and has passed a risk-and-execution
+   audit with no blocking issues (`/audit-risk`).
+2. The strategy version and every model it uses were validated on **real HISTORICAL data** and then in PAPER
+   for at least `learning.paper_validation_days` with at least `paper_validation_min_trades` trades.
+3. A **named human** approved that exact version (`LIVE_APPROVED`) with the typed confirmation phrase.
+4. Broker reconciliation passes (orders, positions, funds match Upstox) and there are no pending orders.
+5. The kill switch is armed and has been tested end to end, including a manual kill and named reset.
+6. Per-strategy and global daily loss limits are configured and no looser than `config/hard_limits.py`.
+7. Upstox rate limits and charges are re-verified against current Upstox / NSE documentation.
+8. The holiday calendar for the year is loaded; the access token is fresh; the WebSocket is connected.
+9. Telegram alerts are configured and a test alert was received.
+10. Start with the smallest size (one lot, one strategy) and the operator watching the dashboard.
+11. The operator types `ENABLE LIVE TRADING` to confirm. Any failed check refuses LIVE and logs why.
+
+## Configuration
 
 | File | Contents |
 |---|---|
-| `config/settings.yaml` | App name, autonomy level, market session, database path, logging |
-| `config/risk_limits.yaml` | Capital, per-trade / per-strategy / global loss limits, trade caps, cooldown, time rules, Upstox rate limits |
-| `config/strategy_defaults.yaml` | Per-strategy capital, entry window, strike selection, sizing, SL / TP / trailing, ML threshold |
-| `.env` | Secrets and `TRADING_MODE` only (real environment variables override `.env`) |
+| `config/settings.yaml` | Autonomy level, market session and NSE holidays, instruments, database, broker / WebSocket, paper broker, costs, execution, ML, learning loop, alerts, logging |
+| `config/risk_limits.yaml` | Capital, per-trade / per-strategy / global loss limits, trade caps, cooldown, time rules, kill-switch thresholds, Upstox rate limits |
+| `config/strategy_defaults.yaml` | Per-strategy capital, entry window, strike selection, sizing, SL / TP / trailing, ML and RL settings |
+| `.env` | Secrets, `TRADING_MODE` (PAPER), optional `DATABASE_PATH`. Real environment variables override `.env` |
 
-- All config is validated by Pydantic models (`config/settings.py`) at startup. Unknown keys,
-  bad types, and unquoted times are errors. The bot refuses to start on invalid config.
-- **Risk limits can only be made stricter.** `config/hard_limits.py` holds the ceilings from the
-  spec: ₹2,000 per trade, ₹5,000 per strategy per day, ₹10,000 global per day, 2/4 open trades,
-  4 trades/day, 15-minute cooldown, 3 consecutive losses, no entries after 14:45, square-off
-  15:10–15:20, and a rate-limit buffer of at least 20%. A config that loosens any of these fails to load.
-- Effective Upstox rate limits (official minus 20%): orders 8/s, 400/min, 1,600/30 min;
-  standard APIs 40/s, 400/min, 1,600/30 min.
-- **`TRADING_MODE=LIVE` is refused** in this build. LIVE preconditions from
-  `docs/safety-policy.md` are not implemented yet.
+* Pydantic validates everything at start-up; unknown keys, bad types and unquoted times are errors, and the
+  bot refuses to start on invalid config.
+* **Risk limits can only be made stricter.** `config/hard_limits.py` holds the ceilings: ₹2,000 per trade,
+  ₹5,000 per strategy per day, ₹10,000 global per day, 2 / 4 open trades, 4 trades per day, 15-minute
+  cooldown after a loss, pause after 3 consecutive losses, no entries after 14:45, square-off 15:10–15:20,
+  rate-limit buffer of at least 20%.
+* **Add next year's NSE holidays** to `market_session.holidays` when NSE publishes them (usually December):
+  without them every new entry is blocked.
+* Verify the cost rates (`costs:`) against the current Upstox and NSE charge sheets.
 
-### Logging
+Logging: JSON lines to stderr and `logs/bot.jsonl` (rotated), IST timestamps, mode, strategy and order ids.
+Every secret loaded from `.env` is masked, as are bearer tokens and Telegram bot tokens by pattern.
 
-JSON lines go to stderr and `logs/bot.jsonl`. Each line has an IST timestamp, level, logger,
-event, `mode`, `strategy_id`, `order_id`, plus any extra context. Every secret loaded from `.env`
-is registered with a masker. Bearer tokens, `access_token=…`-style values, and Telegram bot
-tokens are masked by pattern too, including inside exception tracebacks.
+Database: SQLite (WAL) at `data/trading.db`, schema in `data/storage/schema.sql`. PAPER / LIVE separation is
+enforced by the database itself (mode columns, id prefixes, triggers), not only by Python; learned strategy
+deployments can only be recorded for PAPER.
 
-```python
-from monitoring.json_logger import get_logger
-log = get_logger(__name__, strategy_id="orb_options")
-log.info("signal generated", extra={"side": "CE"})
-```
-
-### Database
-
-SQLite at `data/trading.db` (git-ignored, WAL mode, foreign keys on). The schema is
-`data/storage/schema.sql`. Tables: `strategies`, `orders`, `fills`, `positions`, `trades`, `daily_pnl`
-(+ view `v_daily_pnl_global`), `risk_events`, `feature_snapshots`, `model_runs`, `learning_events`,
-`control_commands`, `runtime_state`. Schema v4 adds `model_runs.data_source`: only models trained on
-HISTORICAL data can be validated or promoted.
-
-PAPER/LIVE separation is enforced **by the database itself**, not only by Python:
-- Every order, fill, position and trade row has a `mode` column.
-- PAPER rows need a `paper_*_id` and cannot have a broker id. LIVE rows cannot have a `paper_*_id`.
-- `client_order_id` / `trade_uid` must start with `PAPER-` or `LIVE-` to match `mode`.
-- Triggers block fills or orders whose mode or strategy differs from their parent, and block
-  changes to mode, strategy, or identifiers after insert.
-- Open positions and all trades must carry a stop-loss. `risk_events` and `fills` are append-only.
-
-Repositories (`data/storage/repositories.py`) are bound to one mode. A PAPER repository cannot
-read or write LIVE rows, and the reverse is also true.
-
-## What the bot will do (planned)
-
-- Trade NIFTY weekly options intraday.
-- Run multiple isolated strategies, ₹1,00,000 capital each.
-- PAPER and LIVE modes — **PAPER by default**.
-- Per-strategy stop-loss, take-profit, and trailing-profit rules.
-- Per-strategy and global daily loss limits, plus a kill switch.
-- ML signal filtering and PPO-based RL trade management (within hard risk limits).
-- Reflective Loop: `LOG → REFLECT → HYPOTHESIZE → MUTATE → VERIFY → PROMOTE / REJECT`.
-- Streamlit dashboard.
-
-## Folder layout
+## Project layout
 
 | Folder | What goes there |
 |---|---|
-| `config/` | Pydantic settings |
-| `data/` | Market data handling; local databases (git-ignored) |
-| `core/` | Shared models, interfaces, DI |
-| `strategies/` | One package per strategy |
-| `ml/` | ML filters and RL agents |
-| `learning/` | Reflective Loop |
+| `config/` | Pydantic settings, YAML config, hard limits |
+| `core/` | Shared models, enums, interfaces, engine, event bus, autonomy policy |
+| `broker/` | Upstox REST / WebSocket clients, rate limiter, paper broker, charges |
+| `data/` | Market data, candles, instruments, SQLite storage |
 | `options/` | Option chain and strike selection |
-| `risk/` | Risk limits, kill switch |
-| `broker/` | Upstox clients, rate limiter, paper broker |
-| `execution/` | Order management — the only place real orders are sent |
-| `backtest/` | Backtesting and walk-forward |
+| `strategies/` | One module per strategy |
+| `risk/` | Risk gate, sizing, stops, trailing, daily loss guard, kill switch |
+| `execution/` | Orders, positions, reconciliation, square-off, operator controls |
+| `ml/` | Features, labels, LightGBM models, PPO agent, registry, inference |
+| `learning/` | Trade journal and the Reflective Loop |
+| `backtest/` | Backtester, walk-forward, synthetic data, reports |
+| `monitoring/` | JSON logging, alerts, Telegram |
+| `runtime/` | Composition root: the bot, PAPER launcher, control plane, notifications |
 | `dashboard/` | Streamlit UI |
-| `monitoring/` | Logs, metrics, alerts |
-| `runtime/` | Composition root: wires everything; imported only by entry points |
-| `tests/` | Tests |
-| `docs/` | Safety policy, MCP setup |
+| `tests/` | Unit, integration and end-to-end tests |
+| `docs/` | Safety policy, design docs, audits |
 
 ## Claude Code setup
 
-- MCP servers: `.mcp.json` — see `docs/mcp-setup.md`
-- Skills: `.claude/skills/`
-- Commands: `.claude/commands/` (`/build-strategy`, `/audit-risk`, `/train-models`, `/run-paper-session`, `/review-learning-loop`)
-- Permissions: `.claude/settings.json`
+MCP servers: `.mcp.json` (see `docs/mcp-setup.md`). Skills: `.claude/skills/`. Commands: `.claude/commands/`
+(`/build-strategy`, `/audit-risk`, `/train-models`, `/run-paper-session`, `/review-learning-loop`).
 
 ## Safety
 
-Read `docs/safety-policy.md` first. Claude never places real orders.
-
-## Secrets
-
-Copy `.env.example` to `.env` on your own machine and fill it in. **Never commit `.env`.**
+Read [`docs/safety-policy.md`](docs/safety-policy.md) first. Claude never places real orders. Credentials live
+only in `.env`: copy `.env.example`, fill it in on your own machine, and **never commit `.env`**.

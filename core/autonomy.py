@@ -72,6 +72,17 @@ def is_human_approver(name: str | None) -> bool:
     return name is not None and name.strip().lower() not in NON_HUMAN_APPROVERS
 
 
-__all__ = ["LIVE_NOMINATION_LEVELS", "LOOP_ACTOR", "NON_HUMAN_APPROVERS", "PAPER_PROMOTION_LEVELS", "AutonomyError",
-           "is_human_approver", "may_auto_deploy_paper", "may_nominate_live_candidate", "may_promote_to_paper",
-           "require_live_nomination", "require_paper_promotion"]
+#: Least to most permissive.
+RESTRICTIVENESS: tuple[AutonomyLevel, ...] = (AutonomyLevel.OBSERVE_ONLY, AutonomyLevel.PAPER_AUTO_IMPROVE,
+                                              AutonomyLevel.LIVE_CANDIDATE_APPROVAL)
+
+
+def most_restrictive(*levels: AutonomyLevel | str) -> AutonomyLevel:
+    if not levels:
+        raise ValueError("most_restrictive needs at least one level")
+    return min((AutonomyLevel(x) for x in levels), key=RESTRICTIVENESS.index)
+
+
+__all__ = ["LIVE_NOMINATION_LEVELS", "LOOP_ACTOR", "NON_HUMAN_APPROVERS", "PAPER_PROMOTION_LEVELS", "RESTRICTIVENESS",
+           "AutonomyError", "is_human_approver", "may_auto_deploy_paper", "may_nominate_live_candidate",
+           "may_promote_to_paper", "most_restrictive", "require_live_nomination", "require_paper_promotion"]

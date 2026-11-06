@@ -226,6 +226,24 @@ class GateThresholds(_Frozen):
     min_seeds: int = Field(default=5, ge=5, le=50)
 
 
+class LearningLoopSection(_Frozen):
+    """The Reflective Loop scheduled inside a PAPER session (Phase 10). It runs
+    after the close on trading days, verifies candidates on the HISTORICAL
+    dataset in ``verify_data`` only, and reads the running bot's autonomy
+    level at every promotion step. Deployments apply at the next start."""
+
+    enabled: bool = False
+    run_at: HHMM = time(15, 45)
+    verify_data: Path | None = None  # HISTORICAL dataset directory (meta.json must say HISTORICAL)
+    reports_dir: Path = Path("reports/learning")
+
+    @model_validator(mode="after")
+    def _check(self) -> LearningLoopSection:
+        if self.enabled and self.verify_data is None:
+            raise ValueError("learning.loop.enabled needs learning.loop.verify_data (a HISTORICAL dataset)")
+        return self
+
+
 class LearningSection(_Frozen):
     """Self-learning (Reflective Loop) settings. Autonomy itself is
     ``app.autonomy_level``; nothing here can enable LIVE."""
@@ -239,6 +257,30 @@ class LearningSection(_Frozen):
     paper_validation_min_trades: int = Field(default=20, ge=10)
     auto_deploy_paper: bool = True  # PAPER_READY versions deploy to PAPER (only if autonomy allows)
     gates: GateThresholds = GateThresholds()
+    loop: LearningLoopSection = LearningLoopSection()
+
+
+class TelegramSection(_Frozen):
+    """Telegram alerts (sent only when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
+    are set). CRITICAL alerts (kill switch, daily-loss breach, exit failure)
+    are always sent while the channel is enabled."""
+
+    enabled: bool = True
+    entries: bool = True
+    exits: bool = True
+    errors: bool = True
+    eod_summary: bool = True
+    min_severity: Literal["INFO", "WARNING", "CRITICAL"] = "WARNING"  # for other alerts
+    min_interval_seconds: float = Field(default=1.1, ge=1.0, le=60.0)  # Telegram: ~1 message/s per chat
+    queue_size: int = Field(default=200, ge=10, le=10_000)
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    request_timeout_seconds: PositiveFloat = 10.0
+    error_dedupe_seconds: NonNegativeFloat = 300.0
+
+
+class AlertsSection(_Frozen):
+    telegram: TelegramSection = TelegramSection()
+    eod_summary_time: HHMM = time(15, 35)  # IST, trading days, after the square-off window
 
 
 class AppSettings(_Frozen):
@@ -254,6 +296,7 @@ class AppSettings(_Frozen):
     logging: LoggingSection = LoggingSection()
     ml: MLSection = MLSection()
     learning: LearningSection = LearningSection()
+    alerts: AlertsSection = AlertsSection()
 
 
 # --------------------------------------------------------------------------- #
@@ -580,6 +623,9 @@ class EnvSettings(BaseSettings):
     telegram_chat_id: str | None = None
     dashboard_username: str | None = None
     dashboard_password: SecretStr | None = None
+    # Optional override of settings.yaml database.path (Docker keeps the
+    # database on a volume outside the ``data`` package directory).
+    database_path: Path | None = None
 
     @model_validator(mode="after")
     def _dashboard_pair(self) -> EnvSettings:
@@ -638,7 +684,8 @@ class BotConfig(_Frozen):
 
     @property
     def database_path(self) -> Path:
-        return self.resolve_path(self.settings.database.path)
+        override = self.env.database_path
+        return self.resolve_path(override if override is not None else self.settings.database.path)
 
     @property
     def log_directory(self) -> Path:
@@ -679,4 +726,9 @@ class BotConfig(_Frozen):
             raise ValueError("sum of strategy allocated_capital exceeds total_capital")
         if risk.time_rules.square_off_end > session.market_close:
             raise ValueError("square_off_end is after market_close")
+        if self.settings.alerts.eod_summary_time <= risk.time_rules.square_off_end:
+            raise ValueError("alerts.eod_summary_time must be after square_off_end")
+        if self.settings.learning.loop.run_at < session.market_close:
+            raise ValueError("learning.loop.run_at must be at or after market_close (the loop never runs "
+                             "during the session)")
         return self

@@ -60,12 +60,33 @@ def test_no_raw_os_environ_outside_config() -> None:
 
 
 NETWORK_CLIENTS = {"requests", "httpx", "aiohttp", "websockets", "websocket", "urllib3", "upstox_client"}
-# The ONLY modules allowed to open network connections (both go through the
-# central rate limiter / authorize flow).
+# The ONLY modules allowed to open network connections: the two Upstox
+# adapters (both go through the central rate limiter / authorize flow) and
+# the outbound-only Telegram alert channel (Phase 10).
 NETWORK_ALLOWED = {
     Path("broker/upstox_rest.py"): {"httpx"},
     Path("broker/upstox_websocket.py"): {"websockets"},
+    Path("monitoring/telegram.py"): {"httpx"},
 }
+
+
+def test_telegram_channel_never_sees_upstox_or_trading() -> None:
+    """The alert channel only formats and posts alerts: no broker, execution,
+    risk, runtime or Upstox credential access."""
+    path = PROJECT_ROOT / "monitoring" / "telegram.py"
+    mods = _imported_modules(path)
+    assert not {m.split(".")[0] for m in mods} & {"broker", "execution", "risk", "runtime", "strategies", "ml"}
+    text = path.read_text(encoding="utf-8")
+    assert "upstox_" not in text.lower() and "EnvSettings" not in text  # no Upstox credential access
+    assert "api.telegram.org" in text and "follow_redirects=False" in text
+
+
+def test_launcher_can_only_build_a_paper_broker() -> None:
+    """runtime/paper.py builds its broker through the factory (PaperBroker only in
+    PAPER) and never calls an order method on the Upstox client."""
+    text = (PROJECT_ROOT / "runtime" / "paper.py").read_text(encoding="utf-8")
+    assert "create_broker(" in text and "enable_portfolio=False" in text
+    assert not re.search(r"\.(place_order|modify_order|cancel_order)\(", text)
 
 
 def test_network_access_only_from_upstox_adapters() -> None:

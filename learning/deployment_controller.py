@@ -10,7 +10,8 @@
 * ``effective_config``: the YAML config with every strategy's PAPER version
   overlaid (re-checked: only whitelisted leaves may differ from the YAML, and
   every validator must pass; a version that fails falls back to the YAML
-  config with a CRITICAL log). The bot's composition root applies it at
+  config with a CRITICAL log). ``resolve`` also says which version each
+  strategy runs and why. The PAPER launcher (``runtime.paper``) applies it at
   start-up; a deployment takes effect at the next bot start, never inside a
   running session.
 * ``deploy_live``: always refused. This build has no LIVE deployment path,
@@ -52,6 +53,17 @@ IN_PAPER = (StrategyVersionStatus.PAPER_ACTIVE, StrategyVersionStatus.LIVE_CANDI
             StrategyVersionStatus.LIVE_APPROVED)
 
 
+@dataclass(frozen=True)
+class VersionInUse:
+    """The strategy version a PAPER session trades, and where it came from."""
+
+    strategy_id: str
+    version: str
+    source: str  # "YAML" | "DEPLOYED"
+    version_uid: str | None
+    note: str = ""
+
+
 @dataclass
 class DeploymentController:
     repos: Repositories
@@ -71,21 +83,34 @@ class DeploymentController:
         return self.repos.strategy_versions.get(cur.version_uid)
 
     def effective_config(self) -> BotConfig:
+        return self.resolve()[0]
+
+    def resolve(self) -> tuple[BotConfig, dict[str, VersionInUse]]:
+        """``effective_config`` plus, per strategy, which version it runs and why."""
         cfg = self.cfg
-        for sid in self.cfg.strategies.strategies:
+        out: dict[str, VersionInUse] = {}
+        for sid, yaml_scfg in self.cfg.strategies.strategies.items():
             rec = self.active(sid)
             if rec is None:
+                out[sid] = VersionInUse(sid, yaml_scfg.version, "YAML", None, "no PAPER deployment")
                 continue
             if rec.status not in IN_PAPER:
                 log.critical("deployed strategy version is not in a PAPER state; using the YAML config",
                              extra={"strategy_id": sid, "version": rec.version, "status": rec.status.value})
+                out[sid] = VersionInUse(sid, yaml_scfg.version, "YAML", None,
+                                        f"deployed {rec.version} is {rec.status.value}, not a PAPER state")
                 continue
             try:
                 cfg = MutationEngine(cfg).apply_overlay(sid, rec.config_json)
             except MutationRefused as exc:
                 log.critical("deployed strategy version no longer fits the YAML config; using the YAML config",
                              extra={"strategy_id": sid, "version": rec.version, "reason": str(exc)})
-        return cfg
+                out[sid] = VersionInUse(sid, yaml_scfg.version, "YAML", None,
+                                        f"deployed {rec.version} refused: {exc}"[:300])
+                continue
+            out[sid] = VersionInUse(sid, rec.version, "DEPLOYED", rec.version_uid,
+                                    f"{rec.status.value}, replaces YAML {yaml_scfg.version}")
+        return cfg, out
 
     # Changes -----------------------------------------------------------------
     def _event(self, rec: StrategyVersionRecord | None, sid: str, outcome: str, payload: dict[str, object],
@@ -171,4 +196,4 @@ class DeploymentController:
                                     "approval, LIVE order routing, and the LIVE safety checklist")
 
 
-__all__ = ["DeploymentController", "DeploymentError", "LiveDeploymentRefused"]
+__all__ = ["DeploymentController", "DeploymentError", "LiveDeploymentRefused", "VersionInUse"]

@@ -3,7 +3,8 @@
 When triggered:
 1. New ENTRY orders are blocked immediately (synchronously).
 2. A CRITICAL risk event is written to the append-only ``risk_events`` table.
-3. Alerts are sent (dashboard memory sink; Telegram from Phase 10).
+3. Alerts are sent (dashboard feed, log, and Telegram when configured).
+   Daily-loss kills are DAILY_LOSS alerts, every other kill KILL_SWITCH.
 4. Registered async action handlers run (execution: cancel pending orders,
    exit positions, disable strategies).
 
@@ -36,9 +37,10 @@ from enum import StrEnum
 
 from core.clock import now_ist
 from core.enums import RiskSeverity, TradingMode
+from core.tasks import wait_for_tasks
 from data.storage.records import RiskEventRecord
 from data.storage.repositories import RiskEventRepository
-from monitoring.alerts import Alert, AlertSink, LogAlertSink
+from monitoring.alerts import Alert, AlertKind, AlertSink, LogAlertSink
 from monitoring.json_logger import get_logger
 
 log = get_logger(__name__)
@@ -159,7 +161,8 @@ class KillSwitch:
         until = "until a named human resets it" if persistent else "for the rest of the trading day"
         self.alerts.send(Alert(RiskSeverity.CRITICAL, f"Kill switch {'escalated' if escalation else 'triggered'} "
                                f"({scope})", f"{ev.reason.value}: {message} - active {until}",
-                               strategy_id=strategy_id))
+                               strategy_id=strategy_id,
+                               kind=AlertKind.KILL_SWITCH if persistent else AlertKind.DAILY_LOSS))
         if not escalation:
             self._run_handlers(ev)
         return ev
@@ -182,12 +185,11 @@ class KillSwitch:
             log.exception("kill switch handler failed", extra={"strategy_id": ev.strategy_id})
             self.alerts.send(Alert(RiskSeverity.CRITICAL, "Kill switch action FAILED",
                                    "Manual intervention required: verify positions at the broker.",
-                                   strategy_id=ev.strategy_id))
+                                   strategy_id=ev.strategy_id, kind=AlertKind.KILL_SWITCH))
 
     async def wait_idle(self) -> None:
         """Await all running handler tasks (tests / orderly shutdown)."""
-        while self._tasks:
-            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        await wait_for_tasks(self._tasks)
 
     # ------------------------------------------------------------------ #
     def reset(self, *, operator: str, note: str, strategy_id: str | None = None) -> bool:
@@ -274,7 +276,7 @@ class KillSwitch:
                 self.alerts.send(Alert(RiskSeverity.CRITICAL, f"Kill switch still active ({scope})",
                                        f"{ev.reason.value} since {ev.at:%Y-%m-%d %H:%M}: {ev.message} - "
                                        "new entries stay blocked until a named human resets it",
-                                       strategy_id=ev.strategy_id))
+                                       strategy_id=ev.strategy_id, kind=AlertKind.KILL_SWITCH))
         return cleared
 
     def status(self) -> dict[str, object]:

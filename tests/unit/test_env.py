@@ -29,6 +29,15 @@ def test_env_example_loads_as_paper(config_dir: Path) -> None:
     assert not cfg.env.upstox_credentials_present
 
 
+def test_database_path_can_be_overridden_by_the_environment(config_dir: Path, tmp_path: Path,
+                                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    default = load_config(config_dir, env_file=_env(tmp_path, ""))
+    assert default.database_path == default.resolve_path(Path("data/trading.db"))
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "var" / "trading.db"))  # Docker volume
+    cfg = load_config(config_dir, env_file=_env(tmp_path, ""))
+    assert cfg.database_path == tmp_path / "var" / "trading.db"
+
+
 def test_missing_trading_mode_defaults_to_paper(config_dir: Path, tmp_path: Path) -> None:
     cfg = load_config(config_dir, env_file=_env(tmp_path, ""))
     assert cfg.mode is TradingMode.PAPER

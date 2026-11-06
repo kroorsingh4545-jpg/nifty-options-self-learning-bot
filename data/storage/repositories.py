@@ -28,6 +28,7 @@ from core.enums import (
     REAL_EVIDENCE_VERSION_STATUSES,
     AutonomyLevel,
     ControlCommandStatus,
+    ControlCommandType,
     EvidenceSource,
     ModelDataSource,
     ModelRunStatus,
@@ -359,6 +360,13 @@ class TradeRepository(_ModeScoped):
 
     def list_open(self) -> list[TradeRecord]:
         rows = self.db.query("SELECT * FROM trades WHERE mode = ? AND status = 'OPEN' ORDER BY id", (self.mode.value,))
+        return [TradeRecord.from_row(r) for r in rows]
+
+    def list_closed_on(self, day: date) -> list[TradeRecord]:
+        """Trades closed on this (IST) trading day, oldest exit first."""
+        rows = self.db.query(
+            "SELECT * FROM trades WHERE mode = ? AND status = 'CLOSED' AND substr(exit_time, 1, 10) = ? "
+            "ORDER BY exit_time, id", (self.mode.value, day.isoformat()))
         return [TradeRecord.from_row(r) for r in rows]
 
     def count_entries_on(self, strategy_id: str, day: date) -> int:
@@ -741,6 +749,15 @@ class ControlCommandRepository(_ModeScoped):
         rows = self.db.query("SELECT * FROM control_commands WHERE mode = ? ORDER BY id DESC LIMIT ?",
                              (self.mode.value, int(limit)))
         return [ControlCommandRecord.from_row(r) for r in rows]
+
+    def last_completed(self, command: ControlCommandType,
+                       status: ControlCommandStatus = ControlCommandStatus.DONE) -> ControlCommandRecord | None:
+        """The most recently processed command of this type with this status."""
+        row = self.db.query_one(
+            "SELECT * FROM control_commands WHERE mode = ? AND command = ? AND status = ? "
+            "ORDER BY processed_at DESC, id DESC LIMIT 1",
+            (self.mode.value, ControlCommandType(command).value, ControlCommandStatus(status).value))
+        return ControlCommandRecord.from_row(row) if row else None
 
     def complete(self, command_id: int, status: ControlCommandStatus, message: str, *, at: datetime,
                  result: dict[str, Any] | None = None) -> bool:

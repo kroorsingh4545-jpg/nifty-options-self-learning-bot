@@ -47,6 +47,7 @@ import math
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 from config.settings import BotConfig, TrailingConfig
@@ -62,6 +63,7 @@ from core.enums import (
 from core.ids import new_trade_uid
 from core.interfaces import STOP_ADVICE, TradeAdvice, TradeAdviceAction
 from core.models import Instrument, OrderUpdate, Tick
+from core.tasks import wait_for_tasks
 from data.storage.records import OrderRecord, PositionRecord, TradeRecord
 from data.storage.repositories import Repositories
 from execution.order_manager import TERMINAL, EntryBlockedError, OrderIntent, OrderManager
@@ -92,6 +94,11 @@ EXIT_PURPOSE = {
     ExitReason.STRATEGY: OrderPurpose.EXIT,
     ExitReason.TRADE_MANAGER: OrderPurpose.EXIT,
 }
+
+
+class TradeEvent(StrEnum):
+    OPENED = "OPENED"  # the entry order is terminal with a fill
+    CLOSED = "CLOSED"
 
 
 @dataclass(frozen=True)
@@ -166,7 +173,20 @@ class PositionManager(OpenTradeCounter):
         self.trades: dict[str, ManagedTrade] = {}
         self._by_order: dict[str, str] = {}
         self._tasks: set[asyncio.Task[None]] = set()
+        self._trade_listeners: list[Callable[[TradeEvent, ManagedTrade], None]] = []
         orders.add_listener(self.on_order_event)
+
+    def add_trade_listener(self, fn: Callable[[TradeEvent, ManagedTrade], None]) -> None:
+        """Notified after a trade opens or closes (notifications only: a
+        listener must not act on trading; its failures are logged and swallowed)."""
+        self._trade_listeners.append(fn)
+
+    def _emit(self, event: TradeEvent, t: ManagedTrade) -> None:
+        for fn in list(self._trade_listeners):
+            try:
+                fn(event, t)
+            except Exception:
+                log.exception("trade listener failed", extra={"strategy_id": t.strategy_id, "trade": t.trade_uid})
 
     # ------------------------------------------------------------------ #
     # Queries
@@ -307,6 +327,7 @@ class PositionManager(OpenTradeCounter):
             self.repos.trades.update(t.trade_uid, quantity=t.filled_qty)
         log.info("trade opened", extra={"strategy_id": t.strategy_id, "trade": t.trade_uid, "qty": t.filled_qty,
                                         "avg": round(t.avg_entry, 2), "stop": t.stop, "target": t.levels.target})
+        self._emit(TradeEvent.OPENED, t)
         if t.open_qty == 0:
             self._close_trade(t)
         elif self.cfg.settings.execution.use_exchange_stop_orders and not t.exit_in_progress:
@@ -380,6 +401,7 @@ class PositionManager(OpenTradeCounter):
         self.guard.update_unrealized(t.strategy_id, self.unrealized_by_strategy().get(t.strategy_id, 0.0))
         if t.protective_order_id is not None:
             self._spawn(t, self._cancel_after_close(t))
+        self._emit(TradeEvent.CLOSED, t)
 
     async def _cancel_after_close(self, t: ManagedTrade) -> None:
         if not await self._release_protective(t):
@@ -643,12 +665,10 @@ class PositionManager(OpenTradeCounter):
         task.add_done_callback(t.tasks.discard)
 
     async def wait_for(self, t: ManagedTrade) -> None:
-        while t.tasks:
-            await asyncio.gather(*list(t.tasks), return_exceptions=True)
+        await wait_for_tasks(t.tasks)
 
     async def wait_idle(self) -> None:
-        while self._tasks:
-            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        await wait_for_tasks(self._tasks)
 
     # ------------------------------------------------------------------ #
     # Restart recovery

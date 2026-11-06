@@ -41,6 +41,7 @@ from core.event_bus import Topic
 from core.masking import DEFAULT_MASKER
 from core.mode_controller import LivePreconditions
 from core.models import Candle
+from core.tasks import wait_for_tasks
 from data.storage.records import ControlCommandRecord
 from execution.operator_controls import ControlResult
 from monitoring.json_logger import get_logger
@@ -79,6 +80,17 @@ class ControlService:
         self.in_flight: set[int] = set()
         self._tasks: set[asyncio.Task[None]] = set()
         bot.candles.add_listener(self._on_candle)
+
+    def set_status_providers(self, *, connection_status: StatusProvider | None = None,
+                             rate_limit_usage: StatusProvider | None = None,
+                             alert_channels: StatusProvider | None = None) -> None:
+        """Wired by the PAPER launcher once the Upstox clients and alert sinks exist."""
+        if connection_status is not None:
+            self._connection = connection_status
+        if rate_limit_usage is not None:
+            self._rate_limits = rate_limit_usage
+        if alert_channels is not None:
+            self._channels = alert_channels
 
     # ------------------------------------------------------------------ #
     def _on_candle(self, c: Candle) -> None:
@@ -141,8 +153,7 @@ class ControlService:
 
     async def wait_idle(self) -> None:
         """Await background commands (tests / orderly shutdown)."""
-        while self._tasks:
-            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        await wait_for_tasks(self._tasks)
 
     async def _execute(self, cmd: ControlCommandRecord) -> None:
         assert cmd.id is not None
@@ -248,7 +259,8 @@ class ControlService:
             eng = (engine or {}).get("strategies", {}).get(sid, {})
             strategies.append({
                 "strategy_id": sid, "name": scfg.name,
-                "version": scfg.version, "enabled": scfg.enabled, "status": repo_status.get(sid),
+                "version": scfg.version, "version_source": bot.version_sources.get(sid, "YAML"),
+                "enabled": scfg.enabled, "status": repo_status.get(sid),
                 "allocated_capital": scfg.allocated_capital, "mode": cfg.mode.value,
                 "realized": g.get("realized", 0.0), "unrealized": g.get("unrealized", 0.0),
                 "daily_loss": g.get("loss", 0.0), "daily_loss_limit": g.get("limit"),
@@ -296,7 +308,9 @@ class ControlService:
                 payload = e.payload.model_dump(mode="json") if hasattr(e.payload, "model_dump") else e.payload
                 events.append({"at": e.at.isoformat(), "topic": topic.value, "payload": payload})
         events.sort(key=lambda x: x["at"], reverse=True)
-        alerts = [{"at": a.at.isoformat(), "severity": a.severity.value, "title": a.title, "message": a.message,
+        # Alert text is shown on the dashboard: masked again here, whatever produced it.
+        alerts = [{"at": a.at.isoformat(), "severity": a.severity.value, "kind": a.kind.value,
+                   "title": DEFAULT_MASKER.mask_text(a.title), "message": DEFAULT_MASKER.mask_text(a.message),
                    "strategy_id": a.strategy_id} for a in list(s.alerts.alerts)[-50:]][::-1]
         exposure = sum(t.open_qty * t.avg_entry for t in s.positions.open_trades())
         conn = self._connection() if self._connection else {}
@@ -327,7 +341,7 @@ class ControlService:
             },
             "rate_limits": self._rate_limits() if self._rate_limits else None,
             "alert_channels": self._channels() if self._channels else {"dashboard": "on",
-                                                                      "telegram": "not configured (Phase 10)"},
+                                                                      "telegram": "not wired (no PAPER launcher)"},
             "capital": {"total": cfg.risk.capital.total_capital,
                         "per_strategy": {sid: sc.allocated_capital for sid, sc in strategies_cfg.items()},
                         "deployed": round(exposure, 2)},

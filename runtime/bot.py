@@ -54,7 +54,7 @@ from data.storage.repositories import Repositories
 from execution.stack import ExecutionStack, build_stack
 from ml.inference_service import InferenceService, StrategyModels
 from ml.model_registry import LoadedModel
-from monitoring.alerts import Alert
+from monitoring.alerts import Alert, AlertSink
 from monitoring.json_logger import get_logger
 from runtime.contracts import OptionContractResolver, OptionUniverse
 from runtime.control import ControlService
@@ -119,10 +119,14 @@ class TradingBot:
         rl_models: Mapping[str, LoadedModel] | None = None,
         rl_research: bool = False,
         evidence_source: EvidenceSource = EvidenceSource.UNKNOWN,
+        alert_sinks: Sequence[AlertSink] = (),
+        version_sources: Mapping[str, str] | None = None,
     ) -> None:
         if cfg.mode is not TradingMode.PAPER:
             raise RuntimeError("only PAPER mode can run in this build")
         self.cfg = cfg
+        # strategy_id -> where its running version came from ("YAML" or a deployed version uid)
+        self.version_sources = dict(version_sources or {})
         # Persisted timestamps follow the bot's clock (simulated in backtests).
         self.repos = repos.with_clock(now_fn)
         self.broker = broker
@@ -135,7 +139,7 @@ class TradingBot:
         self._retry_seconds = instrument_retry_seconds
         self.bus = EventBus(now_fn=now_fn)
         self.stack: ExecutionStack = build_stack(cfg, repos=self.repos, broker=broker, market_data=market_data,
-                                                 now_fn=now_fn, sleep=sleep,
+                                                 alert_sinks=tuple(alert_sinks), now_fn=now_fn, sleep=sleep,
                                                  reconcile_confirm_delay=reconcile_confirm_delay)
         self.mode = ModeController(live_available=False, autonomy=cfg.settings.app.autonomy_level, now_fn=now_fn)
         self.filter: SignalFilter = signal_filter or PassThroughFilter()
