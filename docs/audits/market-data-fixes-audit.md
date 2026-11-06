@@ -1,35 +1,41 @@
 # Risk & Execution Audit Report
 
-Date: 2026-11-06
-Scope (files / PR): branch `market-data-fixes` vs `main` (22463cd); 24 files, +502/−23:
-`data/candle_builder.py`, `data/market_data.py`, `data/websocket_manager.py`, `broker/upstox_websocket.py`,
-`runtime/paper.py`, `runtime/control.py`, `runtime/bot.py`, `core/scheduler.py`, `monitoring/json_logger.py`,
-`config/settings.py`, `config/settings.yaml`, `dashboard/data_access.py`, `dashboard/components/control_bar.py`,
-`dashboard/app.py`, `docs/dashboard.md`, `docs/strategies.md`; tests in `tests/unit/test_candle_builder.py`,
-`test_market_data.py`, `test_upstox_websocket.py`, `test_websocket_manager.py`, `test_logging.py`,
-`test_dashboard_units.py`, `test_dashboard_app.py`, `test_paper_launcher.py`. No changes in `risk/`, `execution/`
-or `strategies/`.
+Date: 2026-11-06 (re-audit after round 2)
+Scope (files / PR): branch `market-data-fixes` vs `main` (22463cd), two rounds.
 
-Background: the 2026-11-06 PAPER session (14:45–15:20) received and decoded ticks correctly, but (a) the dashboard
-WebSocket tile compared the text `"CONNECTED (16 subscriptions)"` to `"connected"` and always showed *offline*;
-(b) the PC clock ran ~7.2 s ahead of NTP (Windows Time service stopped), and `CandleBuilder.flush` (local clock)
-deleted the working candle, so later ticks of the same exchange-time bucket opened a new one: ~8 "complete"
-candles per bucket reached the strategies; (c) APScheduler logged ~4 INFO lines per second.
+* **Round 1** (e6d334a): one candle per bucket, structured WebSocket status, price / feed-lag tiles, feed logging,
+  APScheduler quieted. `data/candle_builder.py`, `data/market_data.py`, `data/websocket_manager.py`,
+  `broker/upstox_websocket.py`, `runtime/paper.py`, `runtime/control.py`, `runtime/bot.py`, `core/scheduler.py`,
+  `monitoring/json_logger.py`, `config/settings.py`, `config/settings.yaml`, `dashboard/*`.
+* **Round 2**: (a) the suite can no longer read the real `.env` (`config/loader.py`, `tests/conftest.py`);
+  (b) PC-clock pre-flight against Upstox server time, FAIL beyond 2 s (`broker/upstox_rest.py`, `core/clock.py`,
+  `runtime/paper.py`, `runtime/__main__.py`); (c) in-session clock re-check with a dashboard warning
+  (`runtime/paper.py`, `runtime/control.py`, `dashboard/*`); (d) new entries blocked while the NIFTY feed lag is
+  above 5 s, exits never (`runtime/bot.py`). Docs: `README.md`, `docs/deployment.md`, `docs/strategies.md`,
+  `docs/dashboard.md`.
+
+No changes in `risk/`, `execution/` or `strategies/`.
+
+Background: in the 2026-11-06 PAPER session (14:45–15:20) ticks arrived and decoded correctly, but:
+(a) the dashboard's WebSocket tile compared the text `"CONNECTED (16 subscriptions)"` with `"connected"`, so it
+always showed *offline*;
+(b) the PC clock ran ~7.2 s ahead of NTP and `CandleBuilder.flush` closes buckets by the local clock, so about 8
+"complete" candles per bucket reached the strategies;
+(c) APScheduler logged about 4 INFO lines a second.
 
 Mode audited: PAPER. LIVE order routing does not exist in this build.
 Environment: project `.venv` (Python 3.13.1), mypy 2.4.1 (pinned).
-Tests: **1254 passed, 1 failed** (1 pytest warning, not inspected). The failure,
-`test_dashboard_app.py::test_login_required_and_unconfigured_refuses`, also fails on `main` with this branch's
-changes stashed: it is environmental (see Warning 5), not caused by this branch; `ruff check .` and `mypy .` (strict, 133 files) clean.
+Tests: **1267 passed, 0 failed** (1 pytest warning, a NumPy deprecation in `test_ml_training.py`); `ruff check .` and `mypy .` (strict, 133 files) clean. The round-1 failure
+(`test_dashboard_app.py::test_login_required_and_unconfigured_refuses`, caused by the developer `.env`) now passes.
 Verdict: **PASS WITH WARNINGS**
 
 ## Results
 
 | # | Area | Status | Evidence (file:line, test) | Notes |
 |---|---|---|---|---|
-| 1 | Entry logic | OK | `data/candle_builder.py:126-128` (published-bucket guard), `:135`, `:154-158`; `core/engine.py:121-133`; `test_candle_builder.py:138`, `:153` | Entries still pass the unchanged risk gateway. The change removes the duplicate / fragment candles that strategies (ORB range, VWAP+EMA) were receiving: each bucket is now published once per timeframe |
-| 2 | Exit logic | OK | `execution/stack.py:127-128`; `execution/position_manager.py:437-458` | Stops / targets / trailing run on every tick, not on candles; unaffected by the candle change |
-| 3 | Stop-loss logic | N/A | not in diff | tick-driven, unchanged |
+| 1 | Entry logic | OK | `runtime/bot.py:341-368` (lag gate, `entry_block_reason`), `:229` (`block_fn=self.entry_block_reason`); `runtime/contracts.py:99-101`; `core/engine.py:162`, `:186`; `data/candle_builder.py:126-135`, `:154-158`; `test_bot_integration.py:272`, `:286`; `test_candle_builder.py:138`, `:153` | Entries still pass the unchanged risk gateway. A NIFTY feed lag above ±5 s (`config/settings.py:182`) refuses every new entry and gives the reason. 4 s does not block. Each candle bucket is now published once. No lag reading yet (`None`) means no lag block; without a spot price the resolver refuses anyway (`runtime/contracts.py:103-105`) |
+| 2 | Exit logic | OK | `execution/stack.py:127-128`; `execution/position_manager.py:437-458`; `test_bot_integration.py:296` (`test_feed_lag_never_blocks_exits`) | The lag gate is only consulted by contract resolution, which is entry-only. The test blocks entries with a 9 s lag, then pushes the premium through the stop: the trade closes with `STOP_LOSS` |
+| 3 | Stop-loss logic | OK | `test_bot_integration.py:296` | Unchanged and tick-driven. Proven to still fire while entries are lag-blocked |
 | 4 | Take-profit logic | N/A | not in diff | tick-driven, unchanged |
 | 5 | Trailing-stop logic | N/A | not in diff | unchanged |
 | 6 | Position sizing | N/A | not in diff | unchanged |
@@ -40,12 +46,12 @@ Verdict: **PASS WITH WARNINGS**
 | 11 | Partial fills | N/A | not in diff | unchanged |
 | 12 | Order rejection handling | N/A | not in diff | unchanged |
 | 13 | Reconciliation | N/A | not in diff | unchanged |
-| 14 | Square-off logic | WARN | `execution/square_off.py:105` (local clock) | Unchanged code, but it runs on the PC clock: a clock ~7 s fast starts the 15:10–15:20 window ~7 s early (safe direction). The new feed-lag check (`runtime/paper.py:294-339`) now makes such an offset visible |
-| 15 | Kill-switch behavior | OK | `data/websocket_manager.py:81-85` unchanged; `runtime/paper.py:393` (`on_stream_state` wiring unchanged); `monitoring/alerts.py:98` (alerts from ERROR) | Feed state still drives the kill switch. The new lag WARNING is informational: it neither trips the kill switch nor pages Telegram |
-| 16 | API rate-limit compliance | OK | `runtime/paper.py:264-268`; `data/market_data.py:82-99` | No new REST calls: lag and quote status come from the tick cache; subscription requests are WebSocket frames (unchanged chunking, `broker/upstox_websocket.py:336-348`) |
-| 17 | PAPER/LIVE isolation | OK | `runtime/paper.py:120`, `:268` (`enable_portfolio=False`), `:372`; `test_paper_launcher.py:247` (`test_upstox_connections_are_read_only`) | No order path touched; read-only status fields only |
-| 18 | Restart recovery | OK | `data/candle_builder.py:82` | `_closed_until` is in-memory and starts empty: after a restart the current bucket may form from the restart onward (same as before); no persisted state changed |
-| 19 | Logging and audit trail | OK | `broker/upstox_websocket.py:236-238`, `:346-348`, `:371`, `:374-378`; `runtime/paper.py:314-339`; `monitoring/json_logger.py:141`, `:180-181`; `core/scheduler.py:68`; `test_upstox_websocket.py:278`, `test_logging.py:113`, `test_paper_launcher.py:360` | Subscriptions, first ticks after connect, market-status changes, decode-error counts and a 60 s feed summary are now logged; APScheduler held at WARNING (never below root level); jobs carry their ids. No secrets added to any log line (instrument keys and counts only) |
+| 14 | Square-off logic | OK | `execution/square_off.py:105` (unchanged, never consults the entry block); `runtime/__main__.py:132-152`; `test_paper_launcher.py:420` | Square-off still runs on the PC clock, but a session can no longer start with that clock more than ±2 s off Upstox server time: `paper` refuses on a FAIL. Drift during a session is re-checked and shown (area 19) |
+| 15 | Kill-switch behavior | OK | `risk/risk_manager.py:244-245`; `broker/upstox_rest.py:276`; `runtime/paper.py:314`, `:365-394`; `monitoring/alerts.py:98` | The lag gate only adds a block and can't lift the kill switch. The in-session clock probe uses the session REST client: a 401 still trips `AUTH_FAILURE` as before. A failed measurement is logged, never raised, and trips nothing. Lag and drift WARNINGs do not page Telegram (alerts start at ERROR) |
+| 16 | API rate-limit compliance | OK | `broker/upstox_rest.py:235-240` (scope check, then `limiter.acquire`), `:384-427`; `test_upstox_rest.py:324` (3 calls granted by the limiter, market-data path only) | Clock measurement = 3 STANDARD LTP calls, once per `check`/`paper` and once per 900 s in a session (`config/settings.py:152`, min 60 s). That is far inside the 400/min budget |
+| 17 | PAPER/LIVE isolation | OK | `broker/upstox_rest.py:235`; `runtime/paper.py:120`, `:268`; `test_paper_launcher.py:247` | The probe calls `/v3/market-quote/ltp` only, which an analytics token is allowed to call. No order path is touched |
+| 18 | Restart recovery | OK | `data/candle_builder.py:82`; `runtime/bot.py:174` | `_closed_until` and `_lag_blocked` are in memory and rebuilt from live ticks after a restart. No persisted state changed |
+| 19 | Logging and audit trail | OK | `runtime/bot.py:351-357` (block / unblock WARNINGs), `runtime/paper.py:383-389`; `runtime/control.py:335`, `:350-351`; `dashboard/components/control_bar.py:87-97`, `:124`; `tests/conftest.py:48-66`; `test_env.py:127`; `test_paper_launcher.py:449`, `:471`; `test_dashboard_units.py:207` | Lag block and recovery are logged at WARNING. The dashboard shows the block reason, a PC-clock tile and a drift warning. The pre-flight detail and failures carry the exception type only, never the token. `on_response` reads only the `Date` header. Tests can no longer read the real `.env`: there is no default, and an explicit path is refused |
 
 ## Blocking issues
 
@@ -53,28 +59,30 @@ None.
 
 ## Warnings
 
-1. **The PC clock must be synced before the next session.** The flush grace (`websocket.candle_flush_grace_seconds`,
-   default 2 s, `config/settings.py:167`) is smaller than the 7.2 s offset measured on 2026-11-06. With that offset
-   the guard prevents duplicate candles, but a bucket can be closed by the timer ~5 s early in exchange time when no
-   tick of the next bucket has arrived yet, and the last seconds of ticks for it are then dropped as late
-   (counted in `late_ticks_dropped`). Run `net start w32time` and `w32tm /resync` (admin), or raise the grace.
-2. **High feed lag only warns.** `FeedHealthMonitor` (`runtime/paper.py:294-339`) logs a WARNING and the dashboard
-   shows a banner, but new entries are not blocked. Gating entries on lag is a policy decision left to the owner.
-3. **Square-off and entry cut-offs follow the PC clock** (area 14). Not changed here; an unsynced clock shifts them.
-4. **Feed lag is measured on the NIFTY index only.** For options, `exchange_time` is the last trade time, so lag means
-   nothing there (`data/market_data.py:82-90` documents this); the dashboard shows the index lag only.
-
-5. **Pre-existing test-isolation gap (not in this diff).** `test_login_required_and_unconfigured_refuses` deletes
-   `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` from the process environment, but the dashboard's `load_config()`
-   also reads the project `.env` (`config/loader.py:94-95`). With the dashboard login set in `.env` (as it is now)
-   the test cannot observe the "not configured" state and fails; it passes on a checkout without those `.env`
-   entries. The test should load config with `use_default_env_file=False` (or point at an empty env file). The
-   refusal itself (`dashboard/auth.py:43-46`) is unchanged.
+1. **Measurement resolution.** The HTTP `Date` header has 1 s resolution. The estimate is accurate to
+   ±(0.5 s + RTT/2) and is shown in the detail. The best of 3 samples is used, but an offset within about
+   0.6 s of the 2 s limit can be misjudged either way. Today's 7.2 s offset is detected without doubt.
+2. **The pre-flight fails closed.** If Upstox server time can't be read (network down, bad token, no
+   credentials), `check` FAILs and `paper` refuses (`runtime/paper.py:170-184`, `runtime/__main__.py:132-136`).
+   This is intended: without Upstox there is no market data anyway.
+3. **The pre-flight gate lives in the CLI.** `python -m runtime paper` (and Docker, `docker-compose.yml:37`)
+   are gated. A `PaperSession` started from code without `main()` gets only the in-session `ClockMonitor` warning
+   (`runtime/paper.py:547-549`).
+4. **In-session drift only warns.** As specified, it does not block. But a fast clock also raises the feed lag,
+   so a drift above 5 s blocks entries through the lag gate anyway.
+5. **The lag gate reacts at the speed of a median.** It uses the median of the last 30 NIFTY ticks
+   (`data/market_data.py:25`, `:82-89`), so it engages or clears after roughly 15 ticks (about 15 s at one tick
+   a second). If the feed goes silent, the last reading persists, which is conservative; stale prices also block
+   entries through the quote-freshness checks.
+6. **Square-off and the entry cut-off follow the PC clock.** This code is unchanged; it is now gated at start
+   (area 14) and watched during a session.
 
 ## Required tests missing
 
-1. No end-to-end test drives the real `MarketDataStream` → `MarketDataService` → `CandleBuilder` → engine chain
-   with a skewed local clock; the skew is covered at the `CandleBuilder` level
-   (`test_candle_builder.py:153`) and the lag check at the `FeedHealthMonitor` level (`test_paper_launcher.py:360`).
-2. The Streamlit app test checks that the new "NIFTY index", "NIFTY future" and "Feed lag" metrics render
-   (`test_dashboard_app.py`), but not the feed-lag warning banner in a running app.
+1. Square-off on a lagged feed: exits on a lagged feed are covered for the stop-loss
+   (`test_bot_integration.py:296`), and square-off doesn't consult the block (by code), but no test runs a
+   square-off while entries are lag-blocked.
+2. No end-to-end test of `MarketDataStream` → `MarketDataService` → `CandleBuilder` → engine with a skewed
+   clock. The parts are tested separately (`test_candle_builder.py:153`, `test_bot_integration.py:272`).
+3. No test of `UpstoxRestClient.measure_clock_offset` against the real Upstox host. A one-off manual
+   `python -m runtime check` on the PC is the live check.

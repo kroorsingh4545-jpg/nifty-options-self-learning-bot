@@ -18,6 +18,7 @@ from pydantic import SecretStr
 from backtest.backtester import with_strategy_overrides
 from broker.paper_broker import PaperBroker
 from config.settings import BotConfig
+from core.clock import ClockOffset
 from core.enums import AutonomyLevel, EvidenceSource, OptionType, TradeStatus, TradingMode
 from data.market_data import MarketDataService
 from data.storage.database import SCHEMA_VERSION, Database
@@ -25,10 +26,12 @@ from data.storage.repositories import Repositories
 from risk.kill_switch import KillReason
 from runtime import __main__ as cli
 from runtime.paper import (
+    ClockMonitor,
     FeedHealthMonitor,
     PaperLaunchError,
     PaperSession,
     RiskHooks,
+    clock_offset_check,
     preflight,
     resolve_startup_config,
     upstox_connections,
@@ -385,3 +388,106 @@ def test_feed_lag_warns_once_and_reports_recovery(caplog: pytest.LogCaptureFixtu
     assert msgs.count("market data feed lag back to normal") == 1
     assert msgs.count("market data feed summary") == 4
     assert not mon.lag_high
+
+
+# --------------------------------------------------------------------------- #
+# PC clock: pre-flight (FAIL beyond 2 s) and in-session drift
+# --------------------------------------------------------------------------- #
+
+
+def _offset(seconds: float) -> ClockOffset:
+    return ClockOffset(seconds, 0.3, "Upstox server time (HTTP Date)", at(9, 0))
+
+
+async def test_clock_offset_check_passes_fails_and_fails_closed() -> None:
+    async def probe(v: float) -> ClockOffset:
+        return _offset(v)
+
+    ok = await clock_offset_check(lambda: probe(0.4), 2.0)
+    assert ok.ok and ok.fatal and "+0.4s" in ok.detail
+    bad = await clock_offset_check(lambda: probe(7.2), 2.0)
+    assert not bad.ok and bad.fatal and "+7.2s" in bad.detail and "w32tm /resync" in bad.detail
+    behind = await clock_offset_check(lambda: probe(-2.5), 2.0)
+    assert not behind.ok  # a slow clock fails too
+
+    async def broken() -> ClockOffset:
+        raise ConnectionError("network down")
+
+    unknown = await clock_offset_check(broken, 2.0)
+    assert not unknown.ok and unknown.fatal and "could not compare" in unknown.detail
+
+
+def test_cli_check_fails_and_paper_refuses_on_a_skewed_clock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                            capsys: pytest.CaptureFixture[str]) -> None:
+    cfg = paper_cfg(tmp_path)
+    monkeypatch.setattr(cli, "load_config", lambda: cfg)
+    monkeypatch.setattr(cli, "configure_from_config", lambda _cfg: None)
+    assert cli.main(["check"]) == 0
+    assert "[PASS] PC clock" in capsys.readouterr().out  # the conftest fake reads 0 s
+
+    async def skewed(_cfg: object) -> ClockOffset:
+        return _offset(7.2)
+
+    monkeypatch.setattr(cli, "measure_clock", skewed)
+    assert cli.main(["check"]) == 1
+    out = capsys.readouterr().out
+    assert "[FAIL] PC clock: PC clock +7.2s" in out and "limit \u00b12s" in out
+    assert cli.main(["paper"]) == 2  # refuses to start
+    assert "Refusing to start" in capsys.readouterr().err
+
+
+def test_cli_clock_check_needs_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                           capsys: pytest.CaptureFixture[str]) -> None:
+    cfg = paper_cfg(tmp_path)
+    no_creds = cfg.model_copy(update={"env": cfg.env.model_copy(update={"upstox_access_token": None})})
+    monkeypatch.setattr(cli, "load_config", lambda: no_creds)
+    monkeypatch.setattr(cli, "configure_from_config", lambda _cfg: None)
+    assert cli.main(["check"]) == 1
+    assert "[FAIL] PC clock: not measured" in capsys.readouterr().out
+
+
+async def test_clock_monitor_warns_once_on_drift_and_survives_errors(caplog: pytest.LogCaptureFixture) -> None:
+    readings: list[float | Exception] = [0.3, 3.1, 3.4, ConnectionError("down"), 0.2]
+
+    async def probe() -> ClockOffset:
+        v = readings.pop(0)
+        if isinstance(v, Exception):
+            raise v
+        return _offset(v)
+
+    mon = ClockMonitor(probe, limit_seconds=2.0)
+    with caplog.at_level(logging.INFO, logger="runtime.paper"):
+        for _ in range(5):
+            await mon.check()
+            if mon.error is None and mon.last is not None and mon.last.offset_seconds == 3.4:
+                assert mon.status()["drifted"] is True
+    msgs = [r.getMessage() for r in caplog.records]
+    assert sum(m.startswith("PC clock drifted") for m in msgs) == 1
+    assert msgs.count("PC clock check failed") == 1 and msgs.count("PC clock back within limit") == 1
+    st = mon.status()
+    assert st["offset_seconds"] == 0.2 and not st["drifted"] and st["error"] is None and st["limit_seconds"] == 2.0
+
+
+async def test_session_publishes_the_clock_and_schedules_the_re_check(tmp_path: Path) -> None:
+    cfg = paper_cfg(tmp_path)
+    wall = FakeWallClock(at(9, 14))
+    conns = FakeConnections(wall)
+    calls: list[int] = []
+
+    async def probe() -> ClockOffset:
+        calls.append(1)
+        return _offset(3.0)
+
+    conns.clock_probe = probe
+    s = session(cfg, wall, conns)
+    bot = await s.start()
+    try:
+        assert calls == [1]  # one reading at start
+        assert bot.scheduler.jobs["clock_check"].every_seconds == 900
+        state = await bot.control.build_state()
+        clock = state["connections"]["clock"]
+        assert clock["offset_seconds"] == 3.0 and clock["drifted"] and clock["limit_seconds"] == 2.0
+        assert state["connections"]["entry_feed_lag_limit_seconds"] == 5.0
+        assert "entry_block" in state["session"]
+    finally:
+        await s.shutdown()

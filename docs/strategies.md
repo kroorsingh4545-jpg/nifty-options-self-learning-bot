@@ -118,7 +118,12 @@ The engine's entry decision for that signal, followed by the resulting PAPER tra
 | `recenter` | 30 s | keep ATM ± 3 strikes (CE and PE) subscribed; held contracts are never dropped |
 | `reconcile` | 300 s | periodic broker reconciliation |
 | `new_day` | 09:00 Mon–Fri | clear kill events and PAUSED/KILLED statuses from **previous** days only |
+| `clock_check` | 900 s | PAPER session: PC clock vs Upstox server time (3 rate-limited LTP calls); the dashboard warns beyond `broker.max_clock_offset_seconds` (2 s) |
 | `feed_health` | 60 s | PAPER session: INFO feed summary (messages, ticks, decode errors, late ticks, lag); WARNING once when the NIFTY feed lag exceeds `websocket.max_feed_lag_seconds` |
+
+New entries are also refused (the contract resolver returns the reason; exits are never affected) while the
+instrument list for today is not loaded, or while the NIFTY feed lag is above
+`websocket.max_entry_feed_lag_seconds` (5 s). The dashboard shows the reason under "New entries blocked".
 
 ## Engine states
 

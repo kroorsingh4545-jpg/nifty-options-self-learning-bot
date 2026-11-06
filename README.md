@@ -143,6 +143,14 @@ python -m runtime paper --baseline       # trade the YAML config, ignoring learn
 python -m runtime health                 # exit 0 if the bot's heartbeat is fresh (used by Docker)
 ```
 
+**PC clock.** `check` and `paper` compare this PC's clock with Upstox server time (the HTTP `Date` header of
+three rate-limited market-data calls). More than `broker.max_clock_offset_seconds` (2 s) off, or not measurable,
+is a FAIL and `paper` refuses to start. Candles are timed by the exchange but the session (entry cut-off,
+square-off) by this PC, so keep it synced (Windows, admin: `net start w32time` then `w32tm /resync`). During a
+session the clock is re-checked every 15 minutes and the dashboard warns on drift; while the NIFTY feed lag
+(local receipt − exchange time of index ticks) is above `websocket.max_entry_feed_lag_seconds` (5 s), **new
+entries are blocked**. Exits (stops, targets, trailing, square-off, manual exits) are never blocked.
+
 **Pre-flight** (`check`, and again at start-up). FAIL items block the launch: not PAPER, LIVE routing
 present, missing Upstox credentials, a database with a newer schema, or a database inside a research
 directory. WARN items do not: no NSE holidays for this year (every entry is then blocked), not a trading

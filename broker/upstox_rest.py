@@ -29,6 +29,7 @@ import json
 import random
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, time, timedelta
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -49,7 +50,7 @@ from broker.upstox_mapping import parse_candles, parse_funds, parse_instrument, 
 from broker.upstox_rate_limiter import ApiCategory, Clock, RealClock, UpstoxRateLimiter, backoff_delay
 from config import hard_limits
 from config.settings import BotConfig, BrokerSection
-from core.clock import IST, now_ist
+from core.clock import IST, ClockOffset, now_ist
 from core.enums import TradingMode, UpstoxTokenType
 from core.masking import DEFAULT_MASKER, SecretMasker
 from core.models import BrokerPosition, Candle, Funds, Instrument
@@ -229,6 +230,7 @@ class UpstoxRestClient(MarketDataSource):
         category: ApiCategory,
         params: dict[str, Any] | None = None,
         retry: bool,
+        on_response: Callable[[httpx.Response], None] | None = None,
     ) -> Any:
         self._check_scope(path)  # before the token or a rate-limit slot is touched
         cfg = self.settings
@@ -265,6 +267,8 @@ class UpstoxRestClient(MarketDataSource):
                 raise RateLimitError(f"{method} {path}: HTTP 429 after {attempt + 1} attempt(s)")
 
             self.limiter.record_success(category)
+            if on_response is not None:
+                on_response(resp)
             body = self._json(resp)
             code, message = _first_error(body) if resp.status_code >= 400 or self._is_error(body) else (None, "")
 
@@ -376,6 +380,51 @@ class UpstoxRestClient(MarketDataSource):
                 if token and value.get("last_price") is not None:
                     out[token] = float(value["last_price"])
         return out
+
+    async def measure_clock_offset(self, instrument_key: str, samples: int = 3) -> ClockOffset:
+        """Compare this PC's clock with Upstox server time (the HTTP ``Date``
+        header of a market-data LTP call).
+
+        ``Date`` has 1-second resolution, so the server time is taken as the
+        middle of that second and the local time as the middle of the request.
+        Of ``samples`` calls (each through the central rate limiter), the one
+        with the shortest round trip is used. Raises when no call returns a
+        usable ``Date`` header.
+        """
+        best: ClockOffset | None = None
+        for _ in range(max(1, samples)):
+            seen: dict[str, Any] = {}
+
+            def grab(resp: httpx.Response, seen: dict[str, Any] = seen) -> None:
+                seen["date"] = resp.headers.get("date")
+                seen["at"] = self._now()
+                try:
+                    seen["rtt"] = resp.elapsed.total_seconds()
+                except RuntimeError:  # elapsed not available (e.g. a stream not yet closed)
+                    seen["rtt"] = 0.0
+
+            await self._request("GET", "/v3/market-quote/ltp", params={"instrument_key": instrument_key},
+                                category=ApiCategory.STANDARD, retry=False, on_response=grab)
+            header = seen.get("date")
+            if not header:
+                continue
+            try:
+                server = parsedate_to_datetime(str(header))
+            except (TypeError, ValueError):
+                continue
+            if server.tzinfo is None:
+                continue
+            rtt = max(0.0, float(seen["rtt"]))
+            local_mid = seen["at"] - timedelta(seconds=rtt / 2)
+            server_mid = server + timedelta(seconds=0.5)
+            reading = ClockOffset(offset_seconds=(local_mid - server_mid).total_seconds(),
+                                  uncertainty_seconds=0.5 + rtt / 2, source="Upstox server time (HTTP Date)",
+                                  measured_at=seen["at"])
+            if best is None or reading.uncertainty_seconds < best.uncertainty_seconds:
+                best = reading
+        if best is None:
+            raise BrokerError("Upstox responses carried no usable Date header")
+        return best
 
     async def get_intraday_candles(self, instrument_key: str, interval_minutes: int) -> list[Candle]:
         if not 1 <= interval_minutes <= 300:

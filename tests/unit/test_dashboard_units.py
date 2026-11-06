@@ -15,8 +15,10 @@ from dashboard.commands import COMMAND_TTL, CommandClient
 from dashboard.data_access import (
     RuntimeView,
     candles_frame,
+    clock_status,
     duration,
     ema_series,
+    entry_block,
     feed_lag_status,
     inr,
     performance,
@@ -200,3 +202,17 @@ def test_price_and_feed_lag_tiles() -> None:
     assert lag == "+7.2s" and high and "PC clock" in detail
     assert feed_lag_status(_view({"feed_lag_seconds": 0.15, "feed_lag_limit_seconds": 2.0}))[2] is False
     assert feed_lag_status(_view({})) == ("—", "no live NIFTY ticks yet", False)
+
+
+def test_clock_tile_and_entry_block() -> None:
+    drifted = _view({"clock": {"offset_seconds": 7.2, "uncertainty_seconds": 0.3, "limit_seconds": 2.0,
+                               "drifted": True, "error": None}})
+    value, detail, high = clock_status(drifted)
+    assert value == "+7.2s" and high and "\u00b10.3s" in detail and "limit \u00b12s" in detail
+    assert clock_status(_view({}))[:2] == ("—", "not checked in this session")
+    assert clock_status(_view({"clock": {"offset_seconds": None, "error": "ConnectError"}}))[1] == \
+        "check failed (ConnectError)"
+    assert entry_block(RuntimeView({"session": {"entry_block": "NIFTY feed lag +7.0s ...",
+                                                "instrument_block": None}}, 1.0)) == "NIFTY feed lag +7.0s ..."
+    assert entry_block(RuntimeView({"session": {"instrument_block": "list not loaded"}}, 1.0)) == "list not loaded"
+    assert entry_block(RuntimeView({"session": {"entry_block": None}}, 1.0)) is None

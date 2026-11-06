@@ -48,7 +48,7 @@ from broker.upstox_rest import UpstoxRestClient
 from config import hard_limits
 from config.settings import BotConfig
 from core.autonomy import may_auto_deploy_paper
-from core.clock import IST, now_ist
+from core.clock import IST, ClockOffset, now_ist
 from core.enums import AutonomyLevel, EvidenceSource, TradingMode, UpstoxTokenType
 from data.market_data import MarketDataService
 from data.storage.bootstrap import sync_strategies
@@ -163,6 +163,26 @@ def preflight(cfg: BotConfig, *, now: datetime | None = None, need_upstox: bool 
     return out
 
 
+ClockProbe = Callable[[], Awaitable[ClockOffset]]
+CLOCK_FIX = "sync it (Windows, admin: net start w32time && w32tm /resync)"
+
+
+async def clock_offset_check(measure: ClockProbe, limit_seconds: float) -> Check:
+    """Pre-flight: the PC clock must be within ``limit_seconds`` of Upstox
+    server time. Fatal, and fatal too when it cannot be measured: candles are
+    timed by the exchange, the session (entry cut-off, square-off) by this
+    PC's clock."""
+    try:
+        r = await measure()
+    except Exception as exc:  # report, never raise: this is a check
+        return Check("PC clock", False, f"could not compare the PC clock with Upstox server time "
+                                        f"({type(exc).__name__}): check the network and the token")
+    ok = abs(r.offset_seconds) <= limit_seconds
+    detail = (f"PC clock {r.offset_seconds:+.1f}s vs {r.source} (\u00b1{r.uncertainty_seconds:.1f}s; "
+              f"limit \u00b1{limit_seconds:g}s)")
+    return Check("PC clock", ok, detail if ok else f"{detail}: {CLOCK_FIX}")
+
+
 def render_checks(checks: Iterable[Check]) -> str:
     return "\n".join(f"[{c.label}] {c.name}: {c.detail}" for c in checks)
 
@@ -250,6 +270,8 @@ class MarketConnections:
     status: Callable[[], dict[str, Any]]
     rate_limits: Callable[[], dict[str, Any]] | None = None
     aclose: Callable[[], Awaitable[None]] | None = None
+    #: PC clock vs a reference clock (Upstox server time); None = not measurable (test feeds)
+    clock_probe: ClockProbe | None = None
     #: what this feed is, for the trade journal (only LIVE_FEED / HISTORICAL count as evidence)
     evidence: EvidenceSource = EvidenceSource.LIVE_FEED
 
@@ -288,7 +310,8 @@ def upstox_connections(cfg: BotConfig, hooks: RiskHooks) -> MarketConnections:
                 "feed_lag_seconds": md.feed_lag(index_key),
                 "feed_lag_limit_seconds": ws.max_feed_lag_seconds}
 
-    return MarketConnections(md, rest, feed, status, limiter.usage, rest.aclose)
+    return MarketConnections(md, rest, feed, status, limiter.usage, rest.aclose,
+                             clock_probe=lambda: rest.measure_clock_offset(index_key))
 
 
 class FeedHealthMonitor:
@@ -337,6 +360,46 @@ class FeedHealthMonitor:
             log.info("market data feed lag back to normal", extra={"feed_lag_seconds": round(lag, 3)})
         self.lag_high = high
         return summary
+
+
+class ClockMonitor:
+    """In-session PC clock re-check against Upstox server time. A drift beyond
+    ``limit_seconds`` logs a WARNING once (INFO when it recovers) and shows
+    on the dashboard; a failed measurement is logged and published, never
+    raised."""
+
+    def __init__(self, measure: ClockProbe, *, limit_seconds: float) -> None:
+        self._measure = measure
+        self.limit = limit_seconds
+        self.last: ClockOffset | None = None
+        self.error: str | None = None
+        self.drifted = False
+
+    async def check(self) -> ClockOffset | None:
+        try:
+            r = await self._measure()
+        except Exception as exc:
+            self.error = type(exc).__name__
+            log.warning("PC clock check failed", extra={"error": self.error})
+            return None
+        self.last, self.error = r, None
+        drifted = abs(r.offset_seconds) > self.limit
+        if drifted and not self.drifted:
+            log.warning(f"PC clock drifted from Upstox server time: {CLOCK_FIX}",
+                        extra={"offset_seconds": round(r.offset_seconds, 3),
+                               "uncertainty_seconds": round(r.uncertainty_seconds, 3), "limit_seconds": self.limit})
+        elif not drifted and self.drifted:
+            log.info("PC clock back within limit", extra={"offset_seconds": round(r.offset_seconds, 3)})
+        self.drifted = drifted
+        return r
+
+    def status(self) -> dict[str, Any]:
+        r = self.last
+        return {"offset_seconds": round(r.offset_seconds, 3) if r else None,
+                "uncertainty_seconds": round(r.uncertainty_seconds, 3) if r else None,
+                "source": r.source if r else None,
+                "checked_at": r.measured_at.isoformat() if r else None,
+                "limit_seconds": self.limit, "drifted": self.drifted, "error": self.error}
 
 
 # --------------------------------------------------------------------------- #
@@ -392,6 +455,7 @@ class PaperSession:
         self._log_handler: AlertLogHandler | None = None
         self.learning_loop: LearningLoopRunner | None = None
         self.feed_monitor: FeedHealthMonitor | None = None
+        self.clock_monitor: ClockMonitor | None = None
 
     # Hooks into the bot's risk manager --------------------------------------
     def _on_auth_failure(self, reason: str) -> None:
@@ -413,6 +477,12 @@ class PaperSession:
             await self.conn.feed.unsubscribe(remove)
         if add:
             await self.conn.feed.subscribe(add)
+
+    def _connection_status(self) -> dict[str, Any]:
+        assert self.conn is not None
+        status = dict(self.conn.status())
+        status["clock"] = self.clock_monitor.status() if self.clock_monitor is not None else None
+        return status
 
     def _alert_channels(self) -> dict[str, Any]:
         out: dict[str, Any] = {"dashboard": "on", "log": "on"}
@@ -453,7 +523,10 @@ class PaperSession:
         bot.mode.set_autonomy(self.autonomy)
         self.bot = bot
         conn.feed.add_status_listener(bot.stack.risk.on_stream_state)
-        bot.control.set_status_providers(connection_status=conn.status, rate_limit_usage=conn.rate_limits,
+        broker_cfg = self.yaml_cfg.settings.broker
+        if conn.clock_probe is not None:
+            self.clock_monitor = ClockMonitor(conn.clock_probe, limit_seconds=broker_cfg.max_clock_offset_seconds)
+        bot.control.set_status_providers(connection_status=self._connection_status, rate_limit_usage=conn.rate_limits,
                                          alert_channels=self._alert_channels)
         for sink in self._alert_sinks:
             starter = getattr(sink, "start", None)
@@ -471,6 +544,9 @@ class PaperSession:
                                               max_lag_seconds=ws.max_feed_lag_seconds,
                                               late_ticks=lambda: bot.candles.dropped_late)
         bot.scheduler.every("feed_health", ws.feed_summary_interval_seconds, self.feed_monitor.check)
+        if self.clock_monitor is not None:
+            await self.clock_monitor.check()  # first reading for the dashboard; pre-flight already gated the start
+            bot.scheduler.every("clock_check", broker_cfg.clock_check_interval_seconds, self.clock_monitor.check)
         bot.scheduler.daily("eod_summary", self.yaml_cfg.settings.alerts.eod_summary_time,
                             lambda: send_end_of_day(bot))
         loop_cfg = self.yaml_cfg.settings.learning.loop
@@ -568,6 +644,7 @@ class PaperSession:
         log.warning("PAPER session stopped", extra={"reason": self.stop_reason or "shutdown"})
 
 
-__all__ = ["Check", "ConnectionFactory", "Feed", "FeedHealthMonitor", "MarketConnections", "PaperLaunchError",
-           "PaperSession", "RiskHooks", "SessionOptions", "SessionResult", "preflight", "render_checks",
-           "render_versions", "resolve_startup_config", "upstox_connections"]
+__all__ = ["Check", "ClockMonitor", "ClockProbe", "ConnectionFactory", "Feed", "FeedHealthMonitor",
+           "MarketConnections", "PaperLaunchError", "PaperSession", "RiskHooks", "SessionOptions", "SessionResult",
+           "clock_offset_check", "preflight", "render_checks", "render_versions", "resolve_startup_config",
+           "upstox_connections"]

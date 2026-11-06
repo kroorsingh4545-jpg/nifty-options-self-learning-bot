@@ -111,6 +111,33 @@ def feed_lag_status(view: RuntimeView) -> tuple[str, str, bool]:
     return f"{lag:+.1f}s", detail + (" · check the PC clock" if high else ""), high
 
 
+def clock_status(view: RuntimeView) -> tuple[str, str, bool]:
+    """(value, detail, drifted) for the PC clock tile: the bot's last
+    comparison with Upstox server time."""
+    c = view.get("connections", "clock") or {}
+    off, unc, limit = c.get("offset_seconds"), c.get("uncertainty_seconds"), c.get("limit_seconds")
+    if not isinstance(off, int | float):
+        err = c.get("error")
+        return "—", f"check failed ({err})" if err else "not checked in this session", False
+    drifted = bool(c.get("drifted"))
+    detail = "vs Upstox server time"
+    if isinstance(unc, int | float):
+        detail += f" \u00b1{unc:.1f}s"
+    if isinstance(limit, int | float):
+        detail += f" · limit \u00b1{limit:g}s"
+    if c.get("error"):
+        detail += f" · last re-check failed ({c['error']})"
+    return f"{off:+.1f}s", detail, drifted
+
+
+def entry_block(view: RuntimeView) -> str | None:
+    """Why new entries are blocked right now (newer bots publish every reason)."""
+    block = view.get("session", "entry_block")
+    if block is None:
+        block = view.get("session", "instrument_block")
+    return str(block) if block else None
+
+
 def runtime_view(repos: Repositories, now: datetime | None = None) -> RuntimeView:
     latest = repos.runtime_state.latest()
     if latest is None:

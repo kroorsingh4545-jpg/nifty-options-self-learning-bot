@@ -332,6 +332,7 @@ class ControlService:
                 "square_off_start": cfg.risk.time_rules.square_off_start.strftime("%H:%M"),
                 "no_new_entries_after": cfg.risk.time_rules.no_new_entries_after.strftime("%H:%M"),
                 "instrument_block": bot.instrument_block_reason(),
+                "entry_block": bot.entry_block_reason(),
             },
             "connections": {
                 "upstox": conn.get("upstox", "not connected (no Upstox session in this process)"),
@@ -346,6 +347,8 @@ class ControlService:
                 "message_errors": conn.get("message_errors"),
                 "feed_lag_seconds": conn.get("feed_lag_seconds"),
                 "feed_lag_limit_seconds": conn.get("feed_lag_limit_seconds"),
+                "entry_feed_lag_limit_seconds": cfg.settings.websocket.max_entry_feed_lag_seconds,
+                "clock": conn.get("clock"),
                 "subscriptions": len(bot.universe.subscribed | bot.base_keys()) if bot.universe else 0,
             },
             "market": {

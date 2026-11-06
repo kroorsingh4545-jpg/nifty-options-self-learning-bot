@@ -12,6 +12,7 @@ import pytest
 
 from broker.errors import (
     BrokerAPIError,
+    BrokerError,
     BrokerTimeoutError,
     LiveTradingDisabledError,
     MaintenanceWindowError,
@@ -313,3 +314,29 @@ def test_error_body_shape_handling() -> None:
     assert _first_error({"status": "error", "errors": [{"error_code": "X", "message": "m"}]}) == ("X", "m")
     assert _first_error({"status": "error", "errors": [{"errorCode": "Y", "message": "n"}]}) == ("Y", "n")
     assert _first_error(json.loads("[]"))[0] is None
+
+
+# --------------------------------------------------------------------------- #
+# PC clock vs Upstox server time
+# --------------------------------------------------------------------------- #
+
+
+async def test_clock_offset_from_the_http_date_header() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        # 04:30:00 UTC = 10:00:00 IST; the server second is taken as 10:00:00.5
+        return httpx.Response(200, json={"status": "success", "data": {}},
+                              headers={"Date": "Fri, 06 Nov 2026 04:30:00 GMT"})
+
+    local = datetime(2026, 11, 6, 10, 0, 7, 700_000, tzinfo=IST)  # PC ~7.2 s fast
+    h = Harness(handler, now=FakeWallClock(local), token_type=UpstoxTokenType.ANALYTICS)
+    r = await h.client.measure_clock_offset("NSE_INDEX|Nifty 50")
+    assert r.offset_seconds == pytest.approx(7.2, abs=0.05)
+    assert 0.5 <= r.uncertainty_seconds < 0.6 and "Upstox" in r.source
+    assert [q.url.path for q in h.requests] == ["/v3/market-quote/ltp"] * 3  # market-data calls only
+    assert h.limiter.usage()[ApiCategory.STANDARD.value]["granted"] == 3  # all through the central limiter
+
+
+async def test_clock_offset_without_a_date_header_raises() -> None:
+    h = Harness(lambda req: httpx.Response(200, json={"status": "success", "data": {}}))
+    with pytest.raises(BrokerError, match="Date"):
+        await h.client.measure_clock_offset("NSE_INDEX|Nifty 50", samples=2)

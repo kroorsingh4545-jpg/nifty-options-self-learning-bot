@@ -146,6 +146,10 @@ class BrokerSection(_Frozen):
     debounce_seconds: NonNegativeFloat = 1.0
     token_expiry_time: HHMM = time(3, 30)
     circuit_breaker: CircuitBreakerSection = CircuitBreakerSection()
+    # PC clock vs Upstox server time: pre-flight FAILs beyond this; in a
+    # session the dashboard warns (re-checked every clock_check_interval_seconds).
+    max_clock_offset_seconds: PositiveFloat = Field(default=2.0, le=30.0)
+    clock_check_interval_seconds: PositiveFloat = Field(default=900.0, ge=60.0)
 
 
 MarketDataMode = Literal["ltpc", "full", "option_greeks", "full_d30"]
@@ -162,12 +166,20 @@ class WebSocketSection(_Frozen):
     subscribe_chunk_size: int = Field(default=100, ge=1, le=500)
     market_data_mode: MarketDataMode = "full"
     portfolio_update_types: tuple[PortfolioUpdateType, ...] = ("order", "position")
+
+    @model_validator(mode="after")
+    def _lag_order(self) -> WebSocketSection:
+        if self.max_entry_feed_lag_seconds < self.max_feed_lag_seconds:
+            raise ValueError("max_entry_feed_lag_seconds must be >= max_feed_lag_seconds (warn before blocking)")
+        return self
     # Candles are bucketed by exchange time but flushed by the local clock: a
     # bucket is closed by the timer only this long after it ended.
     candle_flush_grace_seconds: NonNegativeFloat = Field(default=2.0, le=30.0)
     # Median (local receipt - exchange time) of NIFTY index ticks above this
     # logs a WARNING and shows on the dashboard (usually a PC clock offset).
     max_feed_lag_seconds: PositiveFloat = 2.0
+    # NIFTY feed lag above this blocks NEW entries (never exits) until it recovers.
+    max_entry_feed_lag_seconds: PositiveFloat = Field(default=5.0, le=60.0)
     # How often the PAPER session logs a market-data feed summary (INFO).
     feed_summary_interval_seconds: PositiveFloat = 60.0
 
