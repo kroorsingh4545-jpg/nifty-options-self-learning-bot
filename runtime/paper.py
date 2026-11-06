@@ -54,10 +54,12 @@ from data.storage.bootstrap import sync_strategies
 from data.storage.database import SCHEMA_VERSION, Database
 from data.storage.repositories import Repositories
 from data.websocket_manager import WebSocketManager
+from learning.autonomy_source import persisted_autonomy
 from learning.deployment_controller import DeploymentController, VersionInUse
 from monitoring.alerts import AlertSink
 from monitoring.json_logger import get_logger
 from runtime.bot import TradingBot
+from runtime.learning_loop import LearningLoopRunner
 
 log = get_logger(__name__)
 
@@ -290,6 +292,7 @@ class PaperSession:
         self.stop_reason = ""
         self._timers: list[asyncio.TimerHandle] = []
         self._closed = False
+        self.learning_loop: LearningLoopRunner | None = None
 
     # Hooks into the bot's risk manager --------------------------------------
     def _on_auth_failure(self, reason: str) -> None:
@@ -332,6 +335,8 @@ class PaperSession:
         if fatal:
             raise PaperLaunchError("pre-flight failed: " + "; ".join(f"{c.name}: {c.detail}" for c in fatal))
         repos = self.open_database()
+        # YAML capped by the last dashboard change (a switch to OBSERVE_ONLY survives restarts).
+        self.autonomy = persisted_autonomy(repos, self.yaml_cfg)
         self.cfg, self.versions = resolve_startup_config(self.yaml_cfg, repos, autonomy=self.autonomy,
                                                          baseline=self.options.baseline)
         sync_strategies(repos.strategies, self.cfg.strategies.strategies)
@@ -355,6 +360,12 @@ class PaperSession:
                 await starter()
         await bot.prepare()
         bot.schedule()
+        loop_cfg = self.yaml_cfg.settings.learning.loop
+        if loop_cfg.enabled:
+            self.learning_loop = LearningLoopRunner(bot, self.yaml_cfg)
+            bot.scheduler.daily("learning_loop", loop_cfg.run_at, self.learning_loop.run_once)
+            log.warning("learning loop scheduled", extra={"run_at": loop_cfg.run_at.strftime("%H:%M"),
+                                                          "verify_data": str(loop_cfg.verify_data)})
         await conn.feed.start()
         if self._run_scheduler:
             bot.scheduler.start()

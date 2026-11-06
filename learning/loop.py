@@ -21,7 +21,10 @@ candidates or deployments):
                 deployed by this build.
 
 Every stage writes ``learning_events``. The autonomy level is read again at
-each promotion step, so a change on the dashboard takes effect at once.
+each promotion step through ``autonomy_fn``. Next to a running bot that is
+the bot's live level (``runtime.learning_loop`` in-process,
+``learning.autonomy_source.PublishedAutonomy`` from another process), so a
+change on the dashboard takes effect at once.
 """
 
 from __future__ import annotations
@@ -30,8 +33,10 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
+from backtest.data import HistoricalDataset, load_dataset
 from config.settings import BotConfig
 from core.autonomy import may_auto_deploy_paper
 from core.clock import IST, now_ist
@@ -47,6 +52,21 @@ from learning.reflection_engine import ReflectionEngine, ReflectionReport, rende
 from learning.validation_engine import ValidationEngine, ValidationReport
 
 log = logging.getLogger(__name__)
+
+
+class LoopRefused(RuntimeError):
+    pass
+
+
+def load_verification_data(path: Path) -> HistoricalDataset:
+    """The VERIFY dataset for a loop on the TRADING database: HISTORICAL only
+    (a SYNTHETIC dataset could never promote anything and would only fill the
+    trading database with research rows; use ``python -m learning synthetic``)."""
+    ds = load_dataset(path, require_source=True)
+    if ds.source != "HISTORICAL":
+        raise LoopRefused(f"{path} is {ds.source}: the loop on the trading database verifies on HISTORICAL data "
+                          "only (use python -m learning synthetic for research runs)")
+    return ds
 
 
 @dataclass
@@ -206,4 +226,5 @@ def render_loop_markdown(res: LoopResult) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["CandidateOutcome", "LoopResult", "ReflectiveLoop", "StrategyRun", "render_loop_markdown"]
+__all__ = ["CandidateOutcome", "LoopRefused", "LoopResult", "ReflectiveLoop", "StrategyRun", "load_verification_data",
+           "render_loop_markdown"]

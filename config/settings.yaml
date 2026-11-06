@@ -132,6 +132,15 @@ learning:
     bootstrap_resamples: 200       # seeded block bootstrap of daily P&L differences
     min_bootstrap_win_share: 0.8
     min_seeds: 5
+  # Phase 10: run the loop inside the PAPER session after the close. Off until
+  # you have a HISTORICAL dataset (meta.json "source": "HISTORICAL") to verify
+  # candidates on. The loop reads the running bot's autonomy level at every
+  # promotion step; a version it deploys runs from the NEXT session start.
+  loop:
+    enabled: false
+    run_at: "15:45"                # IST, trading days only (never during the session)
+    verify_data: null              # e.g. data/historical/nifty-2026q3
+    reports_dir: reports/learning
 
 logging:
   level: INFO

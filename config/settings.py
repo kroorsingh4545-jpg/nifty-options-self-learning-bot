@@ -226,6 +226,24 @@ class GateThresholds(_Frozen):
     min_seeds: int = Field(default=5, ge=5, le=50)
 
 
+class LearningLoopSection(_Frozen):
+    """The Reflective Loop scheduled inside a PAPER session (Phase 10). It runs
+    after the close on trading days, verifies candidates on the HISTORICAL
+    dataset in ``verify_data`` only, and reads the running bot's autonomy
+    level at every promotion step. Deployments apply at the next start."""
+
+    enabled: bool = False
+    run_at: HHMM = time(15, 45)
+    verify_data: Path | None = None  # HISTORICAL dataset directory (meta.json must say HISTORICAL)
+    reports_dir: Path = Path("reports/learning")
+
+    @model_validator(mode="after")
+    def _check(self) -> LearningLoopSection:
+        if self.enabled and self.verify_data is None:
+            raise ValueError("learning.loop.enabled needs learning.loop.verify_data (a HISTORICAL dataset)")
+        return self
+
+
 class LearningSection(_Frozen):
     """Self-learning (Reflective Loop) settings. Autonomy itself is
     ``app.autonomy_level``; nothing here can enable LIVE."""
@@ -239,6 +257,7 @@ class LearningSection(_Frozen):
     paper_validation_min_trades: int = Field(default=20, ge=10)
     auto_deploy_paper: bool = True  # PAPER_READY versions deploy to PAPER (only if autonomy allows)
     gates: GateThresholds = GateThresholds()
+    loop: LearningLoopSection = LearningLoopSection()
 
 
 class AppSettings(_Frozen):
@@ -679,4 +698,7 @@ class BotConfig(_Frozen):
             raise ValueError("sum of strategy allocated_capital exceeds total_capital")
         if risk.time_rules.square_off_end > session.market_close:
             raise ValueError("square_off_end is after market_close")
+        if self.settings.learning.loop.run_at < session.market_close:
+            raise ValueError("learning.loop.run_at must be at or after market_close (the loop never runs "
+                             "during the session)")
         return self
