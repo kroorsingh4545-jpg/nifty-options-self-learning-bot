@@ -161,7 +161,8 @@ class TradingBot:
         self.scheduler = scheduler or TradingScheduler()
         session = cfg.settings.market_session
         self.candles = CandleBuilder(session_open=session.market_open, session_close=session.market_close,
-                                     flush_grace_seconds=cfg.settings.websocket.candle_flush_grace_seconds)
+                                     flush_grace_seconds=cfg.settings.websocket.candle_flush_grace_seconds,
+                                     partial_tolerance_seconds=cfg.settings.websocket.candle_partial_tolerance_seconds)
         self.strategies: list[BaseStrategy] = []
         self.universe: OptionUniverse | None = None
         self.engine: TradingEngine | None = None
@@ -172,6 +173,7 @@ class TradingBot:
         self.last_reset_day: date | None = None
         self._resolver: OptionContractResolver | None = None
         self._lag_blocked = False
+        self._frozen_blocked = False
         self.control = ControlService(self, wall_fn=wall_fn)
 
     # ------------------------------------------------------------------ #
@@ -231,6 +233,7 @@ class TradingBot:
         gateway = RiskEntryGateway(self.cfg, s, self.broker)
         self._attach_ml()
         self._attach_learning()
+        gateway.recorder = self.learning
         strategies: list[StrategyProtocol] = list(self.strategies)
         self.engine = TradingEngine(strategies=strategies, resolver=resolver, gateway=gateway,
                                     signal_filter=self.filter, bus=self.bus,
@@ -361,9 +364,33 @@ class TradingBot:
         return (f"NIFTY feed lag {lag:+.1f}s exceeds \u00b1{limit:g}s (PC clock off or feed delayed): "
                 "new entries blocked, exits unaffected")
 
+    def frozen_price_block_reason(self) -> str | None:
+        """New entries are blocked during market hours while the NIFTY index or
+        the current future keeps ticking at one unchanged price for longer than
+        ``websocket.max_frozen_price_seconds``: signals and strike selection
+        would use a price that is not moving. Exits never consult this."""
+        limit = self.cfg.settings.websocket.max_frozen_price_seconds
+        frozen: dict[str, float] = {}
+        if self.market_hours(self._now()):
+            for key in sorted(self.base_keys()):
+                seconds = self.md.frozen_seconds(key)
+                if seconds is not None and seconds > limit:
+                    frozen[key] = round(seconds, 1)
+        blocked = bool(frozen)
+        if blocked and not self._frozen_blocked:
+            log.warning("new entries blocked: NIFTY price frozen (exits unaffected)",
+                        extra={"frozen_seconds": frozen, "limit_seconds": limit})
+        elif not blocked and self._frozen_blocked:
+            log.warning("new entries allowed again: NIFTY price moving", extra={"limit_seconds": limit})
+        self._frozen_blocked = blocked
+        if not blocked:
+            return None
+        return f"price unchanged for over {limit:g}s on {', '.join(frozen)}: new entries blocked, exits unaffected"
+
     def entry_block_reason(self) -> str | None:
         """Every reason new entries are blocked right now (None if none)."""
-        reasons = [r for r in (self.instrument_block_reason(), self.feed_lag_block_reason()) if r]
+        reasons = [r for r in (self.instrument_block_reason(), self.feed_lag_block_reason(),
+                               self.frozen_price_block_reason()) if r]
         return "; ".join(reasons) if reasons else None
 
     async def _refresh_instruments(self, day: date, instruments: Sequence[Instrument] | None) -> bool:

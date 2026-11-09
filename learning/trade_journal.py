@@ -196,6 +196,8 @@ def build_entry(facts: TradeFacts, *, data_source: EvidenceSource, risk_cfg: Map
         raise ValueError(f"trade {t.trade_uid} is missing entry / exit details")
     snaps = {s.purpose: s for s in facts.snapshots}  # the last of each purpose wins
     entry_snap = snaps.get(SnapshotPurpose.ENTRY)
+    if entry_snap is not None and entry_snap.snapshot_time > t.entry_time:
+        entry_snap = None  # taken after the entry (older sessions): would leak the outcome into learning
     exit_snap = snaps.get(SnapshotPurpose.EXIT)
     ex = execution_quality(t, facts.orders, facts.fills)
     return TradeJournalRecord(

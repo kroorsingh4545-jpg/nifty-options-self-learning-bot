@@ -17,6 +17,11 @@
   time; the grace absorbs feed latency and a small local clock offset so the
   last ticks of a bucket are not cut off.
 * Buckets without any tick produce no candle (no synthetic bars).
+* With ``partial_tolerance_seconds`` set, a candle that follows no candle of
+  the previous bucket and whose first tick came later than the tolerance into
+  its bucket (the bot started, or the feed resumed, mid-bucket) is published
+  with ``complete=False``: it missed part of its interval, so nothing may use
+  it as a full candle.
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ class _Working:
     volume: int
     oi: float | None
     ticks: int
+    partial: bool = False
 
     def update(self, price: float, vol: int, oi: float | None) -> None:
         self.high = max(self.high, price)
@@ -56,7 +62,7 @@ class _Working:
         return Candle(
             instrument_key=key, timeframe_minutes=tf, start=self.start, end=self.end, open=self.open,
             high=self.high, low=self.low, close=self.close, volume=self.volume, oi=self.oi, tick_count=self.ticks,
-            complete=complete,
+            complete=complete and not self.partial,
         )
 
 
@@ -68,6 +74,7 @@ class CandleBuilder:
         session_open: time = time(9, 15),
         session_close: time = time(15, 30),
         flush_grace_seconds: float = 0.0,
+        partial_tolerance_seconds: float | None = None,
     ) -> None:
         self.timeframes = tuple(sorted(set(timeframes)))
         if not self.timeframes or any(tf <= 0 for tf in self.timeframes):
@@ -75,6 +82,8 @@ class CandleBuilder:
         if flush_grace_seconds < 0:
             raise ValueError("flush_grace_seconds must be >= 0")
         self.flush_grace = timedelta(seconds=flush_grace_seconds)
+        self.partial_tolerance = None if partial_tolerance_seconds is None else timedelta(
+            seconds=partial_tolerance_seconds)
         self.session_open = session_open
         self.session_close = session_close
         self._working: dict[tuple[str, int], _Working] = {}
@@ -110,6 +119,11 @@ class CandleBuilder:
             return 0
         return max(0, tick.volume_today - prev[1])
 
+    def _open(self, tick: Tick, start: datetime, end: datetime, vol: int, *, previous_end: datetime | None) -> _Working:
+        partial = (self.partial_tolerance is not None and previous_end != start
+                   and tick.exchange_time - start > self.partial_tolerance)
+        return _Working(start, end, tick.ltp, tick.ltp, tick.ltp, tick.ltp, vol, tick.oi, 1, partial)
+
     def on_tick(self, tick: Tick) -> list[Candle]:
         """Process a tick; returns (and publishes) candles it completed."""
         ts = tick.exchange_time
@@ -127,13 +141,13 @@ class CandleBuilder:
             if closed is not None and start < closed:
                 late = True  # this bucket was already published (by a later tick or by flush)
             elif w is None:
-                self._working[key] = _Working(start, end, tick.ltp, tick.ltp, tick.ltp, tick.ltp, vol, tick.oi, 1)
+                self._working[key] = self._open(tick, start, end, vol, previous_end=closed)
             elif start < w.start:
                 late = True
             elif start > w.start:
                 completed.append(w.to_candle(tick.instrument_key, tf, complete=True))
                 self._closed_until[key] = w.end
-                self._working[key] = _Working(start, end, tick.ltp, tick.ltp, tick.ltp, tick.ltp, vol, tick.oi, 1)
+                self._working[key] = self._open(tick, start, end, vol, previous_end=w.end)
             else:
                 w.update(tick.ltp, vol, tick.oi)
         if late:

@@ -15,8 +15,9 @@ from core.clock import now_ist
 #: v2: trades stop-loss tighten-only trigger; v3: control_commands, runtime_state;
 #: v4: model_runs.data_source + only HISTORICAL-trained models can be validated / promoted;
 #: v5: rl_decisions, trade_journal, strategy_versions, strategy_deployments,
-#: model_runs.promoted_autonomy + autonomy / promotion triggers (Phase 9)
-SCHEMA_VERSION = 5
+#: model_runs.promoted_autonomy + autonomy / promotion triggers (Phase 9);
+#: v6: candles, option_quotes (recorded market data for session reviews)
+SCHEMA_VERSION = 6
 
 #: Columns added to existing tables after v1, applied before the schema script
 #: on databases created by an older version (CREATE TABLE IF NOT EXISTS does
@@ -46,6 +47,8 @@ REQUIRED_TABLES = (
     "trade_journal",
     "strategy_versions",
     "strategy_deployments",
+    "candles",
+    "option_quotes",
 )
 
 

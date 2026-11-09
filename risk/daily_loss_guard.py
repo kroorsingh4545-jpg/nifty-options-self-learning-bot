@@ -108,11 +108,18 @@ class DailyLossGuard:
         self._s(sid).trades += 1
         self._persist(sid)
 
-    def record_trade_close(self, sid: str, net_pnl: float, charges: float = 0.0) -> None:
+    def record_trade_close(self, sid: str, net_pnl: float, charges: float = 0.0,
+                           unrealized_after: float | None = None) -> None:
+        """``unrealized_after`` is the strategy's open P&L without this trade.
+        It is applied together with the realized P&L, so the closed trade is
+        never counted twice (once realized, once still marked open) when
+        drawdown and the loss limits are evaluated."""
         self.roll_day_if_needed()
         s = self._s(sid)
         s.realized += net_pnl
         s.charges += charges
+        if unrealized_after is not None:
+            s.unrealized = unrealized_after
         if net_pnl < 0:
             s.losses += 1
             s.consecutive_losses += 1

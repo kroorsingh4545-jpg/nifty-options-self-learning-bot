@@ -18,7 +18,8 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Iterable, Sequence
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from sqlite3 import Row
 from typing import Any, TypeVar
 
 from core.autonomy import PAPER_PROMOTION_LEVELS
@@ -40,6 +41,7 @@ from core.enums import (
     TradeStatus,
     TradingMode,
 )
+from core.models import Candle, Tick
 from data.storage.database import Database
 from data.storage.records import (
     ControlCommandRecord,
@@ -792,6 +794,55 @@ class RuntimeStateRepository(_ModeScoped):
         return json.loads(row["state_json"]), ensure_ist(datetime.fromisoformat(row["published_at"]))
 
 
+class MarketHistoryRepository(_Clocked):
+    """Recorded candles and option quotes, for reviewing a session afterwards.
+    Market data is the same in every trading mode, so it is not mode-scoped.
+    Nothing in trading reads these tables."""
+
+    _CANDLE_COLUMNS = ("instrument_key", "timeframe_minutes", "start_time", "end_time", "open", "high", "low", "close",
+                       "volume", "oi", "tick_count", "complete", "source", "recorded_at")
+
+    def save_candles(self, rows: Iterable[tuple[Candle, str]]) -> int:
+        """Upsert (candle, source) pairs. A complete candle replaces a partial
+        one; a candle already recorded as complete is never rewritten."""
+        at = self.now().isoformat()
+        values = [(c.instrument_key, c.timeframe_minutes, c.start.isoformat(), c.end.isoformat(), c.open, c.high, c.low,
+                   c.close, c.volume, c.oi, c.tick_count, int(c.complete), source, at) for c, source in rows]
+        if not values:
+            return 0
+        columns = ", ".join(self._CANDLE_COLUMNS)
+        marks = ", ".join("?" for _ in self._CANDLE_COLUMNS)
+        keys = ("instrument_key", "timeframe_minutes", "start_time")
+        updates = ", ".join(f"{c} = excluded.{c}" for c in self._CANDLE_COLUMNS if c not in keys)
+        sql = (f"INSERT INTO candles({columns}) VALUES ({marks}) "  # noqa: S608 - fixed column names
+               f"ON CONFLICT({', '.join(keys)}) DO UPDATE SET {updates} "
+               "WHERE candles.complete = 0 AND excluded.complete = 1")
+        with self.db.transaction() as conn:
+            conn.executemany(sql, values)
+        return len(values)
+
+    def candles(self, instrument_key: str, timeframe_minutes: int, day: date) -> list[Row]:
+        return self.db.query(
+            "SELECT * FROM candles WHERE instrument_key = ? AND timeframe_minutes = ? AND start_time >= ? "
+            "AND start_time < ? ORDER BY start_time",
+            (instrument_key, timeframe_minutes, day.isoformat(), (day + timedelta(days=1)).isoformat()))
+
+    def save_quotes(self, rows: Iterable[tuple[Tick, bool]]) -> int:
+        """Insert (tick, held) pairs."""
+        values = [(t.instrument_key, t.exchange_time.isoformat(), t.received_at.isoformat(), t.ltp, t.bid, t.ask,
+                   t.bid_qty, t.ask_qty, t.volume_today, t.oi, t.iv, int(held)) for t, held in rows]
+        if not values:
+            return 0
+        with self.db.transaction() as conn:
+            conn.executemany("INSERT INTO option_quotes(instrument_key, exchange_time, received_at, ltp, bid, ask, "
+                             "bid_qty, ask_qty, volume_today, oi, iv, held) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", values)
+        return len(values)
+
+    def quotes(self, instrument_key: str) -> list[Row]:
+        return self.db.query("SELECT * FROM option_quotes WHERE instrument_key = ? ORDER BY exchange_time, id",
+                             (instrument_key,))
+
+
 class Repositories:
     """All repositories for one trading mode, sharing one Database and one
     clock (the source of every timestamp they write)."""
@@ -816,6 +867,7 @@ class Repositories:
         self.journal = TradeJournalRepository(db, self.mode, clock=clock)
         self.strategy_versions = StrategyVersionRepository(db, clock=clock)
         self.deployments = StrategyDeploymentRepository(db, clock=clock)
+        self.market_history = MarketHistoryRepository(db, clock=clock)
 
     def with_clock(self, clock: Clock) -> Repositories:
         """The same database and mode, stamping timestamps with ``clock``."""
@@ -829,6 +881,7 @@ __all__: Sequence[str] = (
     "FeatureSnapshotRepository",
     "FillRepository",
     "LearningEventRepository",
+    "MarketHistoryRepository",
     "ModeIsolationError",
     "ModelRunRepository",
     "NotFoundError",

@@ -1,17 +1,15 @@
 """Wires the LOG stage of the Reflective Loop into a TradingBot (Phase 9).
 
-On every completed 1-minute NIFTY index candle (after the feature engine has
-seen it) the recorder looks at the position manager's trades:
+* ENTRY snapshot: taken when risk has approved a signal and BEFORE the entry
+  order exists (``capture_entry``, called by the gateway): the market features
+  at that moment (``ml.feature_engineering``, the same code as training) and
+  the selected contract's quote stamped at or before it. Nothing about the
+  fill or what the market did afterwards can be in it, so it is safe to learn
+  from.
+* EXIT snapshot: on the first completed 1-minute NIFTY index candle after a
+  trade CLOSES, then its ``trade_journal`` row
+  (``learning.trade_journal.TradeJournal``).
 
-* a trade whose entry has filled and that has no ENTRY snapshot yet gets one:
-  the market features AS OF that minute (``ml.feature_engineering``, the
-  same code as training), the selected contract's quote stamped at or before
-  the as-of time, entry price / stop / target;
-* a trade that has CLOSED gets an EXIT snapshot the same way, then its
-  ``trade_journal`` row (``learning.trade_journal.TradeJournal``).
-
-Snapshots are taken at the first candle after the event, so they lag the
-fill by up to one minute; they never use data from after their as-of time.
 ``flush`` journals anything still pending (end of a backtest, shutdown), and
 start-up backfills closed trades from earlier sessions. Those (and any trade
 created before this session started) are labelled UNKNOWN: only trades opened
@@ -24,12 +22,13 @@ logged and never reaches orders, risk or the engine.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from core.enums import EvidenceSource, SnapshotPurpose, TradeStatus
-from core.models import Candle
+from core.models import Candle, Instrument, Signal
 from execution.position_manager import ManagedTrade
 from learning.trade_journal import TradeJournal, config_risk_fn, record_trade_snapshot
 from ml.feature_engineering import FeatureEngine
@@ -47,7 +46,6 @@ class LearningRecorder:
     bot: TradingBot
     features: FeatureEngine
     journal: TradeJournal
-    entry_snapped: set[str] = field(default_factory=set)
     journaled: set[str] = field(default_factory=set)
     failures: int = 0
 
@@ -55,6 +53,26 @@ class LearningRecorder:
         if candle.timeframe_minutes != 1 or not candle.complete or candle.instrument_key != self.bot.spot_key:
             return
         self.scan()
+
+    def capture_entry(self, signal: Signal, instrument: Instrument) -> tuple[datetime, Mapping[str, Any]]:
+        """Market features now, before the entry order exists. Never raises."""
+        as_of = self.bot._now()
+        try:
+            option = contract_context(self.bot, instrument, as_of)
+            return as_of, dict(self.features.features(as_of, direction=signal.option_type, option=option))
+        except Exception as exc:  # e.g. not enough bars yet: still record that we tried
+            return as_of, {"error": f"{type(exc).__name__}: {exc}"[:300]}
+
+    def bind_entry(self, trade: ManagedTrade, captured: tuple[datetime, Mapping[str, Any]]) -> None:
+        """Persist the captured ENTRY snapshot once the trade exists. Never raises."""
+        as_of, feats = captured
+        try:
+            record_trade_snapshot(self.bot.repos, trade, SnapshotPurpose.ENTRY, as_of, feats,
+                                  instrument_key=trade.instrument.instrument_key)
+        except Exception:
+            self.failures += 1
+            log.exception("entry feature snapshot failed (trading is unaffected)",
+                          extra={"strategy_id": trade.strategy_id, "trade": trade.trade_uid})
 
     def _features(self, t: ManagedTrade, as_of: datetime) -> dict[str, Any]:
         option = contract_context(self.bot, t.instrument, as_of)
@@ -75,9 +93,6 @@ class LearningRecorder:
         for t in list(self.bot.stack.positions.trades.values()):
             uid = t.trade_uid
             try:
-                if t.entry_complete and t.filled_qty > 0 and uid not in self.entry_snapped:
-                    self.entry_snapped.add(uid)
-                    self._snapshot(t, SnapshotPurpose.ENTRY, now)
                 if t.status is TradeStatus.CLOSED and uid not in self.journaled:
                     self.journaled.add(uid)
                     self._snapshot(t, SnapshotPurpose.EXIT, now)
@@ -115,9 +130,6 @@ def build_learning(bot: TradingBot, *, data_source: EvidenceSource,
             log.info("journaled closed trades from earlier sessions", extra={"trades": n})
     except Exception:
         log.exception("trade journal backfill failed at start-up (trading is unaffected)")
-    for t in bot.stack.positions.trades.values():  # restored open trades: their entry snapshot is gone
-        if t.entry_complete:
-            rec.entry_snapped.add(t.trade_uid)
     bot.candles.add_listener(rec.on_candle)  # after the feature engine's own listener
     return rec
 

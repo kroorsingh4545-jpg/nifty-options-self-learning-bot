@@ -384,7 +384,7 @@ def test_v3_database_is_migrated_to_current(tmp_path: Path) -> None:
     raw.close()
     db = Database(path)
     db.initialize()
-    assert db.current_schema_version() == SCHEMA_VERSION == 5
+    assert db.current_schema_version() == SCHEMA_VERSION == 6
     # an existing row of unknown provenance keeps its status but can never be promoted again
     assert db.query_one("SELECT data_source FROM model_runs WHERE run_id = 'OLD'")["data_source"] == "UNKNOWN"  # type: ignore[index]
     with pytest.raises(sqlite3.IntegrityError, match="HISTORICAL"):

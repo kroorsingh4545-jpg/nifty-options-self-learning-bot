@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import date, datetime
 from typing import Any
 
@@ -22,6 +22,9 @@ from config.settings import StrategyConfig
 from core.clock import now_ist
 from core.enums import OptionType
 from core.models import Candle, Signal, Tick
+from monitoring.json_logger import get_logger
+
+log = get_logger(__name__)
 
 
 class StrategyParamsError(ValueError):
@@ -51,6 +54,11 @@ class BaseStrategy(ABC):
         self.day: date | None = None
         self.entries: dict[OptionType, int] = {OptionType.CE: 0, OptionType.PE: 0}
         self.signals_today = 0
+        self.replaying = False  # True while candles only update state: no signal can come out
+        self.log_decisions = False  # the PAPER session logs one line per evaluated candle
+        self.last_reason: str | None = None
+        self.last_context: dict[str, Any] = {}
+        self._last_end: dict[int, datetime] = {}  # timeframe -> end of the newest candle seen
         self.reset_day(self._now().date())
 
     # ------------------------------------------------------------------ #
@@ -93,9 +101,48 @@ class BaseStrategy(ABC):
         if d != self.day:
             self.reset_day(d)
 
+    def _mark_seen(self, candle: Candle) -> None:
+        tf = candle.timeframe_minutes
+        last = self._last_end.get(tf)
+        self._last_end[tf] = candle.end if last is None else max(last, candle.end)
+
     def on_candle(self, candle: Candle) -> Sequence[Signal]:
         self._roll(candle)
-        return self.generate(candle)
+        self._mark_seen(candle)
+        signals = self.generate(candle)
+        if self.log_decisions and candle.timeframe_minutes == self.timeframe:
+            self._log_decision(candle, signals)
+        return signals
+
+    def observe_candle(self, candle: Candle) -> None:
+        """Update indicators from a candle that must not trade (history, or the
+        engine is paused). A setup already running here is not a fresh one."""
+        self._roll(candle)
+        self._mark_seen(candle)
+        before = self.signals_today
+        self.replaying = True
+        try:
+            self.generate(candle)
+        finally:
+            self.replaying = False
+            self.signals_today = before
+
+    def replay(self, candles: Iterable[Candle]) -> int:
+        """Feed earlier completed candles, oldest first, without signalling.
+        Candles this strategy has already seen are skipped. Returns how many
+        were used."""
+        used = 0
+        for c in sorted(candles, key=lambda x: (x.end, x.timeframe_minutes)):
+            last = self._last_end.get(c.timeframe_minutes)
+            if self.wants(c) and (last is None or c.end > last):
+                self.observe_candle(c)
+                used += 1
+        return used
+
+    def _log_decision(self, candle: Candle, signals: Sequence[Signal]) -> None:
+        log.info("strategy candle evaluated", extra={
+            "strategy_id": self.strategy_id, "candle_end": candle.end.isoformat(), "signal": bool(signals),
+            "reason": self.last_reason, **self.last_context})
 
     def on_tick(self, tick: Tick) -> Sequence[Signal]:
         return ()

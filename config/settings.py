@@ -182,6 +182,25 @@ class WebSocketSection(_Frozen):
     max_entry_feed_lag_seconds: PositiveFloat = Field(default=5.0, le=60.0)
     # How often the PAPER session logs a market-data feed summary (INFO).
     feed_summary_interval_seconds: PositiveFloat = 60.0
+    # A candle whose first tick came this long after its bucket began, with no
+    # candle before it, is partial (bot started or feed resumed mid-bucket): it
+    # never counts for indicators or warm-up.
+    candle_partial_tolerance_seconds: NonNegativeFloat = Field(default=5.0, le=30.0)
+    # Wait before asking Upstox for the full version of a partial candle.
+    candle_repair_delay_seconds: NonNegativeFloat = Field(default=3.0, le=30.0)
+    # NIFTY index / future still ticking but at one unchanged price for longer
+    # than this blocks NEW entries (never exits) until the price moves.
+    max_frozen_price_seconds: PositiveFloat = Field(default=60.0, le=600.0)
+
+
+class MarketRecordingSection(_Frozen):
+    """What the PAPER session saves for later review (never read by trading)."""
+
+    enabled: bool = True
+    # Sampling of subscribed option quotes, per contract.
+    quote_interval_seconds: PositiveFloat = 5.0
+    held_quote_interval_seconds: PositiveFloat = 1.0  # while a position is open in the contract
+    flush_interval_seconds: PositiveFloat = 5.0
 
 
 class PaperBrokerSection(_Frozen):
@@ -310,6 +329,7 @@ class AppSettings(_Frozen):
     database: DatabaseSection = DatabaseSection()
     broker: BrokerSection = BrokerSection()
     websocket: WebSocketSection = WebSocketSection()
+    market_recording: MarketRecordingSection = MarketRecordingSection()
     paper_broker: PaperBrokerSection = PaperBrokerSection()
     costs: CostsSection = CostsSection()
     execution: ExecutionSection = ExecutionSection()

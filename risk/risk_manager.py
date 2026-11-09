@@ -201,7 +201,8 @@ class RiskManager:
             return self._reject(p, [f"position size zero: {sizing.reason}"], entry, levels, sizing, budget)
         log.info("entry approved by risk", extra={
             "strategy_id": sid, "instrument": key, "qty": sizing.quantity, "entry": entry, "stop": levels.stop,
-            "target": levels.target, "risk": sizing.risk_amount, "budget": round(budget, 2)})
+            "target": levels.target, "risk": sizing.risk_amount, "budget": round(budget, 2), "bid": tick.bid,
+            "ask": tick.ask, "ltp": tick.ltp, "spread": round(tick.spread, 2), "spread_pct": round(spread_pct, 3)})
         return RiskDecision(True, (), p, entry, levels, sizing, budget, scfg.trailing)
 
     def _reject(self, p: EntryProposal, reasons: list[str], entry: float | None = None,

@@ -76,7 +76,16 @@ websocket:
   max_feed_lag_seconds: 2        # NIFTY tick lag (receipt - exchange time) above this -> WARNING (check PC clock)
   max_entry_feed_lag_seconds: 5  # ... above this NEW entries are blocked (exits never) until it recovers
   feed_summary_interval_seconds: 60  # INFO feed summary (messages, ticks, decode errors, lag)
+  candle_partial_tolerance_seconds: 5  # first tick later than this into a non-contiguous bucket -> partial candle
+  candle_repair_delay_seconds: 3  # wait before fetching the full version of a partial candle from Upstox
+  max_frozen_price_seconds: 60   # NIFTY ticking at one unchanged price this long -> NEW entries blocked (exits never)
   portfolio_update_types: [order, position]
+
+market_recording:                # saved for session reviews; trading never reads these tables
+  enabled: true
+  quote_interval_seconds: 5      # one option_quotes row per subscribed contract per interval
+  held_quote_interval_seconds: 1 # ... this often while a position is open in the contract
+  flush_interval_seconds: 5
 
 paper_broker:
   starting_funds: 200000

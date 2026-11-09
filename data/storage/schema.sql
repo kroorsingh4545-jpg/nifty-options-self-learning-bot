@@ -1,5 +1,5 @@
 -- ============================================================================
--- NIFTY options self-learning bot — SQLite schema, version 5
+-- NIFTY options self-learning bot — SQLite schema, version 6
 --
 -- Design rules enforced IN THE DATABASE (not only in Python):
 --   * Every order / fill / position / trade row carries `mode` (PAPER | LIVE).
@@ -468,6 +468,50 @@ CREATE TABLE IF NOT EXISTS strategy_deployments (
     CHECK (action <> 'RETIRE' OR version_uid IS NULL)
 );
 CREATE INDEX IF NOT EXISTS ix_strategy_deployments_strategy ON strategy_deployments(mode, strategy_id, id);
+
+-- ---------------------------------------------------------------------------
+-- candles (v6): every candle the session built or back-filled, for reviews.
+-- complete = 0 is a partial candle (started mid-bucket); a complete one replaces
+-- it. Market data is the same in every mode, so these rows carry no mode.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS candles (
+    instrument_key     TEXT NOT NULL,
+    timeframe_minutes  INTEGER NOT NULL CHECK (timeframe_minutes > 0),
+    start_time         TEXT NOT NULL,
+    end_time           TEXT NOT NULL,
+    open               REAL NOT NULL,
+    high               REAL NOT NULL,
+    low                REAL NOT NULL,
+    close              REAL NOT NULL,
+    volume             INTEGER NOT NULL DEFAULT 0 CHECK (volume >= 0),
+    oi                 REAL,
+    tick_count         INTEGER NOT NULL DEFAULT 0 CHECK (tick_count >= 0),
+    complete           INTEGER NOT NULL CHECK (complete IN (0,1)),
+    source             TEXT NOT NULL CHECK (source IN ('LIVE','BACKFILL')),
+    recorded_at        TEXT NOT NULL,
+    PRIMARY KEY (instrument_key, timeframe_minutes, start_time)
+) WITHOUT ROWID;
+
+-- ---------------------------------------------------------------------------
+-- option_quotes (v6): sampled quotes of subscribed option contracts, for reviews
+-- (held = 1 while the bot had a position in the contract).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS option_quotes (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    instrument_key TEXT NOT NULL,
+    exchange_time  TEXT NOT NULL,
+    received_at    TEXT NOT NULL,
+    ltp            REAL NOT NULL,
+    bid            REAL,
+    ask            REAL,
+    bid_qty        INTEGER,
+    ask_qty        INTEGER,
+    volume_today   INTEGER,
+    oi             REAL,
+    iv             REAL,
+    held           INTEGER NOT NULL DEFAULT 0 CHECK (held IN (0,1))
+);
+CREATE INDEX IF NOT EXISTS ix_option_quotes_key_time ON option_quotes(instrument_key, exchange_time);
 
 -- ============================================================================
 -- Isolation / integrity triggers

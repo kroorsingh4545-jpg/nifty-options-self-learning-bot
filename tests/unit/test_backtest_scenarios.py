@@ -19,9 +19,11 @@ from backtest.data import HistoricalDataset
 from backtest.report_generator import build_report
 from backtest.synthetic_data import SyntheticSpec, generate_synthetic_dataset
 from config.loader import load_config
+from config.settings import BotConfig
 from core.clock import IST
 from core.enums import OrderPurpose, OrderSide, OrderStatus, OrderType
 from execution.order_manager import OrderIntent
+from risk.daily_loss_guard import DailyLossGuard
 from tests.stack_harness import CE, Harness
 
 CFG = load_config(use_default_env_file=False)
@@ -181,8 +183,8 @@ def test_partial_fills_keep_positions_and_pnl_consistent() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_daily_loss_kill_blocks_the_day_and_clears_next_morning(
-        config_dir: Path, edit_yaml: Callable[[str, Callable[[dict[str, Any]], None]], None]) -> None:
+def _tight_limits_config(config_dir: Path,
+                         edit_yaml: Callable[[str, Callable[[dict[str, Any]], None]], None]) -> BotConfig:
     def risk(d: dict[str, Any]) -> None:  # stricter limits only (hard limits allow tightening)
         d["per_strategy"]["max_daily_loss"] = 1000
         d["per_trade"]["max_risk_per_trade"] = 1000
@@ -194,7 +196,31 @@ def test_daily_loss_kill_blocks_the_day_and_clears_next_morning(
 
     edit_yaml("risk_limits.yaml", risk)
     edit_yaml("strategy_defaults.yaml", strategies)
-    cfg = load_config(config_dir, use_default_env_file=False)
+    return load_config(config_dir, use_default_env_file=False)
+
+
+def test_stop_outs_inside_the_daily_limit_do_not_kill(
+        config_dir: Path, edit_yaml: Callable[[str, Callable[[dict[str, Any]], None]], None]) -> None:
+    """Real losses of 788.77 and 625.83 against a 1,000 limit. Before the
+    close-order fix the guard counted the closing trade twice (once realized,
+    once still open), saw 1,363.77 and 1,074.58 and fired the kill switch."""
+    cfg = _tight_limits_config(config_dir, edit_yaml)
+    res = run_backtest(cfg, generate_synthetic_dataset(_spec(lot_units=25), SESSION))
+    day = [t for t in res.closed_trades() if t.created_at.date() == GAP_DAY]
+    assert sorted(t.exit_reason or "" for t in day) == ["STOP_LOSS", "STOP_LOSS"]
+    assert all(-1000 < (t.net_pnl or 0) < 0 for t in day)
+    assert not [e for e in res.risk_events if e.event_type == "KILL_SWITCH_TRIGGERED"]
+
+
+def test_daily_loss_kill_blocks_the_day_and_clears_next_morning(
+        config_dir: Path, edit_yaml: Callable[[str, Callable[[dict[str, Any]], None]], None],
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    # Sizing normally keeps one trade inside the day's limit; a loss worse than
+    # planned (a gap through the stop) is what breaches it. The guard's limit is
+    # set below what the trades were sized for, so one real loss goes through it.
+    monkeypatch.setattr(DailyLossGuard, "remaining_risk_budget", lambda self, sid: 1000.0)
+    monkeypatch.setattr(DailyLossGuard, "_limit", lambda self, sid: 600.0)
+    cfg = _tight_limits_config(config_dir, edit_yaml)
     res = run_backtest(cfg, generate_synthetic_dataset(_spec(lot_units=25), SESSION))
 
     kills = {e.strategy_id: e for e in res.risk_events if e.event_type == "KILL_SWITCH_TRIGGERED"}

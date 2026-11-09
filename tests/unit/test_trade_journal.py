@@ -82,11 +82,11 @@ def test_journal_rows_carry_everything_reflection_needs(run: tuple[BacktestResul
         slip = sum(abs(f.slippage) * f.quantity for o in orders for f in fills_by_order.get(o.id or -1, []))
         assert j.slippage == pytest.approx(round(slip, 2))
         assert j.execution_json["orders"] == len(orders) and j.execution_json["entry_fills"] >= 1
-        # features at entry and exit: point in time, taken at the first minute after the event
+        # entry features: captured before the order exists; exit features: the first minute after the exit
         fe, fx = j.features_entry_json, j.features_exit_json
         assert "rv_15m" in fe and "option_moneyness_pct" in fe and "rv_15m" in fx
         e_at, x_at = datetime.fromisoformat(fe["as_of"]), datetime.fromisoformat(fx["as_of"])
-        assert j.entry_time <= e_at <= j.entry_time + timedelta(minutes=1, seconds=1)
+        assert j.entry_time - timedelta(minutes=1) <= e_at <= j.entry_time
         assert j.exit_time <= x_at <= j.exit_time + timedelta(minutes=1, seconds=1)
 
 

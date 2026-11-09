@@ -397,8 +397,8 @@ class PositionManager(OpenTradeCounter):
         net = gross - t.charges
         log.info("trade closed", extra={"strategy_id": t.strategy_id, "trade": t.trade_uid, "reason": reason,
                                         "gross": round(gross, 2), "net": round(net, 2)})
-        self.guard.record_trade_close(t.strategy_id, round(net, 2), round(t.charges, 2))
-        self.guard.update_unrealized(t.strategy_id, self.unrealized_by_strategy().get(t.strategy_id, 0.0))
+        self.guard.record_trade_close(t.strategy_id, round(net, 2), round(t.charges, 2),
+                                      unrealized_after=self.unrealized_by_strategy().get(t.strategy_id, 0.0))
         if t.protective_order_id is not None:
             self._spawn(t, self._cancel_after_close(t))
         self._emit(TradeEvent.CLOSED, t)

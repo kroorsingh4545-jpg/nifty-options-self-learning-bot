@@ -404,14 +404,25 @@ class PaperBroker(Broker):
                 if not hit:
                     return
                 order.triggered = True
+                log.info("paper stop triggered", extra={
+                    "order_id": req.client_order_id, "strategy_id": req.strategy_id, "side": side.value,
+                    "trigger": order.trigger_price, "ltp": tick.ltp, "bid": tick.bid, "ask": tick.ask,
+                    "tick_time": tick.exchange_time.isoformat()})
             effective_type = OrderType.MARKET if req.order_type is OrderType.SL_M else OrderType.LIMIT
 
         inst = self._instruments[req.instrument_key]
+        # A triggered SL-M fills at the worse of the quote and the last trade:
+        # in a fast market the quote can lag the print that hit the trigger.
+        stop_market = req.order_type is OrderType.SL_M
         if side is OrderSide.BUY:
             ref = tick.ask if tick.ask else tick.ltp
+            if stop_market:
+                ref = max(ref, tick.ltp)
             depth = tick.ask_qty
         else:
             ref = tick.bid if tick.bid else tick.ltp
+            if stop_market:
+                ref = min(ref, tick.ltp)
             depth = tick.bid_qty
         slip = self.settings.slippage_ticks * inst.tick_size
         raw = ref + slip if side is OrderSide.BUY else ref - slip
