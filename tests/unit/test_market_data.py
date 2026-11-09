@@ -37,6 +37,10 @@ class FakeSource(MarketDataSource):
     async def get_intraday_candles(self, instrument_key: str, interval_minutes: int) -> list[Candle]:
         return []
 
+    async def get_historical_candles(self, instrument_key: str, interval_minutes: int, from_date: date,
+                                     to_date: date) -> list[Candle]:
+        return []
+
 
 def test_latest_tick_and_listeners() -> None:
     wall = FakeWallClock(T0)

@@ -61,7 +61,9 @@ from monitoring.alerts import AlertLogHandler, AlertSink
 from monitoring.json_logger import get_logger
 from monitoring.telegram import TelegramAlertSink
 from runtime.bot import TradingBot
+from runtime.history import HistoryLoader
 from runtime.learning_loop import LearningLoopRunner
+from runtime.market_recorder import MarketRecorder
 from runtime.notifications import TradeNotifier, send_end_of_day
 
 log = get_logger(__name__)
@@ -338,6 +340,7 @@ class FeedHealthMonitor:
         h = self._feed.health().get("market_data", {})
         messages = int(h.get("messages", 0) or 0)
         lag = self._md.feed_lag(self._key)
+        frozen = self._md.frozen_seconds(self._key)
         summary: dict[str, Any] = {
             "state": h.get("state"), "connected": h.get("connected"), "stale": h.get("stale"),
             "subscriptions": h.get("subscriptions", 0), "messages": messages,
@@ -345,6 +348,7 @@ class FeedHealthMonitor:
             "message_errors": h.get("message_errors", 0), "reconnects": max(0, int(h.get("connect_count", 0) or 0) - 1),
             "last_message_age_seconds": h.get("last_message_age_seconds"),
             "feed_lag_seconds": round(lag, 3) if lag is not None else None,
+            "frozen_price_seconds": round(frozen, 1) if frozen is not None else None,
             "late_ticks_dropped": self._late_ticks() if self._late_ticks else None,
         }
         self._last_messages = messages
@@ -456,6 +460,8 @@ class PaperSession:
         self.learning_loop: LearningLoopRunner | None = None
         self.feed_monitor: FeedHealthMonitor | None = None
         self.clock_monitor: ClockMonitor | None = None
+        self.history: HistoryLoader | None = None
+        self.market_recorder: MarketRecorder | None = None
 
     # Hooks into the bot's risk manager --------------------------------------
     def _on_auth_failure(self, reason: str) -> None:
@@ -492,6 +498,36 @@ class PaperSession:
             describe = getattr(s, "describe", None)
             out[getattr(s, "channel", type(s).__name__)] = describe() if callable(describe) else "on"
         return out
+
+    def _attach_market_history(self, bot: TradingBot, market_data: MarketDataService) -> None:
+        """Candle recording, per-candle decision logs and the candle loader."""
+        recording = self.yaml_cfg.settings.market_recording
+        ws = self.yaml_cfg.settings.websocket
+        on_candles = None
+        if recording.enabled:
+            def is_option(key: str) -> bool:
+                inst = bot.instruments.get(key)
+                return inst is not None and inst.option_type is not None
+
+            def held() -> set[str]:
+                return {t.instrument.instrument_key for t in bot.stack.positions.open_trades()}
+
+            self.market_recorder = recorder = MarketRecorder(bot.repos.market_history, recording, is_option=is_option,
+                                                             held_keys=held)
+            bot.candles.add_listener(recorder.on_candle)
+            market_data.add_listener(recorder.on_tick)
+            bot.scheduler.every("market_recording", recording.flush_interval_seconds, recorder.flush)
+            recorder.purge_old_quotes(bot._now().date())
+            bot.scheduler.daily("option_quote_retention", time(15, 45),
+                                lambda: recorder.purge_old_quotes(bot._now().date()))
+            on_candles = recorder.record_backfill
+        for strategy in bot.strategies:
+            strategy.log_decisions = True
+        self.history = history = HistoryLoader(bot, repair_delay_seconds=ws.candle_repair_delay_seconds,
+                                               on_candles=on_candles)
+        bot.candles.add_listener(history.on_candle)
+        # after the 09:00 start-of-day job: a futures roll leaves the new contract's EMA unseeded
+        bot.scheduler.daily("prior_session_seed", time(9, 5), history.seed_prior_session)
 
     # Start-up ---------------------------------------------------------------
     def open_database(self) -> Repositories:
@@ -539,6 +575,11 @@ class PaperSession:
         TradeNotifier(bot)
         await bot.prepare()
         bot.schedule()
+        self._attach_market_history(bot, conn.market_data)
+        assert self.history is not None
+        # before the feed starts: history first (yesterday, then today), then live candles
+        await self.history.seed_prior_session()
+        await self.history.backfill_today()
         ws = self.yaml_cfg.settings.websocket
         self.feed_monitor = FeedHealthMonitor(conn.feed, conn.market_data, reference_key=bot.spot_key,
                                               max_lag_seconds=ws.max_feed_lag_seconds,
@@ -618,6 +659,11 @@ class PaperSession:
                 log.exception("PAPER shutdown: background work did not settle")
             if bot.learning is not None:
                 bot.learning.flush()
+            if self.history is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self.history.close(), timeout)
+            if self.market_recorder is not None:
+                self.market_recorder.flush()
             open_trades = bot.stack.positions.open_trades()
             if open_trades:
                 log.warning("PAPER session stopped with open trades: they are restored at the next start, and "

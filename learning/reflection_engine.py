@@ -38,7 +38,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from core.clock import IST
+from core.clock import IST, ensure_ist
 from core.enums import EvidenceSource
 from data.storage.records import TradeJournalRecord
 
@@ -147,8 +147,18 @@ def time_bucket(t: datetime, minutes: int = 30) -> str:
     return f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}"
 
 
+def entry_features(e: TradeJournalRecord) -> dict[str, Any]:
+    """The journal row's entry features, or nothing if they were captured after
+    the entry (rows from before signal-time capture): those already contain
+    what the market did after the fill, so they must not be learned from."""
+    as_of = e.features_entry_json.get("as_of")
+    if isinstance(as_of, str) and ensure_ist(datetime.fromisoformat(as_of)) > e.entry_time:
+        return {}
+    return e.features_entry_json
+
+
 def moneyness_bucket(e: TradeJournalRecord) -> str:
-    m = e.features_entry_json.get("option_moneyness_pct")
+    m = entry_features(e).get("option_moneyness_pct")
     if not isinstance(m, int | float) or not math.isfinite(m):
         return "UNKNOWN"
     if m > 0.25:
@@ -326,12 +336,13 @@ class ReflectionEngine:
 
     def features(self, entries: Sequence[TradeJournalRecord]) -> list[FeatureFinding]:
         c = self.config
-        names = sorted({k for e in entries for k in e.features_entry_json} - NON_FEATURES)
+        usable = [(e, entry_features(e)) for e in entries]
+        names = sorted({k for _, f in usable for k in f} - NON_FEATURES)
         out: list[FeatureFinding] = []
         for name in names:
             xs, ys = [], []
-            for e in entries:
-                v = e.features_entry_json.get(name)
+            for e, f in usable:
+                v = f.get(name)
                 y = e.r_multiple if e.r_multiple is not None else None
                 if isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v) and y is not None:
                     xs.append(float(v))

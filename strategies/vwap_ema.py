@@ -12,15 +12,17 @@ CE when, for the last ``momentum_bars`` candles,
 PE is the mirror image (below both, closes falling, EMA slope negative).
 
 Filters (no signal when):
-* the EMA is not warmed up (``ema_period`` candles; ``warm_up`` can seed it
-  from earlier candles),
+* the EMA is not warmed up (``ema_period`` candles; ``warm_up`` seeds it from
+  the previous trading day, so it is ready at the open; VWAP resets every day),
 * the candle's volume < ``min_volume_ratio`` x the rolling average volume of
   the last ``chop_lookback_bars`` candles (low volume),
 * the price crossed VWAP more than ``max_vwap_crosses`` times in the last
   ``chop_lookback_bars`` candles (choppy).
 
 Signals fire on the transition into the condition and re-arm only after it
-breaks, so a trend does not produce a signal on every candle.
+breaks, so a trend does not produce a signal on every candle. A setup that was
+already true during warm-up or replayed history is not a transition: it must
+break and form again before it can signal.
 """
 
 from __future__ import annotations
@@ -69,7 +71,8 @@ class VwapEmaStrategy(BaseStrategy):
         self.sides: deque[int] = deque(maxlen=p.chop_lookback_bars + 1)  # +1 above, -1 below VWAP
         self.recent: deque[Candle] = deque(maxlen=p.momentum_bars + 1)
         self.armed = {OptionType.CE: True, OptionType.PE: True}
-        self.last_reason: str | None = None
+        self.last_reason = None
+        self.last_context = {}
 
     def _on_instrument_change(self) -> None:
         # A new futures contract trades at a different basis: indicators built
@@ -77,6 +80,10 @@ class VwapEmaStrategy(BaseStrategy):
         p: VwapEmaParams = self.params
         self.ema = EMA(p.ema_period)
         self._reset_state(self.day or self._now().date())
+
+    def prior_session_bars(self) -> int:
+        p: VwapEmaParams = self.params
+        return 0 if self.ema.ready else p.ema_period
 
     def warm_up(self, candles: Iterable[Candle]) -> int:
         """Seed the EMA from earlier completed candles (e.g. previous session)."""
@@ -99,21 +106,33 @@ class VwapEmaStrategy(BaseStrategy):
         if vwap is not None:
             self.sides.append(1 if candle.close > vwap else -1)
 
-        if vwap is None or not self.ema.ready or len(self.recent) < p.momentum_bars + 1:
-            self.last_reason = "warming up"
-            return ()
         crosses = sum(1 for a, b in zip(list(self.sides), list(self.sides)[1:], strict=False) if a != b)
-        bars = list(self.recent)[-p.momentum_bars:]
-        prev = list(self.recent)[-p.momentum_bars - 1]
         slope = self.ema.slope or 0.0
-        bull = all(c.close > vwap and c.close > ema for c in bars) and slope > 0 and \
-            all(b.close > a.close for a, b in zip([prev, *bars[:-1]], bars, strict=False))
-        bear = all(c.close < vwap and c.close < ema for c in bars) and slope < 0 and \
-            all(b.close < a.close for a, b in zip([prev, *bars[:-1]], bars, strict=False))
+        vol_ratio = candle.volume / avg_vol_before if avg_vol_before else 0.0
+        bull = bear = False
+        if vwap is not None and len(self.recent) >= p.momentum_bars + 1:
+            bars = list(self.recent)[-p.momentum_bars:]
+            prev = list(self.recent)[-p.momentum_bars - 1]
+            bull = all(c.close > vwap and c.close > ema for c in bars) and slope > 0 and \
+                all(b.close > a.close for a, b in zip([prev, *bars[:-1]], bars, strict=False))
+            bear = all(c.close < vwap and c.close < ema for c in bars) and slope < 0 and \
+                all(b.close < a.close for a, b in zip([prev, *bars[:-1]], bars, strict=False))
+        self.last_context = {"close": candle.close, "vwap": None if vwap is None else round(vwap, 2),
+                             "ema": round(ema, 2), "ema_slope": round(slope, 3), "ema_bars": self.ema.count,
+                             "volume_ratio": round(vol_ratio, 2), "vwap_crosses": crosses, "bull": bull, "bear": bear}
         if not bull:
             self.armed[OptionType.CE] = True
         if not bear:
             self.armed[OptionType.PE] = True
+        warming = vwap is None or not self.ema.ready or len(self.recent) < p.momentum_bars + 1
+        if warming or self.replaying:
+            if bull:
+                self.armed[OptionType.CE] = False
+            if bear:
+                self.armed[OptionType.PE] = False
+            self.last_reason = "warming up" if warming else "history replay"
+            return ()
+        assert vwap is not None
         if not (bull or bear):
             self.last_reason = "no momentum setup"
             return ()
@@ -123,12 +142,15 @@ class VwapEmaStrategy(BaseStrategy):
         if crosses > p.max_vwap_crosses:
             self.last_reason = f"choppy: {crosses} VWAP crosses"
             return ()
-        vol_ratio = candle.volume / avg_vol_before if avg_vol_before else 0.0
         if vol_ratio < p.min_volume_ratio:
             self.last_reason = f"low volume ({vol_ratio:.2f}x)"
             return ()
         opt = OptionType.CE if bull else OptionType.PE
-        if not self.armed[opt] or self.entries[opt] >= p.max_entries_per_direction_per_day:
+        if not self.armed[opt]:
+            self.last_reason = "waiting for a fresh setup"
+            return ()
+        if self.entries[opt] >= p.max_entries_per_direction_per_day:
+            self.last_reason = f"max {opt.value} entries reached today"
             return ()
         self.armed[opt] = False
         feats = {"close": candle.close, "vwap": vwap, "ema": ema, "ema_slope": slope,

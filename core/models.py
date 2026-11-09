@@ -156,6 +156,9 @@ class OrderRequest(_Model):
     # PAPER only: simulated order id assigned by the order manager before
     # submission (so the CREATED row can be persisted first).
     paper_order_id: str | None = None
+    # PAPER only: a stop being executed. The simulated fill uses the worse of the
+    # quote and the last trade, whichever order type carries the stop.
+    worst_price_fill: bool = False
 
     @model_validator(mode="after")
     def _prices(self) -> OrderRequest:

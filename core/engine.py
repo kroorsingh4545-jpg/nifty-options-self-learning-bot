@@ -121,6 +121,7 @@ class TradingEngine:
     def on_candle(self, candle: Candle) -> None:
         self.bus.publish(Topic.CANDLE, candle)
         if not self.accepting_signals:
+            self._observe(candle)
             return
         for s in self.strategies.values():
             if not self._usable(s) or not s.wants(candle):
@@ -132,6 +133,18 @@ class TradingEngine:
                 continue
             for sig in signals:
                 self._spawn(self.process_signal(s, sig))
+
+    def _observe(self, candle: Candle) -> None:
+        """Not accepting signals (paused / stopped): indicators stay current, so
+        resuming does not trade on a gap. No signal can come out of this."""
+        for s in self.strategies.values():
+            observe = getattr(s, "observe_candle", None)
+            if observe is None or not self._usable(s) or not s.wants(candle):
+                continue
+            try:
+                observe(candle)
+            except Exception:
+                self._strategy_failed(s, "observe_candle")
 
     def on_tick(self, tick: Tick) -> None:
         if not self.accepting_signals:

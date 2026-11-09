@@ -45,6 +45,8 @@ class MarketDataService:
         self.out_of_order = 0
         # instrument -> recent (local receipt - exchange time) in seconds, live ticks only
         self._lag: dict[str, deque[float]] = {}
+        # instrument -> (last live price, when that price first arrived)
+        self._price_since: dict[str, tuple[float, datetime]] = {}
 
     def add_listener(self, fn: Callable[[Tick], object]) -> None:
         self._listeners.append(fn)
@@ -65,6 +67,9 @@ class MarketDataService:
             self._stale.discard(tick.instrument_key)
             lag = (tick.received_at - tick.exchange_time).total_seconds()
             self._lag.setdefault(tick.instrument_key, deque(maxlen=LAG_SAMPLES)).append(lag)
+            since = self._price_since.get(tick.instrument_key)
+            if since is None or since[0] != tick.ltp:
+                self._price_since[tick.instrument_key] = (tick.ltp, tick.received_at)
         for fn in list(self._listeners):
             try:
                 fn(tick)
@@ -87,6 +92,16 @@ class MarketDataService:
         nothing. None before any live tick."""
         samples = self._lag.get(instrument_key)
         return float(median(samples)) if samples else None
+
+    def frozen_seconds(self, instrument_key: str) -> float | None:
+        """How long fresh live ticks have kept arriving at one unchanged price.
+        None while the instrument has no fresh live tick: a silent feed is the
+        staleness check's job, this catches a feed that ticks but never moves
+        (which the lag figure cannot see)."""
+        since = self._price_since.get(instrument_key)
+        if since is None or not self.is_fresh(instrument_key):
+            return None
+        return max(0.0, (self._now() - since[1]).total_seconds())
 
     def quote_status(self, instrument_key: str) -> dict[str, Any]:
         """Latest price of one instrument for display: ltp, freshness, age."""

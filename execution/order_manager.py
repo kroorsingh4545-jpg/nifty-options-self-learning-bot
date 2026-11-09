@@ -148,6 +148,7 @@ class OrderManager:
             client_order_id=coid, mode=self.mode, strategy_id=sid, instrument_key=rec.instrument_key,
             side=intent.side, quantity=intent.quantity, order_type=intent.order_type, price=intent.price,
             trigger_price=intent.trigger_price, paper_order_id=paper_id,
+            worst_price_fill=intent.purpose is OrderPurpose.STOP_LOSS,
         )
         log.info("submitting order", extra={"strategy_id": sid, "order_id": coid, "purpose": intent.purpose.value,
                                             "side": intent.side.value, "qty": intent.quantity,

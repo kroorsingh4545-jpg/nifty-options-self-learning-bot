@@ -237,6 +237,10 @@ class HistoricalSource(MarketDataSource):
     async def get_intraday_candles(self, instrument_key: str, interval_minutes: int) -> list[Candle]:
         return []
 
+    async def get_historical_candles(self, instrument_key: str, interval_minutes: int, from_date: date,
+                                     to_date: date) -> list[Candle]:
+        return []
+
 
 # --------------------------------------------------------------------------- #
 # Candle -> tick replay
