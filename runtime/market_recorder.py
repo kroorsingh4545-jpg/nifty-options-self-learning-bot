@@ -8,7 +8,7 @@ failure is logged and dropped: recording can never affect trading.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from config.settings import MarketRecordingSection
 from core.models import Candle, Tick
@@ -25,6 +25,7 @@ class MarketRecorder:
     def __init__(self, repo: MarketHistoryRepository, settings: MarketRecordingSection, *,
                  is_option: Callable[[str], bool], held_keys: Callable[[], set[str]]) -> None:
         self.repo = repo
+        self._retention = timedelta(days=settings.option_quote_retention_days)
         self._quote_interval = timedelta(seconds=settings.quote_interval_seconds)
         self._held_interval = timedelta(seconds=settings.held_quote_interval_seconds)
         self._is_option = is_option
@@ -64,6 +65,18 @@ class MarketRecorder:
             log.exception("market recording failed; these rows are lost (trading is unaffected)",
                           extra={"candles": len(candles), "quotes": len(quotes)})
             return 0
+
+    def purge_old_quotes(self, today: date) -> int:
+        """Apply the option-quote retention. Returns the rows deleted; never raises."""
+        try:
+            deleted = self.repo.purge_quotes(today - self._retention)
+        except Exception:
+            self.failures += 1
+            log.exception("option quote retention failed (trading is unaffected)")
+            return 0
+        if deleted:
+            log.info("old option quotes deleted", extra={"rows": deleted, "retention_days": self._retention.days})
+        return deleted
 
 
 __all__ = ["MAX_BUFFERED", "MarketRecorder"]

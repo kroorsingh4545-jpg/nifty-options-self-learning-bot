@@ -838,6 +838,10 @@ class MarketHistoryRepository(_Clocked):
                              "bid_qty, ask_qty, volume_today, oi, iv, held) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", values)
         return len(values)
 
+    def purge_quotes(self, before: date) -> int:
+        """Delete option quotes from before ``before``. Returns how many."""
+        return int(self.db.execute("DELETE FROM option_quotes WHERE exchange_time < ?", (before.isoformat(),)).rowcount)
+
     def quotes(self, instrument_key: str) -> list[Row]:
         return self.db.query("SELECT * FROM option_quotes WHERE instrument_key = ? ORDER BY exchange_time, id",
                              (instrument_key,))

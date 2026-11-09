@@ -137,6 +137,16 @@ class DailyLossGuard:
         self._s(sid).unrealized = unrealized
         self._evaluate(sid)
 
+    def block_entries_today(self, sid: str, reason: str) -> None:
+        """Refuse this strategy's new entries until the next trading day because
+        its market data cannot be trusted. Exits are untouched. Deliberately
+        not persisted: a restart re-checks the data, and full data lifts it."""
+        self.roll_day_if_needed()
+        s = self._s(sid)
+        if s.paused_reason is None:
+            s.paused_reason = reason
+            log.error("strategy entries blocked for the day", extra={"strategy_id": sid, "reason": reason})
+
     def _pause(self, s: StrategyDay, reason: str) -> None:
         if s.paused_reason is None:
             s.paused_reason = reason

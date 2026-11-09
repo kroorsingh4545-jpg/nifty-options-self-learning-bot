@@ -86,6 +86,7 @@ market_recording:                # saved for session reviews; trading never read
   quote_interval_seconds: 5      # one option_quotes row per subscribed contract per interval
   held_quote_interval_seconds: 1 # ... this often while a position is open in the contract
   flush_interval_seconds: 5
+  option_quote_retention_days: 30 # older option_quotes are deleted at start-up and after the close (about 60,000 rows/day)
 
 paper_broker:
   starting_funds: 200000

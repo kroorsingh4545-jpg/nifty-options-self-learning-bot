@@ -517,11 +517,17 @@ class PaperSession:
             bot.candles.add_listener(recorder.on_candle)
             market_data.add_listener(recorder.on_tick)
             bot.scheduler.every("market_recording", recording.flush_interval_seconds, recorder.flush)
+            recorder.purge_old_quotes(bot._now().date())
+            bot.scheduler.daily("option_quote_retention", time(15, 45),
+                                lambda: recorder.purge_old_quotes(bot._now().date()))
             on_candles = recorder.record_backfill
         for strategy in bot.strategies:
             strategy.log_decisions = True
-        self.history = HistoryLoader(bot, repair_delay_seconds=ws.candle_repair_delay_seconds, on_candles=on_candles)
-        bot.candles.add_listener(self.history.on_candle)
+        self.history = history = HistoryLoader(bot, repair_delay_seconds=ws.candle_repair_delay_seconds,
+                                               on_candles=on_candles)
+        bot.candles.add_listener(history.on_candle)
+        # after the 09:00 start-of-day job: a futures roll leaves the new contract's EMA unseeded
+        bot.scheduler.daily("prior_session_seed", time(9, 5), history.seed_prior_session)
 
     # Start-up ---------------------------------------------------------------
     def open_database(self) -> Repositories:
@@ -571,7 +577,9 @@ class PaperSession:
         bot.schedule()
         self._attach_market_history(bot, conn.market_data)
         assert self.history is not None
-        await self.history.backfill_today()  # before the feed starts: history first, then live candles
+        # before the feed starts: history first (yesterday, then today), then live candles
+        await self.history.seed_prior_session()
+        await self.history.backfill_today()
         ws = self.yaml_cfg.settings.websocket
         self.feed_monitor = FeedHealthMonitor(conn.feed, conn.market_data, reference_key=bot.spot_key,
                                               max_lag_seconds=ws.max_feed_lag_seconds,

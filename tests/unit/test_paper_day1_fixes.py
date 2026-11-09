@@ -13,7 +13,9 @@ from typing import Any
 import pytest
 
 from config.loader import load_config
+from config.settings import MarketRecordingSection
 from core.enums import EvidenceSource, OptionType, OrderSide, OrderType, SnapshotPurpose, TradeStatus, TradingMode
+from core.event_bus import Topic
 from core.models import Candle, Tick
 from data.candle_builder import CandleBuilder
 from data.market_data import MarketDataService
@@ -22,9 +24,12 @@ from data.storage.records import FeatureSnapshotRecord, TradeJournalRecord
 from data.storage.repositories import Repositories
 from learning.reflection_engine import ReflectionEngine, entry_features, moneyness_bucket
 from learning.trade_journal import TradeFacts, build_entry
-from runtime.history import REPAIR_ATTEMPTS, HistoryLoader
+from risk.daily_loss_guard import DailyLossGuard
+from risk.stop_loss_manager import ExitReason
+from runtime.history import PRIOR_DAY_ATTEMPTS, REPAIR_ATTEMPTS, HistoryLoader
 from runtime.market_recorder import MarketRecorder
 from runtime.paper import FeedHealthMonitor
+from strategies.indicators import EMA, SessionVWAP
 from strategies.orb_options import OrbOptionsStrategy
 from strategies.vwap_ema import VwapEmaStrategy
 from tests.fakes import FakeWallClock
@@ -57,13 +62,17 @@ def rising(n: int, start: float = 24500.0, step: float = 10.0) -> list[float]:
 
 
 class HistorySource(NoSource):
-    """The Upstox candle API, serving SYNTHETIC candles."""
+    """The Upstox candle APIs, serving SYNTHETIC candles."""
 
-    def __init__(self, data: dict[tuple[str, int], list[Candle]] | None = None) -> None:
+    def __init__(self, data: dict[tuple[str, int], list[Candle]] | None = None,
+                 prior: dict[date, list[Candle]] | None = None) -> None:
         super().__init__()
         self.data = data or {}
+        self.prior = prior or {}
         self.fail = False
+        self.fail_prior = False
         self.requests: list[tuple[str, int]] = []
+        self.prior_requests: list[date] = []
 
     async def get_intraday_candles(self, instrument_key: str, interval_minutes: int) -> list[Candle]:
         self.requests.append((instrument_key, interval_minutes))
@@ -71,19 +80,44 @@ class HistorySource(NoSource):
             raise ConnectionError("candle API down")
         return self.data.get((instrument_key, interval_minutes), [])
 
+    async def get_historical_candles(self, instrument_key: str, interval_minutes: int, from_date: date,
+                                     to_date: date) -> list[Candle]:
+        self.prior_requests.append(to_date)
+        if self.fail_prior:
+            raise ConnectionError("candle API down")
+        return self.prior.get(to_date, [])
+
+
+def fast_cfg(tmp_path: Path) -> Any:
+    """A PAPER config whose candle retries do not wait."""
+    cfg = paper_cfg(tmp_path)
+    ws = cfg.settings.websocket.model_copy(update={"candle_repair_delay_seconds": 0.0})
+    return cfg.model_copy(update={"settings": cfg.settings.model_copy(update={"websocket": ws})})
+
+
+def paused(bot: Any, sid: str) -> str | None:
+    return bot.stack.guard.state[sid].paused_reason  # type: ignore[no-any-return]
+
 
 # --------------------------------------------------------------------------- #
 # 1. Backfill at start-up
 # --------------------------------------------------------------------------- #
 
+#: complete candles at 12:41: 41 of 5 minutes (09:15 to 12:35), 206 of 1 minute
+BARS_5M, BARS_1M = 41, 206
+
+
+def one_minute(key: str, start: int = 0, volume: int = 65) -> list[Candle]:
+    return [candle(key, 1, at(9, 15) + timedelta(minutes=i), 24500, 24501, 24499, 24500, volume)
+            for i in range(start, BARS_1M)]
+
 
 def morning(volumes: int = 10_000) -> dict[tuple[str, int], list[Candle]]:
-    closes = rising(40)  # 09:15 to 12:35: every candle complete by 12:41
-    return {(FUT, 5): five_min(FUT, at(9, 15), closes, [volumes] * 40),
-            (INDEX, 1): opening_range_candles(INDEX, high=24520, low=24480),
-            (INDEX, 5): five_min(INDEX, at(9, 15), [24500.0] * 40),
-            (FUT, 1): [candle(FUT, 1, at(9, 15) + timedelta(minutes=i), 24500, 24501, 24499, 24500, 65)
-                       for i in range(15)]}
+    """A complete SYNTHETIC session up to 12:41."""
+    return {(FUT, 5): five_min(FUT, at(9, 15), rising(BARS_5M), [volumes] * BARS_5M),
+            (INDEX, 1): [*opening_range_candles(INDEX, high=24520, low=24480), *one_minute(INDEX, 15, 0)],
+            (INDEX, 5): five_min(INDEX, at(9, 15), [24500.0] * BARS_5M),
+            (FUT, 1): one_minute(FUT)}
 
 
 async def test_backfill_gives_strategies_the_same_state_as_a_full_session(tmp_path: Path) -> None:
@@ -99,13 +133,14 @@ async def test_backfill_gives_strategies_the_same_state_as_a_full_session(tmp_pa
         reference = vwap_strategy()
         for c in morning()[(FUT, 5)]:
             reference.on_candle(c)
-        assert got.ema.count == 40 and got.ema.ready and got.ema.value == pytest.approx(reference.ema.value)
+        assert paused(bot, "vwap_ema") is None and paused(bot, "orb_options") is None
+        assert got.ema.count == BARS_5M and got.ema.ready and got.ema.value == pytest.approx(reference.ema.value)
         assert got.vwap.value == pytest.approx(reference.vwap.value)  # a true session VWAP, from 09:15
         assert got.volume.mean == reference.volume.mean and list(got.sides) == list(reference.sides)
 
         assert orb.snapshot()["opening_range"] == {"high": 24520, "low": 24480, "ready": True, "invalid": None,
                                                    "minutes": 15}
-        assert bot.learning is not None and bot.learning.features.last_bar_end == at(9, 30)
+        assert bot.learning is not None and bot.learning.features.last_bar_end == at(12, 41)
 
         assert bot.engine is not None
         assert bot.engine.state.strategy("vwap_ema").signals == 0  # replay cannot signal
@@ -118,31 +153,277 @@ async def test_backfill_gives_strategies_the_same_state_as_a_full_session(tmp_pa
 async def test_backfill_ignores_forming_other_day_and_misaligned_candles() -> None:
     sim = Sim(at(12, 41))
     await sim.bot.prepare()
-    good = five_min(FUT, at(9, 15), [24500.0])[0]
+    good = five_min(FUT, at(9, 15), rising(BARS_5M))
     forming = five_min(FUT, at(12, 40), [24500.0])[0].model_copy(update={"complete": False})
     not_ended = five_min(FUT, at(12, 40), [24500.0])[0]  # marked complete, but ends after now
     yesterday = five_min(FUT, at(9, 15, day=(2026, 11, 2)), [24500.0])[0]
     misaligned = five_min(FUT, at(9, 17), [24500.0])[0]
-    sim.bot.source = HistorySource({(FUT, 5): [yesterday, good, misaligned, forming, not_ended]})
+    sim.bot.source = HistorySource({(FUT, 5): [yesterday, *good, misaligned, forming, not_ended]})
     await HistoryLoader(sim.bot, sleep=no_sleep).backfill_today()
     strat = next(x for x in sim.bot.strategies if isinstance(x, VwapEmaStrategy))
-    assert strat.ema.count == 1
+    assert strat.ema.count == BARS_5M
 
 
-async def test_a_failed_backfill_never_stops_the_session(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+async def test_a_failed_backfill_blocks_entries_for_the_day(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     wall = FakeWallClock(at(12, 41))
     source = HistorySource()
     source.fail = True
-    s = session(paper_cfg(tmp_path), wall, FakeConnections(wall, source))
+    s = session(fast_cfg(tmp_path), wall, FakeConnections(wall, source))
     with caplog.at_level(logging.WARNING):
         bot = await s.start()
     try:
-        assert any(r.getMessage().startswith("candle backfill failed") for r in caplog.records)
+        assert any(r.getMessage() == "candle backfill incomplete" for r in caplog.records)
+        assert "candle backfill incomplete" in (paused(bot, "vwap_ema") or "")
+        assert "candle backfill incomplete" in (paused(bot, "orb_options") or "")
         strat = next(x for x in bot.strategies if isinstance(x, VwapEmaStrategy))
-        assert strat.ema.count == 0  # still warming up from live candles
-        assert bot.engine is not None and bot.engine.accepting_signals
+        assert strat.ema.count == 0  # nothing partial reached the indicators
+        assert bot.engine is not None and bot.engine.accepting_signals  # the session itself carries on
+        assert bot.stack.guard.snapshot()["strategies"]["vwap_ema"]["paused"]  # type: ignore[index] # dashboard
     finally:
         await s.shutdown()
+
+
+async def _sim_backfill(data: dict[tuple[str, int], list[Candle]], now: datetime | None = None) \
+        -> tuple[Sim, HistorySource, HistoryLoader]:
+    sim = Sim(now or at(12, 41))
+    await sim.bot.prepare()
+    source = HistorySource(data)
+    sim.bot.source = source
+    loader = HistoryLoader(sim.bot, sleep=no_sleep)
+    await loader.backfill_today()
+    return sim, source, loader
+
+
+async def test_an_empty_answer_counts_as_a_failed_backfill() -> None:
+    sim, _, _ = await _sim_backfill({})  # Upstox answered, but with no candles
+    assert paused(sim.bot, "vwap_ema") and paused(sim.bot, "orb_options")
+
+
+async def test_one_missing_candle_blocks_only_the_strategy_that_needs_it() -> None:
+    data = morning()
+    del data[(FUT, 5)][7]
+    sim, _, _ = await _sim_backfill(data)
+    reason = paused(sim.bot, "vwap_ema")
+    assert reason is not None and "1 candles missing, first 09:50" in reason
+    assert paused(sim.bot, "orb_options") is None  # isolation
+    vw = next(x for x in sim.bot.strategies if isinstance(x, VwapEmaStrategy))
+    orb = next(x for x in sim.bot.strategies if isinstance(x, OrbOptionsStrategy))
+    assert vw.ema.count == 0 and orb.range_ready  # the blocked one got none of its partial history
+
+
+async def test_a_gap_in_features_only_data_blocks_nothing() -> None:
+    data = morning()
+    del data[(FUT, 1)]  # only the feature engine reads 1-minute futures
+    sim, _, _ = await _sim_backfill(data)
+    assert paused(sim.bot, "vwap_ema") is None and paused(sim.bot, "orb_options") is None
+
+
+async def test_a_candle_upstox_has_not_published_yet_is_retried() -> None:
+    data = morning()
+    late = data[(FUT, 5)].pop()  # the 12:35 candle is not out yet at 12:40:02
+
+    class Late(HistorySource):
+        async def get_intraday_candles(self, instrument_key: str, interval_minutes: int) -> list[Candle]:
+            got = await super().get_intraday_candles(instrument_key, interval_minutes)
+            if instrument_key == FUT and interval_minutes == 5 and self.requests.count((FUT, 5)) >= 2:
+                return [*got, late]
+            return got
+
+    sim = Sim(at(12, 40, 2))
+    await sim.bot.prepare()
+    source = Late({k: [c for c in v if c.end <= at(12, 40)] for k, v in data.items()})
+    sim.bot.source = source
+    await HistoryLoader(sim.bot, sleep=no_sleep).backfill_today()
+    assert source.requests.count((FUT, 5)) == 2 and paused(sim.bot, "vwap_ema") is None
+
+
+async def test_a_late_newest_candle_blocks_only_the_series_indicators_run_on() -> None:
+    data = morning()
+    data[(FUT, 5)].pop()  # the 12:35 candle never arrives
+    data[(INDEX, 1)].pop()  # nor does the 12:40 one-minute candle
+    sim, _, _ = await _sim_backfill(data)
+    assert "1 candles missing, first 12:35" in (paused(sim.bot, "vwap_ema") or "")
+    assert paused(sim.bot, "orb_options") is None  # ORB's range finished long ago
+
+
+async def test_a_hole_inside_the_opening_range_still_stops_orb() -> None:
+    data = morning()
+    del data[(INDEX, 1)][7]
+    sim, _, _ = await _sim_backfill(data)
+    assert "candles missing" in (paused(sim.bot, "orb_options") or "")
+
+
+async def test_a_real_hole_is_not_retried() -> None:
+    data = morning()
+    del data[(FUT, 5)][3:6]
+    _, source, _ = await _sim_backfill(data)
+    assert source.requests.count((FUT, 5)) == 1
+
+
+async def test_a_transient_error_is_retried() -> None:
+    data = morning()
+
+    class Flaky(HistorySource):
+        async def get_intraday_candles(self, instrument_key: str, interval_minutes: int) -> list[Candle]:
+            if not self.requests.count((instrument_key, interval_minutes)):
+                self.requests.append((instrument_key, interval_minutes))
+                raise ConnectionError("blip")
+            return await super().get_intraday_candles(instrument_key, interval_minutes)
+
+    sim = Sim(at(12, 41))
+    await sim.bot.prepare()
+    sim.bot.source = Flaky(data)
+    await HistoryLoader(sim.bot, sleep=no_sleep).backfill_today()
+    assert paused(sim.bot, "vwap_ema") is None and paused(sim.bot, "orb_options") is None
+
+
+async def test_no_backfill_after_the_close() -> None:
+    sim, source, _ = await _sim_backfill({}, at(16, 0))
+    assert source.requests == [] and paused(sim.bot, "vwap_ema") is None
+
+
+def _flaky_generate(monkeypatch: pytest.MonkeyPatch, cls: Any, fail_on: int) -> None:
+    real, calls = cls.generate, [0]
+
+    def flaky(self: Any, c: Candle) -> Any:
+        calls[0] += 1
+        if calls[0] == fail_on:
+            raise ValueError("bad candle")
+        return real(self, c)
+
+    monkeypatch.setattr(cls, "generate", flaky)
+
+
+def test_replay_is_all_or_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    s = vwap_strategy()
+    _flaky_generate(monkeypatch, VwapEmaStrategy, 5)
+    with pytest.raises(ValueError, match="bad candle"):
+        s.replay(five_min(FUT, at(9, 15), rising(10), [1000] * 10))
+    assert s.ema.count == 0 and s.ema.value is None and s.vwap.value is None and len(s.recent) == 0
+    assert s.volume.mean is None and s._last_end == {} and not s.replaying
+
+
+async def test_a_replay_error_blocks_only_that_strategy(monkeypatch: pytest.MonkeyPatch,
+                                                        caplog: pytest.LogCaptureFixture) -> None:
+    _flaky_generate(monkeypatch, VwapEmaStrategy, 5)
+    with caplog.at_level(logging.ERROR):
+        sim, _, _ = await _sim_backfill(morning())
+    vw = next(x for x in sim.bot.strategies if isinstance(x, VwapEmaStrategy))
+    orb = next(x for x in sim.bot.strategies if isinstance(x, OrbOptionsStrategy))
+    assert vw.ema.count == 0 and "candle replay failed (ValueError)" in (paused(sim.bot, "vwap_ema") or "")
+    assert orb.range_ready and paused(sim.bot, "orb_options") is None
+    assert any(r.getMessage() == "candle replay failed" for r in caplog.records)
+
+
+async def test_a_replay_error_during_repair_blocks_the_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
+    sim, source, loader = await _sim_backfill(morning())
+    vw = next(x for x in sim.bot.strategies if isinstance(x, VwapEmaStrategy))
+    bar = five_min(FUT, at(12, 40), [24900.0])[0]
+    source.data[(FUT, 5)] = [*source.data[(FUT, 5)], bar]
+    sim.wall.now = at(12, 45, 3)
+    _flaky_generate(monkeypatch, VwapEmaStrategy, 1)
+    loader.on_candle(bar.model_copy(update={"complete": False}))
+    results = await asyncio.gather(*loader._tasks, return_exceptions=True)
+    assert not [r for r in results if isinstance(r, BaseException)]  # nothing escapes the repair task
+    assert vw.ema.count == BARS_5M and "candle replay failed" in (paused(sim.bot, "vwap_ema") or "")
+
+
+async def test_a_restart_with_an_open_trade_backfills_without_touching_caps_or_the_stop(tmp_path: Path) -> None:
+    path = tmp_path / "bot.db"
+    first = Sim(at(9, 14), db=Database(path))
+    await first.bot.prepare()
+    first.bot.start()
+    await first.run_path(ORB_DAY)
+    (before,) = first.bot.stack.positions.open_trades("orb_options")
+    stop = before.stop
+    first.db.close()
+
+    restarted = Sim(at(9, 50, 30), db=Database(path))
+    await restarted.bot.prepare()
+    restarted.bot.start()
+    source = HistorySource({k: [c for c in v if c.end <= at(9, 50)] for k, v in morning().items()})
+    restarted.bot.source = source
+    await HistoryLoader(restarted.bot, sleep=no_sleep).backfill_today()
+
+    orb = next(x for x in restarted.bot.strategies if isinstance(x, OrbOptionsStrategy))
+    assert orb.entries[OptionType.CE] == 1 and orb.range_ready and orb.signals_today == 0  # the cap survives replay
+    assert paused(restarted.bot, "orb_options") is None
+    (after,) = restarted.bot.stack.positions.open_trades("orb_options")
+    assert after.trade_uid == before.trade_uid and after.stop == stop and after.protective_order_id is not None
+    await restarted.step(at(9, 50, 40), 24565.0)  # the first index tick after the restart
+    await restarted.step(at(9, 51), 24566.0, premium=70.0)  # the restored stop still protects the position
+    rec = restarted.repos.trades.get(before.trade_uid)
+    assert rec is not None and rec.status is TradeStatus.CLOSED and rec.exit_reason == "STOP_LOSS"
+    restarted.db.close()
+
+
+async def test_a_real_partial_candle_is_built_flagged_and_repaired_end_to_end(tmp_path: Path) -> None:
+    wall = FakeWallClock(at(12, 41, 12))
+    data = {k: [c for c in v if c.end <= at(12, 40)] for k, v in morning().items()}
+    source = HistorySource(data)
+    conns = FakeConnections(wall, source)
+    s = session(fast_cfg(tmp_path), wall, conns)
+    bot = await s.start()
+    try:
+        assert conns.md is not None and s.history is not None and s.market_recorder is not None
+        strat = next(x for x in bot.strategies if isinstance(x, VwapEmaStrategy))
+        assert strat.ema.count == BARS_5M and paused(bot, "vwap_ema") is None
+
+        conns.md.on_tick(tick(FUT, 25000.0, wall.now, vtt=1000))  # started 1 min 12 s into the 12:40 bucket
+        source.data[(FUT, 5)] = [*source.data[(FUT, 5)], five_min(FUT, at(12, 40), [25001.0], [9000])[0]]
+        wall.now = at(12, 45, 0)
+        conns.md.on_tick(tick(FUT, 25002.0, wall.now, vtt=2000))  # closes the partial candle
+        await asyncio.gather(*s.history._tasks)
+
+        assert strat.ema.count == BARS_5M + 1 and strat.recent[-1].close == 25001.0  # Upstox's full candle, not ours
+        assert strat.recent[-1].volume == 9000 and paused(bot, "vwap_ema") is None
+        s.market_recorder.flush()
+        row = [r for r in bot.repos.market_history.candles(FUT, 5, DAY) if r["start_time"] == at(12, 40).isoformat()]
+        assert (row[0]["complete"], row[0]["source"], row[0]["volume"]) == (1, "BACKFILL", 9000)
+    finally:
+        await s.shutdown()
+
+
+async def test_a_blocked_strategy_is_refused_at_the_risk_gate_but_can_still_exit() -> None:
+    sim = Sim(at(9, 14))
+    await sim.bot.prepare()
+    sim.bot.start()
+    sim.bot.stack.guard.block_entries_today("orb_options", "candle backfill incomplete (test)")
+    await sim.run_path(ORB_DAY)
+    assert sim.bot.stack.positions.open_trade_count("orb_options") == 0
+    decisions = [e.payload for e in sim.bot.bus.recent(Topic.ENTRY_DECISION)]
+    assert decisions and not any(d["approved"] for d in decisions)
+    assert any("strategy paused: candle backfill incomplete" in " ".join(d["reasons"]) for d in decisions)
+
+
+async def test_blocking_after_entry_leaves_the_open_trade_protected() -> None:
+    sim = Sim(at(9, 14))
+    await sim.bot.prepare()
+    sim.bot.start()
+    await sim.run_path(ORB_DAY)
+    (trade,) = sim.bot.stack.positions.open_trades("orb_options")
+    sim.bot.stack.guard.block_entries_today("orb_options", "test")
+    await sim.step(at(9, 51), 24566.0, premium=70.0)  # stop hit
+    rec = sim.repos.trades.get(trade.trade_uid)
+    assert rec is not None and rec.status is TradeStatus.CLOSED and rec.exit_reason == "STOP_LOSS"
+
+
+def test_a_block_lasts_for_the_day_and_is_not_persisted(paper: Repositories) -> None:
+    wall = FakeWallClock(at(10, 0))
+    limits = CFG.strategies.strategies
+    guard = DailyLossGuard(CFG.risk, {k: v.risk for k, v in limits.items()}, repo=paper.daily_pnl, now_fn=wall)
+    guard.block_entries_today("vwap_ema", "backfill failed")
+    guard.block_entries_today("vwap_ema", "a later reason")  # the first reason stands
+    allowed, reasons = guard.can_enter("vwap_ema")
+    assert not allowed and reasons == ["strategy paused: backfill failed"]
+    assert guard.can_enter("orb_options")[0]
+
+    restarted = DailyLossGuard(CFG.risk, {k: v.risk for k, v in limits.items()}, repo=paper.daily_pnl, now_fn=wall)
+    restarted.restore()
+    assert restarted.can_enter("vwap_ema")[0]  # a restart re-checks the data
+
+    wall.advance(days=1)
+    assert guard.can_enter("vwap_ema")[0]  # gone the next day
 
 
 async def test_no_backfill_call_before_the_market_opens() -> None:
@@ -157,7 +438,7 @@ async def test_no_backfill_call_before_the_market_opens() -> None:
 async def _prepared_loader(until: datetime) -> tuple[Sim, HistorySource, HistoryLoader, VwapEmaStrategy]:
     sim = Sim(until)
     await sim.bot.prepare()
-    source = HistorySource({(FUT, 5): five_min(FUT, at(9, 15), rising(40))})
+    source = HistorySource(morning())
     sim.bot.source = source
     loader = HistoryLoader(sim.bot, sleep=no_sleep)
     await loader.backfill_today()
@@ -167,21 +448,21 @@ async def _prepared_loader(until: datetime) -> tuple[Sim, HistorySource, History
 
 async def test_a_partial_candle_is_repaired_from_upstox_once() -> None:
     sim, source, loader, strat = await _prepared_loader(at(12, 41))
-    assert strat.ema.count == 40
-    full = five_min(FUT, at(12, 35), [24900.0, 24910.0])  # 12:35 and 12:40 buckets
-    source.data[(FUT, 5)] = [*source.data[(FUT, 5)], *full]
+    assert strat.ema.count == BARS_5M
+    full = five_min(FUT, at(12, 40), [24900.0])[0]
+    source.data[(FUT, 5)] = [*source.data[(FUT, 5)], full]
     sim.wall.now = at(12, 45, 3)
-    partial = full[1].model_copy(update={"complete": False})
+    partial = full.model_copy(update={"complete": False})
 
     loader.on_candle(partial)
     await asyncio.gather(*loader._tasks)
-    assert strat.ema.count == 42  # the skipped 12:35 bar and the repaired 12:40 bar
+    assert strat.ema.count == BARS_5M + 1 and paused(sim.bot, "vwap_ema") is None
     loader.on_candle(partial)  # a repeat cannot count a candle twice
     await asyncio.gather(*loader._tasks)
-    assert strat.ema.count == 42
+    assert strat.ema.count == BARS_5M + 1
 
 
-async def test_an_unrepairable_partial_candle_is_skipped_and_logged(caplog: pytest.LogCaptureFixture) -> None:
+async def test_an_unrepairable_partial_candle_blocks_that_strategy(caplog: pytest.LogCaptureFixture) -> None:
     sim, source, loader, strat = await _prepared_loader(at(12, 41))
     source.requests.clear()
     sim.wall.now = at(12, 45, 3)
@@ -189,16 +470,33 @@ async def test_an_unrepairable_partial_candle_is_skipped_and_logged(caplog: pyte
     with caplog.at_level(logging.WARNING):
         loader.on_candle(partial)
         await asyncio.gather(*loader._tasks)
-    assert len(source.requests) == REPAIR_ATTEMPTS and strat.ema.count == 40
+    assert len(source.requests) == REPAIR_ATTEMPTS and strat.ema.count == BARS_5M
     assert any("could not be repaired" in r.getMessage() for r in caplog.records)
+    assert "could not be repaired" in (paused(sim.bot, "vwap_ema") or "")
+    assert paused(sim.bot, "orb_options") is None
 
 
-async def test_a_gap_after_the_backfill_is_reported(caplog: pytest.LogCaptureFixture) -> None:
+async def test_a_gap_after_the_backfill_blocks_that_strategy(caplog: pytest.LogCaptureFixture) -> None:
     sim, _, loader, _ = await _prepared_loader(at(12, 41))
     sim.wall.now = at(12, 50)
     with caplog.at_level(logging.WARNING):
-        loader.on_candle(five_min(FUT, at(12, 45), [24900.0])[0])  # backfill ended at 12:35
-    assert any("gap between the backfill" in r.getMessage() for r in caplog.records)
+        loader.on_candle(five_min(FUT, at(12, 45), [24900.0])[0])  # the backfill ended at 12:40
+    assert any(r.getMessage() == "gap between candles" for r in caplog.records)
+    assert "candle gap 12:40-12:45" in (paused(sim.bot, "vwap_ema") or "")
+
+
+async def test_contiguous_candles_and_a_new_day_are_not_gaps() -> None:
+    sim, _, loader, _ = await _prepared_loader(at(12, 41))
+    loader.on_candle(five_min(FUT, at(12, 40), [24900.0])[0])
+    loader.on_candle(five_min(FUT, at(12, 45), [24900.0])[0])
+    loader.on_candle(five_min(FUT, at(9, 15, day=(2026, 11, 4)), [24900.0])[0])
+    assert paused(sim.bot, "vwap_ema") is None
+
+
+async def test_a_gap_in_a_series_a_strategy_does_not_run_on_blocks_nothing() -> None:
+    sim, _, loader, _ = await _prepared_loader(at(12, 41))
+    loader.on_candle(candle(INDEX, 1, at(12, 50), 24500, 24501, 24499, 24500))  # ORB's range is long finished
+    assert paused(sim.bot, "orb_options") is None
 
 
 async def test_a_paused_engine_keeps_indicators_current_without_signals() -> None:
@@ -211,6 +509,148 @@ async def test_a_paused_engine_keeps_indicators_current_without_signals() -> Non
         sim.bot.engine.on_candle(c)
     assert strat.ema.count == 3 and strat.vwap.value is not None
     assert sim.bot.engine.state.strategy("vwap_ema").signals == 0
+
+
+# --------------------------------------------------------------------------- #
+# Seeding the EMA from the previous trading day
+# --------------------------------------------------------------------------- #
+
+MONDAY, FRIDAY = date(2026, 11, 2), date(2026, 10, 30)
+
+
+def prior_day(day: date, n: int = 75, start: float = 24000.0) -> list[Candle]:
+    return five_min(FUT, at(9, 15, day=(day.year, day.month, day.day)), rising(n, start, 1.0), [5000] * n)
+
+
+async def _seed_sim(prior: dict[date, list[Candle]], now: datetime | None = None) -> tuple[Sim, HistorySource, Any]:
+    sim = Sim(now or at(9, 10))
+    await sim.bot.prepare()
+    source = HistorySource(prior=prior)
+    sim.bot.source = source
+    await HistoryLoader(sim.bot, sleep=no_sleep).seed_prior_session()
+    return sim, source, next(x for x in sim.bot.strategies if isinstance(x, VwapEmaStrategy))
+
+
+async def test_the_ema_is_ready_before_the_open_from_yesterdays_candles() -> None:
+    sim, source, strat = await _seed_sim({MONDAY: prior_day(MONDAY)})
+    assert strat.ema.ready and strat.ema.count == 75 and source.prior_requests == [MONDAY]
+    reference = EMA(20)
+    for c in prior_day(MONDAY):
+        reference.update(c.close)
+    assert strat.ema.value == pytest.approx(reference.value)
+    assert strat.signals_today == 0 and paused(sim.bot, "vwap_ema") is None
+    assert strat.prior_session_bars() == 0  # already seeded: asks for nothing more
+
+
+async def test_vwap_still_resets_every_day() -> None:
+    _, _, strat = await _seed_sim({MONDAY: prior_day(MONDAY)})
+    assert strat.vwap.value is None  # yesterday's volume is not in it
+    bar = five_min(FUT, at(9, 15), [24500.0], [1000])[0]
+    strat.on_candle(bar)
+    assert strat.vwap.value == pytest.approx((bar.high + bar.low + bar.close) / 3)
+    assert strat.volume.mean == 1000
+
+
+async def test_a_seeded_strategy_is_not_warming_up_on_the_third_candle() -> None:
+    _, _, strat = await _seed_sim({MONDAY: prior_day(MONDAY)})
+    for c in five_min(FUT, at(9, 15), [24500.0, 24500.0, 24500.0], [1000] * 3):
+        strat.on_candle(c)
+    assert strat.last_reason != "warming up"
+
+
+async def test_the_seed_skips_the_weekend() -> None:
+    sim, source, strat = await _seed_sim({FRIDAY: prior_day(FRIDAY)}, at(9, 10, day=(2026, 11, 2)))
+    assert strat.ema.ready and source.prior_requests == [FRIDAY] and paused(sim.bot, "vwap_ema") is None
+
+
+async def test_an_unlisted_holiday_falls_back_to_the_day_before() -> None:
+    _, source, strat = await _seed_sim({FRIDAY: prior_day(FRIDAY)})  # Monday has no candles
+    assert strat.ema.ready and source.prior_requests == [MONDAY, FRIDAY]
+
+
+async def test_the_seed_refuses_too_few_candles() -> None:
+    sim, _, strat = await _seed_sim({MONDAY: prior_day(MONDAY, 19)})
+    assert not strat.ema.ready and strat.ema.count == 0
+    assert paused(sim.bot, "vwap_ema") is None
+
+
+async def test_no_seed_means_warming_up_not_a_block(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING):
+        sim, source, strat = await _seed_sim({})
+    assert len(source.prior_requests) == PRIOR_DAY_ATTEMPTS
+    assert not strat.ema.ready and paused(sim.bot, "vwap_ema") is None  # EMA not ready: no signal is possible
+    assert any("no previous-session seed" in r.getMessage() for r in caplog.records)
+    bars = five_min(FUT, at(9, 15), rising(10), [1000] * 9 + [9000])
+    assert not [x for c in bars for x in strat.on_candle(c)] and strat.last_reason == "warming up"
+
+
+async def test_a_seed_fetch_error_never_stops_the_session() -> None:
+    sim = Sim(at(9, 10))
+    await sim.bot.prepare()
+    source = HistorySource()
+    source.fail_prior = True
+    sim.bot.source = source
+    assert await HistoryLoader(sim.bot, sleep=no_sleep).seed_prior_session() == {}
+    assert paused(sim.bot, "vwap_ema") is None
+
+
+async def test_a_seed_error_rolls_back_and_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    real = VwapEmaStrategy.warm_up
+
+    def half_way(self: Any, candles: Any) -> int:
+        real(self, list(candles)[:5])
+        raise ValueError("bad seed")
+
+    monkeypatch.setattr(VwapEmaStrategy, "warm_up", half_way)
+    sim, _, strat = await _seed_sim({MONDAY: prior_day(MONDAY)})
+    assert strat.ema.count == 0 and strat.ema.value is None
+    assert "previous-session seed failed (ValueError)" in (paused(sim.bot, "vwap_ema") or "")
+
+
+async def test_only_strategies_with_a_cross_day_indicator_are_seeded() -> None:
+    assert orb_strategy().prior_session_bars() == 0
+    _, source, _ = await _seed_sim({MONDAY: prior_day(MONDAY)})
+    assert len(source.prior_requests) == 1  # vwap_ema only
+
+
+async def test_a_mid_day_restart_seeds_then_replays_today(tmp_path: Path) -> None:
+    wall = FakeWallClock(at(12, 41))
+    source = HistorySource(morning(), {MONDAY: prior_day(MONDAY)})
+    s = session(fast_cfg(tmp_path), wall, FakeConnections(wall, source))
+    bot = await s.start()
+    try:
+        got = next(x for x in bot.strategies if isinstance(x, VwapEmaStrategy))
+        reference = EMA(20)
+        for c in [*prior_day(MONDAY), *morning()[(FUT, 5)]]:
+            reference.update(c.close)
+        assert got.ema.count == 75 + BARS_5M and got.ema.value == pytest.approx(reference.value)
+        day_only = SessionVWAP()
+        for c in morning()[(FUT, 5)]:
+            day_only.update(c.start.date(), c.high, c.low, c.close, c.volume)
+        assert got.vwap.value == pytest.approx(day_only.value)
+    finally:
+        await s.shutdown()
+
+
+async def test_a_session_started_before_the_open_is_seeded(tmp_path: Path) -> None:
+    wall = FakeWallClock(at(9, 10))
+    source = HistorySource(prior={MONDAY: prior_day(MONDAY)})
+    s = session(fast_cfg(tmp_path), wall, FakeConnections(wall, source))
+    bot = await s.start()
+    try:
+        assert next(x for x in bot.strategies if isinstance(x, VwapEmaStrategy)).ema.ready
+        assert source.requests == []  # nothing to backfill yet
+    finally:
+        await s.shutdown()
+
+
+async def test_a_futures_roll_is_reseeded_by_the_daily_job() -> None:
+    sim, source, strat = await _seed_sim({MONDAY: prior_day(MONDAY)})
+    strat.set_signal_instrument("NSE_FO|NEXT")  # the roll restarts the EMA
+    assert strat.prior_session_bars() == 20
+    source.prior = {MONDAY: [c.model_copy(update={"instrument_key": "NSE_FO|NEXT"}) for c in prior_day(MONDAY)]}
+    await HistoryLoader(sim.bot, sleep=no_sleep).seed_prior_session()
+    assert strat.ema.ready
 
 
 # --------------------------------------------------------------------------- #
@@ -416,6 +856,48 @@ async def test_the_stop_trigger_logs_bid_ask_and_last(caplog: pytest.LogCaptureF
     assert rec.tick_time  # type: ignore[attr-defined]
 
 
+def _no_exchange_stops() -> Any:
+    settings = CFG.settings.model_copy(update={"execution": CFG.settings.execution.model_copy(
+        update={"use_exchange_stop_orders": False})})
+    return CFG.model_copy(update={"settings": settings})
+
+
+def _lagging_quote(h: Harness, ltp: float, bid: float, ask: float) -> None:
+    h.md.on_tick(Tick(instrument_key=CE_KEY, ltp=ltp, bid=bid, ask=ask, bid_qty=1500, ask_qty=1500,
+                      exchange_time=h.wall.now, received_at=h.wall.now))
+
+
+async def test_a_local_monitor_stop_fills_at_the_lower_of_bid_and_last() -> None:
+    h = Harness(cfg=_no_exchange_stops(), slippage_ticks=1)
+    t = await h.enter(ltp=100.0)
+    assert t.stop == pytest.approx(75.0, abs=0.1)
+    _lagging_quote(h, ltp=70.0, bid=76.0, ask=76.5)  # the print hit the stop; the quote has not caught up
+    await h.settle()
+    rec = h.repos.trades.get(t.trade_uid)
+    assert rec is not None and rec.exit_reason == "STOP_LOSS"
+    assert rec.exit_price == pytest.approx(69.95)  # not 75.95
+
+
+async def test_a_local_monitor_stop_uses_the_bid_when_it_is_lower() -> None:
+    h = Harness(cfg=_no_exchange_stops(), slippage_ticks=1)
+    t = await h.enter(ltp=100.0)
+    _lagging_quote(h, ltp=74.0, bid=73.0, ask=74.5)
+    await h.settle()
+    rec = h.repos.trades.get(t.trade_uid)
+    assert rec is not None and rec.exit_price == pytest.approx(72.95)
+
+
+async def test_exits_that_are_not_stops_still_fill_at_the_quote() -> None:
+    h = Harness(slippage_ticks=1)
+    t = await h.enter(ltp=100.0)
+    _lagging_quote(h, ltp=90.0, bid=92.0, ask=92.5)
+    await h.settle()
+    assert await h.s.positions.exit_trade(t.trade_uid, ExitReason.MANUAL)
+    await h.settle()
+    rec = h.repos.trades.get(t.trade_uid)
+    assert rec is not None and rec.exit_price == pytest.approx(91.95)
+
+
 # --------------------------------------------------------------------------- #
 # 5. Features at signal time
 # --------------------------------------------------------------------------- #
@@ -560,6 +1042,61 @@ def test_only_live_option_ticks_are_recorded() -> None:
     snap = tick("NSE_FO|24500CE", 100.0, at(10, 0)).model_copy(update={"is_snapshot": True})
     rec.on_tick(snap)
     assert rec.flush() == 0
+
+
+def test_retention_deletes_only_quotes_older_than_the_limit() -> None:
+    _, repos = _db()
+    key = "NSE_FO|24500CE"
+    rec = _recorder(repos)
+    repos.market_history.save_quotes([(tick(key, 1.0, at(15, 29, day=(2026, 10, 3))), False),  # 31 days old
+                                      (tick(key, 2.0, at(9, 15, day=(2026, 10, 4))), False),  # exactly 30 days
+                                      (tick(key, 3.0, at(10, 0)), False)])
+    assert rec.purge_old_quotes(DAY) == 1
+    assert [r["ltp"] for r in repos.market_history.quotes(key)] == [2.0, 3.0]
+    assert rec.purge_old_quotes(DAY) == 0  # repeat-safe
+
+
+def test_retention_leaves_candles_alone() -> None:
+    _, repos = _db()
+    rec = _recorder(repos)
+    old = five_min(FUT, at(9, 15, day=(2026, 1, 5)), [24500.0])[0]
+    rec.record_backfill([old])
+    rec.flush()
+    rec.purge_old_quotes(DAY)
+    assert len(repos.market_history.candles(FUT, 5, date(2026, 1, 5))) == 1
+
+
+def test_a_retention_failure_never_raises(caplog: pytest.LogCaptureFixture) -> None:
+    db, repos = _db()
+    rec = _recorder(repos)
+    db.execute("DROP TABLE option_quotes")
+    with caplog.at_level(logging.ERROR):
+        assert rec.purge_old_quotes(DAY) == 0
+    assert rec.failures == 1
+
+
+@pytest.mark.parametrize("days", [0, 366])
+def test_the_retention_setting_is_bounded(days: int) -> None:
+    with pytest.raises(ValueError):
+        MarketRecordingSection(option_quote_retention_days=days)
+
+
+async def test_a_session_applies_retention_at_start_and_schedules_it(tmp_path: Path) -> None:
+    cfg = fast_cfg(tmp_path)
+    db = Database(cfg.database_path)
+    db.initialize()
+    key = "NSE_FO|24500CE"
+    old = tick(key, 1.0, at(10, 0, day=(2026, 1, 5)))
+    Repositories(db, TradingMode.PAPER).market_history.save_quotes([(old, False)])
+    db.close()
+    wall = FakeWallClock(at(9, 14))
+    s = session(cfg, wall, FakeConnections(wall))
+    bot = await s.start()
+    try:
+        assert bot.repos.market_history.quotes(key) == []
+        assert {"option_quote_retention", "prior_session_seed"} <= set(bot.scheduler.jobs)
+    finally:
+        await s.shutdown()
 
 
 def test_a_recording_failure_never_raises(caplog: pytest.LogCaptureFixture) -> None:

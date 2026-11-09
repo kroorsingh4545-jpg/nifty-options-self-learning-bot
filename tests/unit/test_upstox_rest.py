@@ -129,6 +129,26 @@ async def test_option_chain_and_ltp_and_candles() -> None:
     assert "NSE_INDEX%7CNifty%2050" in str(h.requests[-1].url)
 
 
+async def test_historical_candles_use_the_v3_path_with_to_date_first() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return ok({"candles": [["2026-11-02T09:20:00+05:30", 101, 103, 100, 102, 5000, 0],
+                               ["2026-11-02T09:15:00+05:30", 100, 102, 99, 101, 7000, 0]]})
+
+    h = Harness(handler, now=FakeWallClock(datetime(2026, 11, 3, 9, 0, tzinfo=IST)))
+    candles = await h.client.get_historical_candles("NSE_FO|61471", 5, date(2026, 11, 2), date(2026, 11, 2))
+    assert [c.start.minute for c in candles] == [15, 20] and all(c.complete for c in candles)
+    assert h.requests[-1].url.path == "/v3/historical-candle/NSE_FO|61471/minutes/5/2026-11-02/2026-11-02"
+    assert h.limiter.usage()["standard_api"]["granted"] == 1  # through the central limiter
+    with pytest.raises(ValueError, match="interval"):
+        await h.client.get_historical_candles("NSE_FO|61471", 0, date(2026, 11, 2), date(2026, 11, 2))
+
+
+async def test_an_analytics_token_may_read_historical_candles() -> None:
+    h = Harness(lambda r: ok({"candles": []}), token_type=UpstoxTokenType.ANALYTICS,
+                now=FakeWallClock(datetime(2026, 11, 3, 9, 0, tzinfo=IST)))
+    assert await h.client.get_historical_candles("NSE_FO|1", 5, date(2026, 11, 2), date(2026, 11, 2)) == []
+
+
 async def test_positions_and_funds_parsing() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path == "/v2/portfolio/short-term-positions":

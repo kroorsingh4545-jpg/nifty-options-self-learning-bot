@@ -433,6 +433,17 @@ class UpstoxRestClient(MarketDataSource):
         data = await self._get(path)
         return parse_candles(instrument_key, (data or {}).get("candles", []), interval_minutes, self._now())
 
+    async def get_historical_candles(self, instrument_key: str, interval_minutes: int, from_date: date,
+                                     to_date: date) -> list[Candle]:
+        """V3 historical candles (minute data since Jan 2022; at most one month
+        per request for intervals up to 15 minutes)."""
+        if not 1 <= interval_minutes <= 300:
+            raise ValueError("interval_minutes must be 1..300")
+        path = (f"/v3/historical-candle/{quote(instrument_key, safe='')}/minutes/{interval_minutes}/"
+                f"{to_date.isoformat()}/{from_date.isoformat()}")
+        data = await self._get(path)
+        return parse_candles(instrument_key, (data or {}).get("candles", []), interval_minutes, self._now())
+
     # ------------------------------------------------------------------ #
     # Account (read-only; daily token only — an analytics token is refused)
     # ------------------------------------------------------------------ #

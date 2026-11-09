@@ -512,6 +512,7 @@ CREATE TABLE IF NOT EXISTS option_quotes (
     held           INTEGER NOT NULL DEFAULT 0 CHECK (held IN (0,1))
 );
 CREATE INDEX IF NOT EXISTS ix_option_quotes_key_time ON option_quotes(instrument_key, exchange_time);
+CREATE INDEX IF NOT EXISTS ix_option_quotes_time ON option_quotes(exchange_time);
 
 -- ============================================================================
 -- Isolation / integrity triggers

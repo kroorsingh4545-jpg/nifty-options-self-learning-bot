@@ -12,8 +12,8 @@ CE when, for the last ``momentum_bars`` candles,
 PE is the mirror image (below both, closes falling, EMA slope negative).
 
 Filters (no signal when):
-* the EMA is not warmed up (``ema_period`` candles; ``warm_up`` can seed it
-  from earlier candles),
+* the EMA is not warmed up (``ema_period`` candles; ``warm_up`` seeds it from
+  the previous trading day, so it is ready at the open; VWAP resets every day),
 * the candle's volume < ``min_volume_ratio`` x the rolling average volume of
   the last ``chop_lookback_bars`` candles (low volume),
 * the price crossed VWAP more than ``max_vwap_crosses`` times in the last
@@ -80,6 +80,10 @@ class VwapEmaStrategy(BaseStrategy):
         p: VwapEmaParams = self.params
         self.ema = EMA(p.ema_period)
         self._reset_state(self.day or self._now().date())
+
+    def prior_session_bars(self) -> int:
+        p: VwapEmaParams = self.params
+        return 0 if self.ema.ready else p.ema_period
 
     def warm_up(self, candles: Iterable[Candle]) -> int:
         """Seed the EMA from earlier completed candles (e.g. previous session)."""

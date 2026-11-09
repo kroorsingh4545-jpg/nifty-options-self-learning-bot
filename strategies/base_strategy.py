@@ -10,6 +10,7 @@ A strategy turns completed candles into ``Signal`` objects and nothing else:
 
 from __future__ import annotations
 
+import copy
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Sequence
@@ -25,6 +26,9 @@ from core.models import Candle, Signal, Tick
 from monitoring.json_logger import get_logger
 
 log = get_logger(__name__)
+
+#: instance attributes that are configuration, not state (never rolled back)
+_NOT_STATE = frozenset({"config", "params", "_now"})
 
 
 class StrategyParamsError(ValueError):
@@ -127,17 +131,45 @@ class BaseStrategy(ABC):
             self.replaying = False
             self.signals_today = before
 
+    def _all_or_nothing(self, apply: Callable[[], int]) -> int:
+        """Run ``apply``; if it raises, restore the state it started from, so
+        indicators are never left part-updated."""
+        saved = copy.deepcopy({k: v for k, v in vars(self).items() if k not in _NOT_STATE})
+        try:
+            return apply()
+        except Exception:
+            vars(self).update(saved)
+            raise
+
     def replay(self, candles: Iterable[Candle]) -> int:
         """Feed earlier completed candles, oldest first, without signalling.
         Candles this strategy has already seen are skipped. Returns how many
-        were used."""
-        used = 0
-        for c in sorted(candles, key=lambda x: (x.end, x.timeframe_minutes)):
-            last = self._last_end.get(c.timeframe_minutes)
-            if self.wants(c) and (last is None or c.end > last):
-                self.observe_candle(c)
-                used += 1
-        return used
+        were used. All or nothing: on an error the state is unchanged."""
+        ordered = sorted(candles, key=lambda x: (x.end, x.timeframe_minutes))
+
+        def apply() -> int:
+            used = 0
+            for c in ordered:
+                last = self._last_end.get(c.timeframe_minutes)
+                if self.wants(c) and (last is None or c.end > last):
+                    self.observe_candle(c)
+                    used += 1
+            return used
+
+        return self._all_or_nothing(apply)
+
+    def prior_session_bars(self) -> int:
+        """How many candles of the previous trading day this strategy wants
+        before today starts (0 = none)."""
+        return 0
+
+    def warm_up(self, candles: Iterable[Candle]) -> int:
+        """Seed state from candles of an earlier session. Returns how many were used."""
+        return 0
+
+    def seed_prior_session(self, candles: Sequence[Candle]) -> int:
+        """``warm_up``, all or nothing."""
+        return self._all_or_nothing(lambda: self.warm_up(candles))
 
     def _log_decision(self, candle: Candle, signals: Sequence[Signal]) -> None:
         log.info("strategy candle evaluated", extra={

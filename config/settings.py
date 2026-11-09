@@ -201,6 +201,8 @@ class MarketRecordingSection(_Frozen):
     quote_interval_seconds: PositiveFloat = 5.0
     held_quote_interval_seconds: PositiveFloat = 1.0  # while a position is open in the contract
     flush_interval_seconds: PositiveFloat = 5.0
+    # option_quotes older than this are deleted (at start-up and after the close).
+    option_quote_retention_days: int = Field(default=30, ge=1, le=365)
 
 
 class PaperBrokerSection(_Frozen):

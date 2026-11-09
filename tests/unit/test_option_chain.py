@@ -121,6 +121,10 @@ class Source(MarketDataSource):
     async def get_intraday_candles(self, instrument_key: str, interval_minutes: int) -> list[Candle]:
         return []
 
+    async def get_historical_candles(self, instrument_key: str, interval_minutes: int, from_date: date,
+                                     to_date: date) -> list[Candle]:
+        return []
+
 
 async def test_fetcher_expiry_lot_size_and_cache() -> None:
     today = {"d": date(2026, 11, 4)}

@@ -411,9 +411,10 @@ class PaperBroker(Broker):
             effective_type = OrderType.MARKET if req.order_type is OrderType.SL_M else OrderType.LIMIT
 
         inst = self._instruments[req.instrument_key]
-        # A triggered SL-M fills at the worse of the quote and the last trade:
-        # in a fast market the quote can lag the print that hit the trigger.
-        stop_market = req.order_type is OrderType.SL_M
+        # A stop fills at the worse of the quote and the last trade, whether it
+        # rested as an SL-M or the local monitor sent it as a market exit: in a
+        # fast market the quote can lag the print that hit the stop.
+        stop_market = req.order_type is OrderType.SL_M or req.worst_price_fill
         if side is OrderSide.BUY:
             ref = tick.ask if tick.ask else tick.ltp
             if stop_market:
