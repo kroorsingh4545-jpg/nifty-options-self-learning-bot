@@ -26,6 +26,7 @@ Point-in-time rules, enforced structurally:
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 import math
@@ -470,6 +471,16 @@ class _Series:
         self.candles.append(c)
         self._cache = None
 
+    def insert(self, c: Candle) -> None:
+        """Put a bar that arrived late in its place (a repaired gap); a bar
+        already held is kept."""
+        starts = [x.start for x in self.candles]
+        i = bisect.bisect_left(starts, c.start)
+        if i < len(starts) and starts[i] == c.start:
+            return
+        self.candles.insert(i, c)
+        self._cache = None
+
     def bars(self) -> Bars:
         if self._cache is None:
             self._cache = Bars.from_candles(self.candles)
@@ -505,17 +516,33 @@ class FeatureEngine:
             self._futures = _Series()
 
     def on_candle(self, candle: Candle) -> None:
+        self._take(candle, late=False)
+
+    def fill_candle(self, candle: Candle) -> None:
+        """A 1-minute bar of today that arrived late (a repaired gap): put in
+        its place instead of being dropped as out of order."""
+        self._take(candle, late=True)
+
+    def _take(self, candle: Candle, *, late: bool) -> None:
         if candle.timeframe_minutes != 1 or not candle.complete:
             return
         d = candle.start.astimezone(IST).date()
+        if late and self._day is not None and d < self._day:
+            return
         if self._day is None or d > self._day:
             self._day = d
             self._index.trim_before(d)
             self._futures.trim_before(d)
         if candle.instrument_key == self.index_key:
-            self._index.add(candle)
+            series = self._index
         elif self.futures_key is not None and candle.instrument_key == self.futures_key:
-            self._futures.add(candle)
+            series = self._futures
+        else:
+            return
+        if late:
+            series.insert(candle)
+        else:
+            series.add(candle)
 
     @property
     def last_bar_end(self) -> datetime | None:
