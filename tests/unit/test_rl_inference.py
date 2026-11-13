@@ -28,6 +28,7 @@ from ml.model_registry import LoadedModel, SyntheticModelError
 from ml.rl_environment import OBS_NAMES, AccountView, Action, PositionView
 from risk.kill_switch import KillReason
 from risk.stop_loss_manager import ExitReason
+from tests.fakes import with_per_trade_risk
 from tests.ml_support import config
 from tests.stack_harness import CE, Harness, at
 from tests.unit.test_ml_features import synthetic_day
@@ -107,7 +108,7 @@ def test_chained_filter_can_only_veto_or_shrink() -> None:
 
 
 def harness(stop_pct: float = 10.0, now: datetime | None = None) -> Harness:
-    return Harness(now=now, cfg=rl_cfg("orb_options", stop_pct=stop_pct))
+    return Harness(now=now, cfg=with_per_trade_risk(rl_cfg("orb_options", stop_pct=stop_pct), 2_000))
 
 
 def adv(t: Any, action: TradeAdviceAction, **kw: Any) -> TradeAdvice:

@@ -113,7 +113,7 @@ def test_consecutive_loss_pause_and_reset_on_win() -> None:
 
 def test_remaining_risk_budget_caps_per_trade_risk() -> None:
     g, _ = make()
-    assert g.remaining_risk_budget("orb_options") == 2000
+    assert g.remaining_risk_budget("orb_options") == 3000  # PAPER per-trade risk (owner decision 2026-11-13)
     g.record_trade_close("orb_options", -3500)
     assert g.remaining_risk_budget("orb_options") == pytest.approx(1500)
     g.update_unrealized("vwap_ema", -4000)

@@ -24,9 +24,10 @@ from core.clock import IST
 from core.enums import OrderPurpose, OrderSide, OrderStatus, OrderType
 from execution.order_manager import OrderIntent
 from risk.daily_loss_guard import DailyLossGuard
+from tests.fakes import with_per_trade_risk
 from tests.stack_harness import CE, Harness
 
-CFG = load_config(use_default_env_file=False)
+CFG = with_per_trade_risk(load_config(use_default_env_file=False), 2_000)  # scenarios sized for Rs 2,000
 SESSION = CFG.settings.market_session
 GAP_DAY, NEXT_DAY = date(2026, 9, 9), date(2026, 9, 10)
 
@@ -218,7 +219,7 @@ def test_daily_loss_kill_blocks_the_day_and_clears_next_morning(
     # Sizing normally keeps one trade inside the day's limit; a loss worse than
     # planned (a gap through the stop) is what breaches it. The guard's limit is
     # set below what the trades were sized for, so one real loss goes through it.
-    monkeypatch.setattr(DailyLossGuard, "remaining_risk_budget", lambda self, sid: 1000.0)
+    monkeypatch.setattr(DailyLossGuard, "remaining_risk_budget", lambda self, sid, open_risk=None: 1000.0)
     monkeypatch.setattr(DailyLossGuard, "_limit", lambda self, sid: 600.0)
     cfg = _tight_limits_config(config_dir, edit_yaml)
     res = run_backtest(cfg, generate_synthetic_dataset(_spec(lot_units=25), SESSION))

@@ -30,6 +30,7 @@ from execution.order_manager import TERMINAL
 from execution.position_manager import ManagedTrade
 from risk.kill_switch import KillReason
 from risk.stop_loss_manager import ExitReason
+from tests.fakes import with_per_trade_risk
 from tests.stack_harness import CE, Harness
 from tests.unit.test_rl_inference import rl_cfg
 
@@ -38,7 +39,8 @@ LOT = CE.lot_size
 
 def mk(**paper: Any) -> Harness:
     """PAPER stack whose broker, like a real exchange, does NOT block oversells."""
-    return Harness(cfg=rl_cfg("orb_options", stop_pct=10.0), allow_short_options=True, **paper)
+    return Harness(cfg=with_per_trade_risk(rl_cfg("orb_options", stop_pct=10.0), 2_000), allow_short_options=True,
+                   **paper)
 
 
 @dataclass

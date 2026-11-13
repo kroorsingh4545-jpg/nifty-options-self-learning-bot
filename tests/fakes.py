@@ -250,3 +250,18 @@ def chain_row(strike: float, spot: float, expiry: str = "2026-11-10", **md: Any)
     return {"expiry": expiry, "pcr": 1.0, "strike_price": strike, "underlying_key": "NSE_INDEX|Nifty 50",
             "underlying_spot_price": spot, "call_options": side("CE", intrinsic_c + 100),
             "put_options": side("PE", intrinsic_p + 100)}
+
+
+def with_per_trade_risk(cfg: Any, rupees: float) -> Any:
+    """``cfg`` with the per-trade risk (limit and every strategy's sizing) set
+    to ``rupees``, re-validated. For tests whose lot counts were worked out for
+    a Rs 2,000 budget (PAPER runs Rs 3,000 since the owner decision of
+    2026-11-13); a lower value is a stricter config, which is always allowed."""
+    from config.settings import BotConfig
+
+    risk = cfg.risk.model_copy(update={"per_trade": cfg.risk.per_trade.model_copy(
+        update={"max_risk_per_trade": float(rupees)})})
+    strategies = cfg.strategies.model_copy(update={"strategies": {
+        sid: s.model_copy(update={"sizing": s.sizing.model_copy(update={"risk_per_trade": float(rupees)})})
+        for sid, s in cfg.strategies.strategies.items()}})
+    return BotConfig.model_validate({**dict(cfg), "risk": risk, "strategies": strategies})

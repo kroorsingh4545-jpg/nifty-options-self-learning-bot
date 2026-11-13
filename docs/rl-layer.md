@@ -47,7 +47,7 @@ The RL agent **manages** trades that the strategies propose. It does not specula
 
 | control | value (current config) | who enforces it |
 |---|---|---|
-| risk per trade | min(2,000, strategy sizing) x size multiplier; whole lots from the stop distance plus exit slippage | envelope sizes every entry |
+| risk per trade | min(per-trade limit, strategy sizing) (3,000 in PAPER) x size multiplier; whole lots from the stop distance plus exit slippage | envelope sizes every entry |
 | initial stop / target | the strategy's `stop_loss` / `take_profit` rules | envelope |
 | daily loss limit | 5,000 per strategy: forced exit when realised + open loss reaches it, then no entries for the day | envelope |
 | remaining daily budget | a new trade may risk at most what is left of the daily limit (as `DailyLossGuard`) | envelope |
@@ -98,7 +98,7 @@ is fitted on **training-period** observations only, frozen, and saved with the m
 
 ## Reward
 
-In units of the per-trade risk budget R_budget (2,000):
+In units of the per-trade risk budget R_budget (the per-trade risk, 3,000 in PAPER):
 
 ```
 reward = realized_trade_return          gross P&L realised this step, at unslipped prices

@@ -37,7 +37,7 @@ strategies:
         min_oi: 50000
         max_spread_pct: 1.5
     sizing:
-      risk_per_trade: 2000
+      risk_per_trade: 3000         # PAPER only; LIVE refuses > 2000 (docs/safety-policy.md)
       size_multiplier: 1.0         # 0 < m <= 1; can only reduce size
     stop_loss:
       mode: PREMIUM_PERCENT        # PREMIUM_PERCENT | POINTS
@@ -98,7 +98,7 @@ strategies:
         min_oi: 50000
         max_spread_pct: 1.5
     sizing:
-      risk_per_trade: 2000
+      risk_per_trade: 3000         # PAPER only; LIVE refuses > 2000 (docs/safety-policy.md)
       size_multiplier: 1.0
     stop_loss:
       mode: PREMIUM_PERCENT

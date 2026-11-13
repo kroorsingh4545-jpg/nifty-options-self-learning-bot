@@ -20,9 +20,9 @@ from config.loader import ConfigError, load_config
 from config.settings import BrokerSection, CircuitBreakerSection, MarketSession
 from core.enums import OptionType, OrderStatus
 from data.instruments import InstrumentMaster, InstrumentMasterError, build_master
-from tests.fakes import FakeClock, FakeWallClock, future_contract, option_contract
+from tests.fakes import FakeClock, FakeWallClock, future_contract, option_contract, with_per_trade_risk
 from tests.synthetic import FUT, at
-from tests.unit.test_bot_integration import ORB_DAY, Sim, instrument_list
+from tests.unit.test_bot_integration import ORB_DAY, Sim, cfg_with_futures, instrument_list
 
 # A real NIFTY futures record as published in the Upstox NSE instrument list
 # (captured 2026-11-03). Lot size 65, tick_size in paise, expiry in epoch ms.
@@ -216,7 +216,7 @@ def test_instruments_url_is_official_only() -> None:
 
 @pytest.mark.parametrize("lot", [65, 40])
 async def test_trade_quantity_follows_instrument_list_lot_size(lot: int) -> None:
-    sim = Sim(at(9, 14), instruments=instrument_list(lot=lot))
+    sim = Sim(at(9, 14), cfg=with_per_trade_risk(cfg_with_futures(), 2_000), instruments=instrument_list(lot=lot))
     await sim.bot.prepare()
     sim.bot.start()
     await sim.run_path(ORB_DAY)

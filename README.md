@@ -320,6 +320,9 @@ any future LIVE build is even considered, every item below must be true and veri
 4. Broker reconciliation passes (orders, positions, funds match Upstox) and there are no pending orders.
 5. The kill switch is armed and has been tested end to end, including a manual kill and named reset.
 6. Per-strategy and global daily loss limits are configured and no looser than `config/hard_limits.py`.
+   **The per-trade risk has been re-decided by the owner for LIVE** and recorded in
+   [`docs/safety-policy.md`](docs/safety-policy.md) (section 8). PAPER uses Rs 3,000 per trade (decision
+   of 2026-11-13); the config refuses LIVE with more than Rs 2,000.
 7. Upstox rate limits and charges are re-verified against current Upstox / NSE documentation.
 8. The holiday calendar for the year is loaded; the Upstox token is valid (fresh, if daily); the WebSocket is connected.
 9. Telegram alerts are configured and a test alert was received.
@@ -337,7 +340,7 @@ any future LIVE build is even considered, every item below must be true and veri
 
 * Pydantic validates everything at start-up; unknown keys, bad types and unquoted times are errors, and the
   bot refuses to start on invalid config.
-* **Risk limits can only be made stricter.** `config/hard_limits.py` holds the ceilings: ₹2,000 per trade,
+* **Risk limits can only be made stricter.** `config/hard_limits.py` holds the ceilings: ₹3,000 per trade in PAPER (₹2,000 in LIVE; owner decision 2026-11-13),
   ₹5,000 per strategy per day, ₹10,000 global per day, 2 / 4 open trades, 4 trades per day, 15-minute
   cooldown after a loss, pause after 3 consecutive losses, no entries after 14:45, square-off 15:10–15:20,
   rate-limit buffer of at least 20%.

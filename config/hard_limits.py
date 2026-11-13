@@ -21,9 +21,17 @@ LIVE_TRADING_AVAILABLE: Final = False
 TOTAL_CAPITAL: Final = 200_000.0
 PER_STRATEGY_CAPITAL: Final = 100_000.0
 
-# Per trade
-MAX_RISK_PER_TRADE_RS: Final = 2_000.0
-MAX_RISK_PER_TRADE_PCT: Final = 0.02  # of strategy capital
+# Per trade. Separate ceilings for PAPER and LIVE: owner decision of
+# 2026-11-13 (docs/safety-policy.md, "Risk decisions"). PAPER testing may risk
+# up to Rs 3,000 (3 % of strategy capital) per trade. LIVE stays at Rs 2,000
+# (2 %) and the owner must decide the per-trade risk again before LIVE.
+MAX_RISK_PER_TRADE_RS_PAPER: Final = 3_000.0
+MAX_RISK_PER_TRADE_PCT_PAPER: Final = 0.03  # of strategy capital
+MAX_RISK_PER_TRADE_RS_LIVE: Final = 2_000.0
+MAX_RISK_PER_TRADE_PCT_LIVE: Final = 0.02  # of strategy capital
+# The highest any mode allows: no config file can go above it.
+MAX_RISK_PER_TRADE_RS: Final = MAX_RISK_PER_TRADE_RS_PAPER
+MAX_RISK_PER_TRADE_PCT: Final = MAX_RISK_PER_TRADE_PCT_PAPER
 
 # Per strategy, per day
 MAX_DAILY_LOSS_PER_STRATEGY_RS: Final = 5_000.0

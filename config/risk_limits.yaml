@@ -7,7 +7,9 @@ capital:
   per_strategy_capital: 100000     # isolated virtual capital per strategy
 
 per_trade:
-  max_risk_per_trade: 2000         # ₹ — 2% of strategy capital
+  # ₹3,000 = 3% of strategy capital, PAPER only (owner decision 2026-11-13,
+  # docs/safety-policy.md). LIVE refuses anything above ₹2,000 (2%).
+  max_risk_per_trade: 3000
 
 per_strategy:
   max_daily_loss: 5000             # ₹ — 5% of strategy capital
