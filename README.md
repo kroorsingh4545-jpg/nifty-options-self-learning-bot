@@ -221,6 +221,36 @@ engine start / pause / stop, autonomy level) that the bot runs through `executio
 dashboard never talks to the broker. It listens on 127.0.0.1 only. A LIVE request is evaluated and always
 refused in this build. See [`docs/dashboard.md`](docs/dashboard.md).
 
+## Double-click start (Windows)
+
+Two start files in `scripts/` do the whole morning start in one double-click:
+
+| File | For | Python it uses |
+|---|---|---|
+| `scripts\start-office.bat` | office PC | `C:\Users\Prince\venvs\nifty-bot\Scripts\python.exe` |
+| `scripts\start-home.bat` | home PC | the project's `.venv\Scripts\python.exe` |
+
+Each one goes to its own project folder (the folder above `scripts\`), then:
+
+1. runs `python -m runtime check --connect`. If **any** check is `[FAIL]` it stops with a clear message and
+   starts nothing (`WARN` lines do not stop it);
+2. starts the PAPER bot (`python -m runtime paper`) in its own window, **unless a bot is already running**
+   (a `runtime paper` process on this PC, or a fresh heartbeat from `runtime health`). It never starts a
+   second bot;
+3. waits 30 seconds, then starts the dashboard in another window (skipped if something already listens on
+   port 8501);
+4. opens <http://127.0.0.1:8501> in your browser.
+
+Stop the bot as before: Ctrl+C in the bot window, after the square-off. The shared steps live in
+`scripts\start-common.cmd`; do not run that file by itself.
+
+**Desktop shortcut.** In File Explorer open the project's `scripts` folder, right-click `start-office.bat`
+(or `start-home.bat`) and choose **Send to → Desktop (create shortcut)** (Windows 11: click **Show more
+options** first). Rename the
+shortcut if you like (e.g. "NIFTY PAPER bot"); to give it an icon, right-click it → **Properties → Change
+Icon…**. Keep the `.bat` itself in `scripts\`: the shortcut only points to it, and the file finds the project
+folder from its own location.
+
 ## Docker
 
 ```bash
