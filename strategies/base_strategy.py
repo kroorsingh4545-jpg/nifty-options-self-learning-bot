@@ -141,19 +141,56 @@ class BaseStrategy(ABC):
             vars(self).update(saved)
             raise
 
+    def _replay_ordered(self, candles: Iterable[Candle]) -> int:
+        used = 0
+        for c in sorted(candles, key=lambda x: (x.end, x.timeframe_minutes)):
+            last = self._last_end.get(c.timeframe_minutes)
+            if self.wants(c) and (last is None or c.end > last):
+                self.observe_candle(c)
+                used += 1
+        return used
+
     def replay(self, candles: Iterable[Candle]) -> int:
         """Feed earlier completed candles, oldest first, without signalling.
         Candles this strategy has already seen are skipped. Returns how many
         were used. All or nothing: on an error the state is unchanged."""
-        ordered = sorted(candles, key=lambda x: (x.end, x.timeframe_minutes))
+        ordered = list(candles)
+        return self._all_or_nothing(lambda: self._replay_ordered(ordered))
+
+    # ------------------------------------------------------------------ #
+    # Rebuilding after a late candle
+    # ------------------------------------------------------------------ #
+    def seen_until(self, tf: int) -> datetime | None:
+        """End of the newest ``tf``-minute candle this strategy has used."""
+        return self._last_end.get(tf)
+
+    def has_candles_of(self, day: date) -> bool:
+        return any(end.date() >= day for end in self._last_end.values())
+
+    def checkpoint(self) -> dict[str, Any]:
+        """A copy of the whole state, for ``rebuild``. Take it before the day's
+        first candle: it then holds what carries across days (a seeded EMA)."""
+        return copy.deepcopy({k: v for k, v in vars(self).items() if k not in _NOT_STATE})
+
+    def rebuild(self, checkpoint: dict[str, Any], candles: Iterable[Candle]) -> int:
+        """Return to ``checkpoint`` and replay ``candles`` (all of today's, in
+        any order), so a candle that arrived late is used in its place. Like
+        ``replay``, nothing can signal, and a setup already running in the
+        history must break and form again. What really happened is kept:
+        today's approved entries and signal count never go down.
+        All or nothing: on an error the state is unchanged."""
+        if checkpoint.get("signal_instrument_key") != self.signal_instrument_key:
+            raise ValueError("the signal instrument changed since the checkpoint")
+        ordered = list(candles)
+        entries, signals, day, log_decisions = dict(self.entries), self.signals_today, self.day, self.log_decisions
 
         def apply() -> int:
-            used = 0
-            for c in ordered:
-                last = self._last_end.get(c.timeframe_minutes)
-                if self.wants(c) and (last is None or c.end > last):
-                    self.observe_candle(c)
-                    used += 1
+            vars(self).update(copy.deepcopy(checkpoint))
+            self.log_decisions = log_decisions
+            used = self._replay_ordered(ordered)
+            if self.day == day:
+                self.entries = {opt: max(n, entries.get(opt, 0)) for opt, n in self.entries.items()}
+                self.signals_today = max(self.signals_today, signals)
             return used
 
         return self._all_or_nothing(apply)
