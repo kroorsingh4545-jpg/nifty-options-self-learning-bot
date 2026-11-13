@@ -477,7 +477,7 @@ class RiskLimits(_Frozen):
     def _relative_limits(self) -> RiskLimits:
         cap = self.capital
         if self.per_trade.max_risk_per_trade > cap.per_strategy_capital * hl.MAX_RISK_PER_TRADE_PCT:
-            raise ValueError("max_risk_per_trade exceeds 2% of per_strategy_capital")
+            raise ValueError(f"max_risk_per_trade exceeds {hl.MAX_RISK_PER_TRADE_PCT:.0%} of per_strategy_capital")
         if self.per_strategy.max_daily_loss > cap.per_strategy_capital * hl.MAX_DAILY_LOSS_PER_STRATEGY_PCT:
             raise ValueError("per_strategy.max_daily_loss exceeds 5% of per_strategy_capital")
         if self.global_.max_daily_loss > cap.total_capital * hl.MAX_GLOBAL_DAILY_LOSS_PCT:
@@ -734,6 +734,21 @@ class BotConfig(_Frozen):
     def mode(self) -> TradingMode:
         return self.env.trading_mode
 
+    def _live_per_trade_ceiling(self) -> None:
+        """LIVE keeps the Rs 2,000 / 2 % per-trade ceiling (hard_limits): the
+        PAPER-only Rs 3,000 must be decided again by the owner before LIVE."""
+        why = ("for LIVE the per-trade risk is limited to Rs {:,.0f} ({:.0%} of strategy capital); "
+               "the PAPER value must be re-decided by the owner before LIVE (docs/safety-policy.md)")
+        why = why.format(hl.MAX_RISK_PER_TRADE_RS_LIVE, hl.MAX_RISK_PER_TRADE_PCT_LIVE)
+        risk = self.risk
+        if risk.per_trade.max_risk_per_trade > min(hl.MAX_RISK_PER_TRADE_RS_LIVE, risk.capital.per_strategy_capital
+                                                   * hl.MAX_RISK_PER_TRADE_PCT_LIVE):
+            raise ValueError(f"per_trade.max_risk_per_trade {risk.per_trade.max_risk_per_trade:,.0f}: {why}")
+        for sid, s in self.strategies.strategies.items():
+            if s.sizing.risk_per_trade > min(hl.MAX_RISK_PER_TRADE_RS_LIVE,
+                                             s.allocated_capital * hl.MAX_RISK_PER_TRADE_PCT_LIVE):
+                raise ValueError(f"strategies.{sid}.sizing.risk_per_trade {s.sizing.risk_per_trade:,.0f}: {why}")
+
     def resolve_path(self, path: Path) -> Path:
         return path if path.is_absolute() else (self.project_root / path)
 
@@ -750,6 +765,8 @@ class BotConfig(_Frozen):
     def _cross_validate(self) -> BotConfig:
         risk = self.risk
         session = self.settings.market_session
+        if self.env.trading_mode is TradingMode.LIVE:
+            self._live_per_trade_ceiling()
         total_allocated = 0.0
         for sid, s in self.strategies.strategies.items():
             p = f"strategies.{sid}"
@@ -759,7 +776,8 @@ class BotConfig(_Frozen):
             if s.sizing.risk_per_trade > risk.per_trade.max_risk_per_trade:
                 raise ValueError(f"{p}.sizing.risk_per_trade exceeds max_risk_per_trade")
             if s.sizing.risk_per_trade > s.allocated_capital * hl.MAX_RISK_PER_TRADE_PCT:
-                raise ValueError(f"{p}.sizing.risk_per_trade exceeds 2% of allocated_capital")
+                raise ValueError(f"{p}.sizing.risk_per_trade exceeds {hl.MAX_RISK_PER_TRADE_PCT:.0%} "
+                                 "of allocated_capital")
             r, lim = s.risk, risk.per_strategy
             if r.max_daily_loss > lim.max_daily_loss:
                 raise ValueError(f"{p}.risk.max_daily_loss exceeds per_strategy.max_daily_loss")

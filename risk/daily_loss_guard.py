@@ -7,8 +7,10 @@
   ``on_global_breach`` exactly once (-> kill switch, flatten, disable all).
 * ``max_trades_per_day``, ``loss_cooldown_minutes`` and
   ``max_consecutive_losses`` gate new entries per strategy.
-* ``remaining_risk_budget`` caps per-trade risk so that one stop-out can never
-  push a strategy or the portfolio past its daily limit.
+* ``remaining_risk_budget`` caps per-trade risk so that a stop-out can never
+  push a strategy or the portfolio past its daily limit. Given the open
+  trades' stop-risk it assumes they are all stopped out too, so the open
+  trades plus the new one together stay within the limits.
 * State is persisted to ``daily_pnl`` and restored after a restart.
 """
 
@@ -195,11 +197,21 @@ class DailyLossGuard:
             reasons.append(f"cooldown after loss ({math.ceil(left.total_seconds() / 60)} min left)")
         return (not reasons, reasons)
 
-    def remaining_risk_budget(self, sid: str) -> float:
-        """Largest loss a new trade may risk without breaching any daily limit."""
+    def remaining_risk_budget(self, sid: str, open_risk: Mapping[str, float] | None = None) -> float:
+        """Largest loss a new trade may risk without breaching any daily limit.
+
+        ``open_risk``: worst-case loss per strategy of its open trades if their
+        stops are hit (``risk_manager.open_stop_risk``). It is counted as
+        already lost (in place of their mark-to-market, whichever is worse),
+        for this strategy and, summed over every strategy, globally."""
         s = self._s(sid)
-        strategy_left = self._limit(sid) - s.loss
-        global_left = self.risk.global_.max_daily_loss - self.global_loss
+        strategy_loss, global_loss = s.loss, self.global_loss
+        if open_risk is not None:
+            strategy_loss = max(strategy_loss, -s.realized + max(0.0, open_risk.get(sid, 0.0)))
+            global_loss = max(global_loss, -sum(x.realized for x in self.state.values())
+                              + sum(max(0.0, v) for v in open_risk.values()))
+        strategy_left = self._limit(sid) - strategy_loss
+        global_left = self.risk.global_.max_daily_loss - global_loss
         return max(0.0, min(self.risk.per_trade.max_risk_per_trade, strategy_left, global_left))
 
     def snapshot(self) -> dict[str, object]:

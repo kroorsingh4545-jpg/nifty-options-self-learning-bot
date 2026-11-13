@@ -168,7 +168,7 @@ def test_envelope_comes_from_the_risk_config() -> None:
     cfg = config()
     e = RiskEnvelope.from_config(cfg, SID)
     s = cfg.strategies.strategies[SID]
-    assert e.risk_per_trade == min(cfg.risk.per_trade.max_risk_per_trade, s.sizing.risk_per_trade) <= 2000
+    assert e.risk_per_trade == min(cfg.risk.per_trade.max_risk_per_trade, s.sizing.risk_per_trade) <= 3000
     assert e.max_daily_loss <= 5000
     assert e.max_trades_per_day <= 4
     assert e.loss_cooldown_minutes >= 15

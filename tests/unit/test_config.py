@@ -33,7 +33,7 @@ def test_spec_risk_values(config_dir: Path) -> None:
     risk = _load(config_dir).risk
     assert risk.capital.total_capital == 200_000
     assert risk.capital.per_strategy_capital == 100_000
-    assert risk.per_trade.max_risk_per_trade == 2_000
+    assert risk.per_trade.max_risk_per_trade == 3_000  # PAPER (owner decision 2026-11-13)
     assert risk.per_strategy.max_daily_loss == 5_000
     assert risk.global_.max_daily_loss == 10_000
     assert risk.per_strategy.max_open_trades == 2
@@ -61,7 +61,7 @@ def test_strategies_are_isolated_with_own_capital(config_dir: Path) -> None:
     cfg = _load(config_dir)
     for s in cfg.strategies.strategies.values():
         assert s.allocated_capital == 100_000
-        assert s.sizing.risk_per_trade <= 2_000
+        assert s.sizing.risk_per_trade <= 3_000
         assert s.ml.confidence_threshold == pytest.approx(0.60)
     assert sum(s.allocated_capital for s in cfg.strategies.strategies.values()) <= 200_000
 
@@ -83,7 +83,7 @@ def test_relative_paths_resolve_against_project_root(config_dir: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 WEAKENING_CASES = [
-    ("risk_limits.yaml", ["per_trade", "max_risk_per_trade"], 2_500),
+    ("risk_limits.yaml", ["per_trade", "max_risk_per_trade"], 3_500),
     ("risk_limits.yaml", ["per_strategy", "max_daily_loss"], 6_000),
     ("risk_limits.yaml", ["global", "max_daily_loss"], 15_000),
     ("risk_limits.yaml", ["per_strategy", "max_open_trades"], 3),
@@ -97,7 +97,7 @@ WEAKENING_CASES = [
     ("risk_limits.yaml", ["rate_limits", "safety_buffer"], 0.10),
     ("risk_limits.yaml", ["rate_limits", "order_api", "per_second"], 20),
     ("risk_limits.yaml", ["rate_limits", "standard_api", "per_minute"], 1_000),
-    ("strategy_defaults.yaml", ["strategies", "orb_options", "sizing", "risk_per_trade"], 3_000),
+    ("strategy_defaults.yaml", ["strategies", "orb_options", "sizing", "risk_per_trade"], 3_500),
     ("strategy_defaults.yaml", ["strategies", "orb_options", "sizing", "size_multiplier"], 1.5),
     ("strategy_defaults.yaml", ["strategies", "orb_options", "risk", "max_daily_loss"], 8_000),
     ("strategy_defaults.yaml", ["strategies", "vwap_ema", "risk", "max_trades_per_day"], 6),

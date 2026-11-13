@@ -15,7 +15,10 @@ order, it checks:
  7. bid-ask spread within the strategy liquidity limit
  8. stop / target levels (stop always present)
  9. risk budget = min(max risk per trade, strategy sizing, remaining daily
-    strategy and global loss budget) x ML size multiplier (only <= 1)
+    strategy and global loss budget) x ML size multiplier (only <= 1). The
+    remaining budget assumes every open trade (entries still filling
+    included) is stopped out: its stop-risk is counted as already lost, so
+    the open trades plus the new one can never exceed a daily loss limit
 10. position size from budget, premium, stop distance and margin
 
 Monitors translate infrastructure failures into kill-switch triggers:
@@ -28,7 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -74,10 +77,52 @@ class RiskDecision:
         return self.sizing.quantity if self.sizing and self.approved else 0
 
 
+@dataclass(frozen=True)
+class OpenExposure:
+    """What an open trade can still lose: the quantity it holds or may still
+    get (an entry still filling counts in full) between entry and stop."""
+
+    strategy_id: str
+    quantity: int
+    entry_price: float  # average fill; while filling, the highest price it may still fill at
+    stop: float
+    tick_size: float
+    last_price: float | None = None
+
+
+def stop_risk(e: OpenExposure, *, slippage_ticks: int, cost_fn: CostFn | None = None) -> float:
+    """Worst-case loss of an open trade if its stop is hit, in rupees, never
+    below zero: quantity x (entry - stop + exit slippage) + round-trip charges.
+    A price already below the stop (a gap) counts at that price. A stop
+    trailed above the entry counts as 0: locked-in profit never funds new risk."""
+    if e.quantity <= 0:
+        return 0.0
+    slip = max(0, slippage_ticks) * e.tick_size
+    exit_at = e.stop if e.last_price is None else min(e.stop, e.last_price)
+    loss = e.quantity * (e.entry_price - exit_at + slip)
+    if cost_fn is not None:
+        loss += cost_fn(e.quantity, e.entry_price, max(exit_at - slip, 0.0))
+    return max(0.0, loss)
+
+
+def open_stop_risk(exposures: Iterable[OpenExposure], *, slippage_ticks: int,
+                   cost_fn: CostFn | None = None) -> dict[str, float]:
+    """Total stop-risk of the open trades, per strategy."""
+    out: dict[str, float] = {}
+    for e in exposures:
+        out[e.strategy_id] = out.get(e.strategy_id, 0.0) + stop_risk(e, slippage_ticks=slippage_ticks,
+                                                                      cost_fn=cost_fn)
+    return out
+
+
 class OpenTradeCounter:
     """Protocol-like base: implemented by execution.position_manager."""
 
     def open_trade_count(self, strategy_id: str | None = None) -> int:  # pragma: no cover - interface
+        raise NotImplementedError
+
+    def open_exposures(self) -> list[OpenExposure]:  # pragma: no cover - interface
+        """Every open trade (all strategies), pending entries included."""
         raise NotImplementedError
 
 
@@ -190,18 +235,31 @@ class RiskManager:
         multiplier = min(1.0, max(0.0, p.size_multiplier)) * scfg.sizing.size_multiplier
         if multiplier <= 0:
             return self._reject(p, ["size multiplier is zero (ML veto)"])
-        budget = min(scfg.sizing.risk_per_trade, self.guard.remaining_risk_budget(sid))
-        exit_slip = self.cfg.settings.paper_broker.slippage_ticks * p.instrument.tick_size
+        slippage_ticks = self.cfg.settings.paper_broker.slippage_ticks
+        try:
+            open_risk = open_stop_risk(self.trades.open_exposures(), slippage_ticks=slippage_ticks,
+                                       cost_fn=self._cost_fn)
+        except Exception:  # fail closed: without the open trades' risk no new risk can be sized
+            log.exception("open trades' stop-risk could not be computed", extra={"strategy_id": sid})
+            return self._reject(p, ["open trades' stop-risk unavailable"])
+        room = self.guard.remaining_risk_budget(sid, open_risk=open_risk)
+        budget = min(scfg.sizing.risk_per_trade, room)
+        exit_slip = slippage_ticks * p.instrument.tick_size
         sizing = size_position(
             entry_price=entry, stop_price=levels.stop, lot_size=p.instrument.lot_size, risk_budget=budget,
             available_margin=min(available_margin, scfg.allocated_capital), size_multiplier=multiplier,
             exit_slippage=exit_slip, freeze_quantity=p.instrument.freeze_quantity, cost_fn=self._cost_fn,
         )
         if not sizing.ok:
-            return self._reject(p, [f"position size zero: {sizing.reason}"], entry, levels, sizing, budget)
+            reason = f"position size zero: {sizing.reason}"
+            if room < scfg.sizing.risk_per_trade:
+                reason += (f" (daily loss room {room:.2f} after open trades' stop-risk "
+                           f"{sum(open_risk.values()):.2f})")
+            return self._reject(p, [reason], entry, levels, sizing, budget)
         log.info("entry approved by risk", extra={
             "strategy_id": sid, "instrument": key, "qty": sizing.quantity, "entry": entry, "stop": levels.stop,
-            "target": levels.target, "risk": sizing.risk_amount, "budget": round(budget, 2), "bid": tick.bid,
+            "target": levels.target, "risk": sizing.risk_amount, "budget": round(budget, 2),
+            "open_stop_risk": {k: round(v, 2) for k, v in open_risk.items()}, "bid": tick.bid,
             "ask": tick.ask, "ltp": tick.ltp, "spread": round(tick.spread, 2), "spread_pct": round(spread_pct, 3)})
         return RiskDecision(True, (), p, entry, levels, sizing, budget, scfg.trailing)
 

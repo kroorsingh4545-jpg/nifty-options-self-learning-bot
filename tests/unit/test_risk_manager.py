@@ -20,8 +20,8 @@ async def test_approves_valid_entry_with_full_risk_detail() -> None:
     assert d.levels is not None and d.levels.stop == 75.05  # 25% stop, rounded up
     assert d.levels.target is not None and d.levels.target > d.entry_price
     assert d.sizing is not None and d.quantity == 75
-    assert d.sizing.risk_amount <= 2000
-    assert d.risk_budget == 2000
+    assert d.sizing.risk_amount <= 3000
+    assert d.risk_budget == 3000  # PAPER per-trade risk (owner decision 2026-11-13)
 
 
 @pytest.mark.parametrize(("now", "sid", "reason"), [

@@ -69,7 +69,7 @@ from data.storage.repositories import Repositories
 from execution.order_manager import TERMINAL, EntryBlockedError, OrderIntent, OrderManager
 from monitoring.json_logger import get_logger
 from risk.daily_loss_guard import DailyLossGuard
-from risk.risk_manager import OpenTradeCounter, RiskDecision
+from risk.risk_manager import OpenExposure, OpenTradeCounter, RiskDecision
 from risk.stop_loss_manager import (
     ExitReason,
     ProtectiveLevels,
@@ -208,6 +208,22 @@ class PositionManager(OpenTradeCounter):
             if t.open_qty:
                 key = t.instrument.instrument_key
                 out[key] = out.get(key, 0) + t.open_qty
+        return out
+
+    def open_exposures(self) -> list[OpenExposure]:
+        """Every open trade's quantity at risk down to its stop. An entry still
+        filling counts its full requested quantity at its worst (limit) price."""
+        buffer = self.cfg.settings.execution.entry_limit_buffer_ticks
+        out = []
+        for t in self.open_trades():
+            tick = t.instrument.tick_size
+            if t.entry_complete:
+                qty, entry = t.open_qty, t.avg_entry
+            else:
+                qty = max(t.open_qty, t.requested_qty - t.exited_qty)
+                entry = max(t.avg_entry, t.levels.entry + buffer * tick)
+            if qty > 0:
+                out.append(OpenExposure(t.strategy_id, qty, entry, t.stop, tick, t.last_price))
         return out
 
     def unrealized_by_strategy(self) -> dict[str, float]:

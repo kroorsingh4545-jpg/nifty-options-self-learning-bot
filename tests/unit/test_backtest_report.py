@@ -21,8 +21,9 @@ from config.loader import load_config
 from core.clock import IST
 from core.enums import OptionType, OrderSide, TradeStatus, TradingMode
 from data.storage.records import TradeRecord
+from tests.fakes import with_per_trade_risk
 
-CFG = load_config(use_default_env_file=False)
+CFG = with_per_trade_risk(load_config(use_default_env_file=False), 2_000)  # losses measured against Rs 2,000
 D1, D2, D3 = date(2026, 9, 7), date(2026, 9, 8), date(2026, 9, 9)
 
 
