@@ -116,3 +116,11 @@ None.
 
 ## Required tests missing
 None for R1.
+
+---
+
+## Status update 2026-11-14 (branch `research-r2-followups`)
+
+- **Warning 4 (expiry weekday rules): RESOLVED.** The owner confirmed the switch dates (last Thursday expiry
+  2025-08-28, first Tuesday expiry 2025-09-02) against **NSE circular 103/2025**. `research/research.yaml`
+  cites it, and `test_expiry_rules_cite_the_confirming_circular` checks that it does.

@@ -39,12 +39,19 @@ from volatility.realised import ewma_var, garman_klass_var, log_returns, parkins
 from volatility.surface import IvPoint, atm_iv
 
 SESSION_OPEN = time(9, 15)
+SESSION_CLOSE = time(15, 30)
 SNAPSHOT_FROM = time(15, 0)  # an evening / pre-open snapshot counts for the next session
 VAR_FLOOR = 1e-8
 
 
 class LookaheadError(ValueError):
     pass
+
+
+def live_deadline(session: date, margin_minutes: int) -> datetime:
+    """Latest time a forecast for ``session`` may be made and still count as
+    recorded live: ``margin_minutes`` before the 09:15 open (PC clock drift)."""
+    return datetime.combine(session, SESSION_OPEN, tzinfo=IST) - timedelta(minutes=margin_minutes)
 
 
 # --------------------------------------------------------------------------- #
@@ -208,7 +215,7 @@ def build_forecasts(panel: pd.DataFrame, cfg: ForecastSection, calendar: Session
             issues.append(f"no India VIX close for {dates[p]}")
         if special[p]:
             issues.append(f"previous session {dates[p]} was a special session")
-        live = i >= n_obs and now < datetime.combine(t, SESSION_OPEN, tzinfo=IST)
+        live = i >= n_obs and now < live_deadline(t, cfg.live_margin_minutes)
         rows.append({
             "session_date": t.isoformat(), "prev_date": dates[p].isoformat(), "cal_days": cal_days,
             "prev_close": float(c[p]), "vix_prev": _f(vp), "sigma_vix_cal": _f(sig_cal), "sigma_vix_trd": _f(sig_trd),
@@ -258,5 +265,5 @@ def next_session_after(calendar: SessionCalendar, last: date) -> date:
     raise LookupError(f"no trading day within 14 days after {last}")
 
 
-__all__ = ["ExpiryContext", "LookaheadError", "build_forecasts", "build_outcomes", "expiry_contexts",
-           "har_features", "har_forecast", "next_session_after"]
+__all__ = ["SESSION_CLOSE", "ExpiryContext", "LookaheadError", "build_forecasts", "build_outcomes",
+           "expiry_contexts", "har_features", "har_forecast", "live_deadline", "next_session_after"]

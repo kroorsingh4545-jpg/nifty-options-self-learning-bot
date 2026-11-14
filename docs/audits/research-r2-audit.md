@@ -66,3 +66,18 @@ None.
 
 ## Required tests missing
 1. A clock-margin test, once warning 1 is fixed.
+
+---
+
+## Status update 2026-11-14 (branch `research-r2-followups`)
+
+- **Warning 1 (live label depends on the laptop clock): FIXED.**
+  - A next-session forecast is recorded live only if it is made before `live_deadline` (09:15 minus
+    `forecast.live_margin_minutes`, default 5). See `research/forecast/build.py` `live_deadline`.
+  - Tested in `tests/unit/test_research_followups.py::test_live_label_needs_the_safety_margin`: 09:09:59 is
+    live; 09:10:00, 09:14:59 and 09:15:00 are not.
+  - The margin is configurable from 1 to 60 minutes and validated.
+- **Warning 3 (expiry calendar): rules RESOLVED.** The owner confirmed the switch dates against **NSE circular
+  103/2025**. Holiday-shifted expiry days are still too few (n = 19) to conclude anything. That is a sample-size
+  limit, not a calendar question.
+- Re-audit of the follow-up branch: `docs/audits/research-r2-followups-audit.md`.

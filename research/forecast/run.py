@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from research.config import ResearchConfig
-from research.forecast.build import build_forecasts, build_outcomes, next_session_after
+from research.forecast.build import SESSION_CLOSE, build_forecasts, build_outcomes, next_session_after
 from research.forecast.panel import load_panel
 from research.sessions import SessionCalendar
 from research.store import ResearchStore
@@ -52,6 +52,13 @@ def run_build(store: ResearchStore, rcfg: ResearchConfig, *, configured_holidays
     if nxt is not None and nxt < now.date():
         summary.warnings.append(f"history ends {last} but {nxt} was a trading day: refresh with "
                                 "`python -m research history`; no next-session forecast made")
+        nxt = None
+    elif nxt is not None and nxt == now.date() and now.time() >= SESSION_CLOSE:
+        # today's session is over but its candle is not in the history: forecasting "today" now would be
+        # meaningless, and tomorrow cannot be forecast without today's close
+        summary.warnings.append(f"today's ({nxt}) NIFTY daily candle is not in the history yet (Upstox may "
+                                "publish it later): no next-session forecast made. Run `history --to today` "
+                                "again later this evening, or before 08:30 tomorrow")
         nxt = None
     forecasts = build_forecasts(panel, fc, cal, rcfg.weekly_expiry_rules, now=now, next_session=nxt, store=store,
                                 underlying=nifty)

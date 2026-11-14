@@ -98,6 +98,10 @@ async def _with_source(cfg: BotConfig, rcfg: ResearchConfig,
         await rest.aclose()
 
 
+def _to_date(value: str) -> date:
+    return now_ist().date() if value.strip().lower() == "today" else date.fromisoformat(value)
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m research", description="Isolated research layer (read-only).")
     sub = p.add_subparsers(dest="command", required=True)
@@ -107,7 +111,8 @@ def _parser() -> argparse.ArgumentParser:
     h = sub.add_parser("history")
     h.add_argument("--what", choices=("all", "daily", "minutes"), default="all")
     h.add_argument("--keys", default="nifty,vix", help="comma list of: nifty, vix")
-    h.add_argument("--to", type=date.fromisoformat, default=None, help="last date (default: yesterday)")
+    h.add_argument("--to", type=_to_date, default=None,
+                   help="last date: YYYY-MM-DD or 'today' (default: yesterday)")
     for name in sorted(SESSION_ALLOWED_COMMANDS):
         sub.add_parser(name).add_argument("--during-session", action="store_true",
                                           help="allow during the weekday session window (a few calls)")
@@ -146,7 +151,8 @@ def _history(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, sto
         for k in keys:
             if args.what in ("all", "daily"):
                 s = await download_daily(source, store, names[k], start=rcfg.history.daily_from, end=end,
-                                         chunk_years=rcfg.history.daily_chunk_years, now=now_ist)
+                                         chunk_years=rcfg.history.daily_chunk_years, now=now_ist,
+                                         final_after=rcfg.forecast.daily_final_after)
                 print(s.line())
             if args.what in ("all", "minutes"):
                 s = await download_minutes(source, store, names[k], start=rcfg.history.minute_from, end=end,
