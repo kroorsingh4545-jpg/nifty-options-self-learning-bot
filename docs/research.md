@@ -63,3 +63,34 @@ sessions since 2000 include the 1 Feb 2026 Budget Sunday and the 8 Nov 2026 Muhu
 * **Trading days are observed from candles**, not typed in. A weekday without a NIFTY candle is a holiday. A
   weekend or configured-holiday date with a candle is a special session (Muhurat, Budget Saturday) and is never
   used as an expiry.
+
+# R2: forecast vs reality and the volatility core
+
+Findings in plain words, with the full generated report: [`docs/research-r2-findings.md`](research-r2-findings.md).
+
+## Packages
+
+| Package | Contents |
+|---|---|
+| `volatility/` (pure maths, no I/O; `tests/unit/test_volatility_purity.py`) | `realised` (close-to-close, Parkinson, Garman-Klass, Rogers-Satchell, Yang-Zhang, 5-minute intraday RV, point-in-time EWMA), `expected_move` (calendar vs trading time, k-sd bands), `calibration` (hit rates with Wilson CI, variance ratio, block bootstrap, QLIKE, Mincer-Zarnowitz, clustering), `surface` (ATM IV, skew, term structure, IV rank / percentile) |
+| `research/forecast/` | `panel` (NIFTY + VIX + intraday RV), `build` (point-in-time forecasts and outcomes, HAR, expiry context), `run`, `analysis` |
+| `research/reports/` | Markdown rendering. Research never writes files: the CLI prints, and the JSON goes to the `reports` table. |
+
+## Commands (offline, no Upstox calls)
+
+| Command | What it does |
+|---|---|
+| `forecast` | Builds one forecast row per regular NIFTY session (from data before its open) and one outcome row (after its close). The next session's forecast is **recorded live** when run before 09:15; a live row can never be changed or deleted (database triggers). Stale history makes no next-session forecast. |
+| `report [--json]` | Forecast-quality report: VIX calibration (calendar vs trading time), weekend multiple, breakdowns (year, regime, trend, VIX change, weekday, gap, expiry), overnight share, forecaster comparison, VRP, and the current state with data-quality warnings. |
+
+Daily routine after the close (outside 08:30–15:40 on weekdays): `history` → `chain-snapshot` → `forecast` →
+`report`.
+
+## Conventions
+
+- Log returns. Per-session zero-mean variance. RV annualised with 252 sessions.
+- VIX and IV are annualised on calendar time (365). The per-session sd is `VIX/100 * sqrt(cal_days/365)`
+  (calendar) or `VIX/100 / sqrt(252)` (trading). The report measures which fits better.
+- VRP: VIX against the volatility realised over the next 30 calendar days (matched horizon).
+- Overnight share and gap statistics start in 2011 (NIFTY daily opens before that are unreliable).
+- Regime labels (VIX-percentile terciles, a 1-sd trend test) are provisional R2 reporting buckets.
