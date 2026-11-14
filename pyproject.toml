@@ -51,7 +51,7 @@ dev = [
 [tool.setuptools.packages.find]
 include = [
     "backtest*", "broker*", "config*", "core*", "dashboard*", "data*", "execution*",
-    "learning*", "ml*", "monitoring*", "options*", "research*", "risk*", "runtime*", "strategies*",
+    "learning*", "ml*", "monitoring*", "options*", "research*", "risk*", "runtime*", "strategies*", "volatility*",
 ]
 exclude = ["tests*"]
 
