@@ -1,0 +1,47 @@
+# Research layer settings. Read only by research/; never by the trading bot.
+# No secrets here. Dates are quoted ISO strings; times are IST "HH:MM".
+
+store_path: data/research.db        # research's own database (never the trading DB)
+
+instruments:
+  nifty_index_key: "NSE_INDEX|Nifty 50"
+  india_vix_key: "NSE_INDEX|India VIX"   # named as supported on the Upstox V3 historical-candle page
+
+# Upstox calls from research run in a separate process with their own limiter.
+# rate_share = fraction of the bot's effective (already buffered) limits that
+# research may use (at most 0.1), so research and a running PAPER bot together
+# stay at or below 90 % of the official limits (tested).
+rate_share: 0.1
+queue_timeout_seconds: 120        # research waits for its own budget; never borrows the bot's
+
+history:
+  daily_from: "2000-01-01"          # Upstox: daily candles from January 2000
+  minute_from: "2022-01-01"         # Upstox: minute candles from January 2022
+  minute_interval: 1
+  daily_chunk_years: 5              # Upstox allows at most 10 years per daily request
+  # Every research Upstox command is refused in this window on weekdays, so research
+  # never competes with a running PAPER session for the rate-limit budget. Only
+  # `contracts` and `chain-snapshot` (a few calls) may opt in with --during-session;
+  # `history` and `smoke` never can.
+  blocked_window:
+    start: "08:30"
+    end: "15:40"
+
+chain:
+  nearest_expiries: 3               # snapshot this many upcoming expiries ...
+  include_next_monthly: true        # ... plus the nearest monthly expiry if not already in
+
+smoke:
+  iv_check_rate: 0.065              # risk-free rate used ONLY to infer the chain's IV unit
+
+# NIFTY weekly option expiry weekday by period (0 = Monday). A rule expiry on
+# an exchange holiday moves to the previous trading day. These are RULES, not
+# observations: every derived expiry is marked "rule" until it is seen in an
+# Upstox contract list. Owner to verify against the NSE circular.
+weekly_expiry_rules:
+  - effective_from: "2019-02-11"    # NIFTY weekly options launched (Thursday expiry)
+    weekday: 3
+    source: "NSE; Thursday weekly expiry until the 28 Aug 2025 contract"
+  - effective_from: "2025-09-01"
+    weekday: 1
+    source: "NSE circular NSE/FAOP/68747 (June 2025, per secondary sources): last Thursday expiry 2025-08-28, first Tuesday expiry 2025-09-02"
