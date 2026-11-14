@@ -5,9 +5,15 @@ Commands::
     init               create / migrate the research database
     status             row counts, fetch log summary, observations
     smoke              live check of the research data sources (about 7 read-only calls)
-    history            download daily + 1-minute NIFTY index and India VIX history (blocked 09:00-15:40 weekdays)
+    history            download daily + 1-minute NIFTY index and India VIX history
     contracts          save the current NIFTY option contract list (strike/expiry per key)
     chain-snapshot     save option-chain snapshots of the nearest expiries (+ next monthly)
+
+Every command that calls Upstox is refused on weekdays inside
+``history.blocked_window`` (08:30-15:40 IST), so research never competes
+with a running PAPER session for the rate limit. ``contracts`` and
+``chain-snapshot`` (a few calls each) may opt in with ``--during-session``;
+``history`` and ``smoke`` never can.
     summarize-quotes   copy the bot's recorded option quotes into 1-minute bars (trading.db read-only)
     calendar           derived session calendar + weekly expiries for a year
 
@@ -24,7 +30,7 @@ import argparse
 import asyncio
 import sys
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from broker.upstox_rate_limiter import UpstoxRateLimiter
 from broker.upstox_rest import UpstoxRestClient
@@ -35,12 +41,29 @@ from core.enums import TradingMode
 from research.collect.chain import capture_contracts, snapshot_chains
 from research.collect.history import BulkDownloadBlockedError, download_daily, download_minutes, ensure_outside_window
 from research.collect.quotes import summarize_recorded_quotes
-from research.config import ResearchConfig, load_research_config
+from research.config import BlockedWindow, ResearchConfig, load_research_config
 from research.sessions import SessionCalendar, weekly_expiries
 from research.smoke import run_smoke
 from research.sources import ReadOnlySource
 from research.store import ResearchStore
 from research.trading_readonly import TradingDbUnavailableError, open_trading_db_readonly
+
+NETWORK_COMMANDS = frozenset({"smoke", "history", "contracts", "chain-snapshot"})
+SESSION_ALLOWED_COMMANDS = frozenset({"contracts", "chain-snapshot"})
+
+
+def network_guard(command: str, *, during_session: bool, now: datetime, window: BlockedWindow) -> str | None:
+    """Why ``command`` may not call Upstox now, or ``None`` when it may."""
+    if command not in NETWORK_COMMANDS:
+        return None
+    if during_session and command in SESSION_ALLOWED_COMMANDS:
+        return None
+    try:
+        ensure_outside_window(now, window)
+    except BulkDownloadBlockedError as exc:
+        hint = " (or pass --during-session)" if command in SESSION_ALLOWED_COMMANDS else ""
+        return f"{exc}{hint}"
+    return None
 
 
 def research_limits(cfg: BotConfig, share: float) -> EffectiveRateLimits:
@@ -61,7 +84,7 @@ async def _with_source(cfg: BotConfig, rcfg: ResearchConfig,
         print("UPSTOX_ACCESS_TOKEN is not configured (set it in .env); nothing was called.")
         return 2
     limiter = UpstoxRateLimiter(research_limits(cfg, rcfg.rate_share), cfg.settings.broker.circuit_breaker,
-                                queue_timeout=cfg.settings.broker.queue_timeout_seconds)
+                                queue_timeout=rcfg.queue_timeout_seconds)
     rest = UpstoxRestClient.from_config(cfg, limiter)
     try:
         return await work(ReadOnlySource(rest))
@@ -79,8 +102,9 @@ def _parser() -> argparse.ArgumentParser:
     h.add_argument("--what", choices=("all", "daily", "minutes"), default="all")
     h.add_argument("--keys", default="nifty,vix", help="comma list of: nifty, vix")
     h.add_argument("--to", type=date.fromisoformat, default=None, help="last date (default: yesterday)")
-    sub.add_parser("contracts")
-    sub.add_parser("chain-snapshot")
+    for name in sorted(SESSION_ALLOWED_COMMANDS):
+        sub.add_parser(name).add_argument("--during-session", action="store_true",
+                                          help="allow during the weekday session window (a few calls)")
     q = sub.add_parser("summarize-quotes")
     q.add_argument("--day", type=date.fromisoformat, action="append", default=None)
     c = sub.add_parser("calendar")
@@ -103,11 +127,6 @@ def _status(store: ResearchStore) -> int:
 
 
 def _history(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, store: ResearchStore) -> int:
-    try:
-        ensure_outside_window(now_ist(), rcfg.history.blocked_window)
-    except BulkDownloadBlockedError as exc:
-        print(exc)
-        return 3
     names = {"nifty": rcfg.instruments.nifty_index_key, "vix": rcfg.instruments.india_vix_key}
     keys = [k.strip() for k in args.keys.split(",") if k.strip()]
     if not keys or set(keys) - set(names):
@@ -142,6 +161,8 @@ def _calendar(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, st
     print(f"{year} holidays (from candles): {', '.join(map(str, cal.holidays_in(year))) or 'none observed'}")
     special = sorted(d for d in cal.special_sessions if d.year == year)
     print(f"{year} special sessions: {', '.join(map(str, special)) or 'none'}")
+    if not cal.has_configured_year(year):
+        print(f"  the bot config lists no {year} holidays: nothing to compare (the candle-derived list above is used)")
     for kind, days in cal.configured_mismatches(year).items():
         if days:
             print(f"  MISMATCH {kind}: {', '.join(map(str, days))}")
@@ -163,6 +184,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if cfg.mode is not TradingMode.PAPER:
         print("research runs only with TRADING_MODE=PAPER")
         return 2
+    blocked = network_guard(args.command, during_session=getattr(args, "during_session", False), now=now_ist(),
+                            window=rcfg.history.blocked_window)
+    if blocked is not None:
+        print(blocked)
+        return 3
     store = ResearchStore.open(rcfg.resolve_store_path(cfg.project_root), forbidden=[cfg.database_path])
     try:
         return _dispatch(args, cfg, rcfg, store)

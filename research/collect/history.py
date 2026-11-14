@@ -4,11 +4,16 @@ the research database.
 * Requests are split to Upstox's per-request limits (daily: ``chunk_years``
   per request, at most 10; minutes up to 15: one calendar month).
 * Resumable: a range already fetched OK after it had ended is skipped.
-* Bulk downloads are refused inside the configured weekday window
-  (``ensure_outside_window``), so they never compete with a PAPER session
-  for the rate-limit budget.
+* Refused inside the configured weekday window (``ensure_outside_window``,
+  applied by ``research.__main__`` to every network command), so it never
+  competes with a PAPER session for the rate-limit budget.
 * An auth, scope or rate-limit failure stops the run (never retried in a
   loop); any other API error is logged for that range and the run goes on.
+* Invalid candles from Upstox (e.g. high below close) are never repaired or
+  kept: the bot's ``Candle`` validation rejects the whole response, so the
+  range is split in halves until the bad day(s) are isolated. Those days are
+  skipped and named in the fetch log; every valid candle around them is kept.
+  ``MAX_BISECT_REQUESTS`` bounds the extra calls per range.
 """
 
 from __future__ import annotations
@@ -25,6 +30,8 @@ from research.store import ResearchStore
 
 Range = tuple[date, date]
 _FATAL = (AuthError, TokenScopeError, RateLimitError)
+#: extra requests one range may spend isolating invalid candles
+MAX_BISECT_REQUESTS = 64
 
 
 class BulkDownloadBlockedError(RuntimeError):
@@ -34,8 +41,8 @@ class BulkDownloadBlockedError(RuntimeError):
 def ensure_outside_window(now: datetime, window: BlockedWindow) -> None:
     if now.weekday() < 5 and window.start <= now.time() < window.end:
         raise BulkDownloadBlockedError(
-            f"history downloads are blocked on weekdays {window.start:%H:%M}-{window.end:%H:%M} IST "
-            "(the PAPER bot may be using the Upstox rate limit); run it after the close")
+            f"research Upstox calls are blocked on weekdays {window.start:%H:%M}-{window.end:%H:%M} IST "
+            "(the PAPER bot may be using the Upstox rate limit); run after the close or at the weekend")
 
 
 def daily_chunks(start: date, end: date, years: int) -> list[Range]:
@@ -73,14 +80,40 @@ class FetchSummary:
     skipped: int = 0
     rows: int = 0
     errors: list[str] = field(default_factory=list)
+    invalid_days: list[date] = field(default_factory=list)
     first: date | None = None
     last: date | None = None
 
     def line(self) -> str:
         span = f"{self.first} .. {self.last}" if self.first else "no data"
         err = f", {len(self.errors)} error(s)" if self.errors else ""
+        bad = (f", {len(self.invalid_days)} day(s) skipped for invalid Upstox candles: "
+               f"{', '.join(map(str, self.invalid_days))}") if self.invalid_days else ""
         return (f"{self.instrument_key} {self.unit}/{self.interval}: {self.rows} rows from {self.chunks} request(s), "
-                f"{self.skipped} range(s) already complete ({span}){err}")
+                f"{self.skipped} range(s) already complete ({span}){err}{bad}")
+
+
+class _Budget:
+    def __init__(self, n: int) -> None:
+        self.left = n
+
+
+async def _fetch_valid(fetch: Callable[[date, date], Awaitable[list[Candle]]], a: date, b: date,
+                       invalid: list[date], budget: _Budget) -> list[Candle]:
+    """``fetch(a, b)``; on a validation error, split the range until the
+    invalid day(s) are isolated (skipped and appended to ``invalid``)."""
+    try:
+        return await fetch(a, b)
+    except ValueError:  # pydantic rejected a candle Upstox returned (e.g. inconsistent OHLC)
+        if a == b:
+            invalid.append(a)
+            return []
+        if budget.left < 2:
+            raise
+        budget.left -= 2
+        mid = a + (b - a) // 2
+        return (await _fetch_valid(fetch, a, mid, invalid, budget)
+                + await _fetch_valid(fetch, mid + timedelta(days=1), b, invalid, budget))
 
 
 async def _run(store: ResearchStore, summary: FetchSummary, chunks: Sequence[Range],
@@ -92,14 +125,16 @@ async def _run(store: ResearchStore, summary: FetchSummary, chunks: Sequence[Ran
             summary.skipped += 1
             continue
         summary.chunks += 1
+        invalid: list[date] = []
         try:
-            candles = [c for c in await fetch(a, b) if c.complete]
+            candles = [c for c in await _fetch_valid(fetch, a, b, invalid, _Budget(MAX_BISECT_REQUESTS))
+                       if c.complete]
         except _FATAL as exc:
             store.log_fetch(summary.instrument_key, summary.unit, summary.interval, a, b, 0, "ERROR",
                             f"{type(exc).__name__}: {exc}", at=now())
             raise
-        except BrokerError as exc:
-            msg = f"{a}..{b}: {type(exc).__name__}: {exc}"
+        except (BrokerError, ValueError) as exc:
+            msg = f"{a}..{b}: {type(exc).__name__}: {' '.join(str(exc).split())[:300]}"
             summary.errors.append(msg)
             store.log_fetch(summary.instrument_key, summary.unit, summary.interval, a, b, 0, "ERROR", msg, at=now())
             continue
@@ -109,7 +144,9 @@ async def _run(store: ResearchStore, summary: FetchSummary, chunks: Sequence[Ran
             first, last = candles[0].start.date(), candles[-1].start.date()
             summary.first = min(summary.first or first, first)
             summary.last = max(summary.last or last, last)
-        store.log_fetch(summary.instrument_key, summary.unit, summary.interval, a, b, n, "OK", at=now())
+        note = (f"skipped invalid Upstox candle(s) on: {', '.join(map(str, invalid))}") if invalid else None
+        summary.invalid_days += invalid
+        store.log_fetch(summary.instrument_key, summary.unit, summary.interval, a, b, n, "OK", note, at=now())
     return summary
 
 

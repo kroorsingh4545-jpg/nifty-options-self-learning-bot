@@ -1,5 +1,7 @@
 # Risk & Execution Audit Report
 
+> **Re-audit (same day) is at the end of this file.** The first audit below is kept as it was.
+
 Date: 2026-11-14
 Scope (files / PR): branch `research-r1-data-foundation` (from `main` 87e4936):
 `broker/upstox_rest.py` (new read-only `get_daily_candles`), `pyproject.toml` (packages `research*` and its
@@ -57,3 +59,60 @@ None.
 ## Required tests missing
 1. A combined-budget test (bot + research ≤ the buffered official limit), once warning 1 is fixed.
 2. A live smoke run (manual, owner-approved). It is not an automated test, by design.
+
+---
+
+# Re-audit: R1 after the warning-1 fix and the first live run
+
+Date: 2026-11-14 (Saturday, market closed)
+Scope: commit ad76e55 plus the follow-up changes on `research-r1-data-foundation`:
+`research/config.py`, `research/research.yaml` (`rate_share` max 0.1, `queue_timeout_seconds`, window from
+08:30), `research/__main__.py` (`network_guard` on every Upstox command, `--during-session` for `contracts` and
+`chain-snapshot` only), `research/collect/history.py` (invalid-candle isolation), `research/sessions.py`
+(no mismatch report for years without configured holidays), tests, `docs/research.md`, `docs/research-plan.md`.
+`broker/` is unchanged since the first audit. No existing test was changed.
+Verdict: **PASS WITH WARNINGS**
+
+Test evidence: full suite **1522 passed** (8 min 32 s, project `.venv`; 130 research and daily-candle tests). `ruff check .` and `mypy .` (strict, 148 files) are clean. Live run: smoke 5/5 PASS, contracts, history (132 fetch-log rows).
+
+## Changed results
+| # | Area | Status | Evidence | Notes |
+|---|---|---|---|---|
+| 16 | API rate-limit compliance | **OK** (was WARN) | `test_bot_plus_research_stay_inside_the_official_limits` (configured share and 0.1 / 0.05 / 0.01), `test_research_rate_share_cannot_exceed_ten_percent`, `test_every_network_command_is_blocked_during_the_session_window`; `research/__main__.py` `network_guard`, `research_limits` | Worst case with both processes saturated: standard API 44/s, 440/min, 1760/30 min = **88 %** of official. Order API 9/s = 90 % (the limiter's 1-per-window floor; research never calls the order API). On top of that, every research Upstox command is refused on weekdays 08:30–15:40 unless it is `contracts` / `chain-snapshot` with `--during-session` (about 5 calls). Live: the 10 % budget throttled the VIX download correctly (one `RateLimitError` after the 30 s queue wait). Research now waits up to 120 s for its own budget and never borrows the bot's. |
+| 18 | Restart recovery | OK | `test_invalid_upstox_candles_are_isolated_and_skipped` (re-run makes no call), live re-run skipped 6 + 14 completed ranges | |
+| 19 | Logging / audit trail | OK | `fetch_log`: 132 rows from the live run, each with range, rows, status, error or skipped-day note | |
+
+All other areas are unchanged from the first audit (N/A, or OK with the same evidence).
+
+## Status of the first audit's warnings
+1. **Combined rate budget: FIXED** (area 16 above).
+2. **Unverified live behaviour: VERIFIED.** `python -m research smoke`, 5/5 PASS:
+   - India VIX daily works with the analytics token;
+   - the first VIX candle on Upstox is **2009-03-02**;
+   - VIX 1-minute from 2022-01-03 works;
+   - NIFTY daily works;
+   - daily candles parse as session dates;
+   - the **REST chain IV is in percent** (median ratio 87.7, measured on a Saturday against Friday's prices).
+
+   The WebSocket IV stays a decimal.
+3. **Contract metadata deadline: DONE.** 2,242 contracts saved. All 28 instrument keys in the recorded quote
+   bars map to a strike and expiry.
+4. **Expiry weekday rules: STILL OPEN.** They are consistent with the data (2025: 21 Aug, 28 Aug, then
+   2 Sep, 9 Sep), and the contract list confirms the rule-based 23 Nov 2026 holiday shift. The rules are still
+   not verified against the NSE circular text itself. Owner action.
+
+## New warnings
+5. **Upstox data quality: one invalid India VIX daily candle (2013-08-22, OHLC inconsistent).** It is not kept
+   and not repaired: the day is skipped and named in `fetch_log`. Downstream research (R2) must treat it as
+   missing. The bisection is bounded (at most 64 extra calls per range). A range with more bad days than that
+   is logged as ERROR and keeps no data (tested).
+6. **Observation outside research (no change made):** the bot's `broker.upstox_mapping.parse_candles` rejects
+   a whole response when one candle has inconsistent OHLC. In the bot that fails safe (the history load fails,
+   so entries are blocked for the day, per `runtime/history.py`). But one bad Upstox minute candle would block a
+   strategy for a whole day. Worth a separate, audited look at the bot. It is out of scope for research.
+
+## Blocking issues
+None.
+
+## Required tests missing
+None for R1.

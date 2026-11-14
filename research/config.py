@@ -26,7 +26,7 @@ class InstrumentKeys(_Frozen):
 
 
 class BlockedWindow(_Frozen):
-    start: time = time(9, 0)
+    start: time = time(8, 30)
     end: time = time(15, 40)
 
     @model_validator(mode="after")
@@ -62,7 +62,12 @@ class ExpiryRule(_Frozen):
 class ResearchConfig(_Frozen):
     store_path: Path = Path("data/research.db")
     instruments: InstrumentKeys = InstrumentKeys()
-    rate_share: float = Field(default=0.25, gt=0.0, le=0.5)
+    # Fraction of the bot's effective limits research may use in its own process. Capped at 0.1 so the bot
+    # and research together stay at or below 88-90 % of Upstox's official limits even if both saturate.
+    rate_share: float = Field(default=0.1, gt=0.0, le=0.1)
+    # How long a research request may wait for a slot of its (small) budget before it fails.
+    # Research is not latency-sensitive; the bot keeps its own queue timeout.
+    queue_timeout_seconds: float = Field(default=120.0, ge=30.0, le=600.0)
     history: HistorySection = HistorySection()
     chain: ChainSection = ChainSection()
     smoke: SmokeSection = SmokeSection()

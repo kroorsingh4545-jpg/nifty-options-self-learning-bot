@@ -69,9 +69,15 @@ class SessionCalendar:
     def holidays_in(self, year: int) -> list[date]:
         return sorted(d for d in self.holidays if d.year == year)
 
+    def has_configured_year(self, year: int) -> bool:
+        return any(d.year == year for d in self.configured_holidays)
+
     def configured_mismatches(self, year: int) -> dict[str, list[date]]:
         """Configured holidays of ``year`` vs what the candles show, inside the
-        observed range only."""
+        observed range only. Empty when ``year`` has no configured holidays
+        (nothing to compare against)."""
+        if not self.has_configured_year(year):
+            return {}
         configured = {d for d in self.configured_holidays if d.year == year and self.observed(d)}
         observed = {d for d in self.holidays if d.year == year}
         return {"configured_but_traded": sorted(d for d in configured if d not in observed),

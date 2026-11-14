@@ -9,19 +9,22 @@ instruments:
 
 # Upstox calls from research run in a separate process with their own limiter.
 # rate_share = fraction of the bot's effective (already buffered) limits that
-# research may use, so research and a running PAPER bot together stay inside
-# the official limits.
-rate_share: 0.25
+# research may use (at most 0.1), so research and a running PAPER bot together
+# stay at or below 90 % of the official limits (tested).
+rate_share: 0.1
+queue_timeout_seconds: 120        # research waits for its own budget; never borrows the bot's
 
 history:
   daily_from: "2000-01-01"          # Upstox: daily candles from January 2000
   minute_from: "2022-01-01"         # Upstox: minute candles from January 2022
   minute_interval: 1
   daily_chunk_years: 5              # Upstox allows at most 10 years per daily request
-  # Bulk history downloads are refused in this window on weekdays, so they never
-  # compete with a running PAPER session for the rate-limit budget.
+  # Every research Upstox command is refused in this window on weekdays, so research
+  # never competes with a running PAPER session for the rate-limit budget. Only
+  # `contracts` and `chain-snapshot` (a few calls) may opt in with --during-session;
+  # `history` and `smoke` never can.
   blocked_window:
-    start: "09:00"
+    start: "08:30"
     end: "15:40"
 
 chain:

@@ -170,18 +170,57 @@ def test_read_only_source_exposes_only_market_data_reads() -> None:
     assert public == {"get_daily_candles", "get_historical_candles", "get_option_contracts", "get_option_chain"}
 
 
-def test_research_rate_share_is_below_the_bot_budget() -> None:
+#: bot + research together may use at most this share of Upstox's official limits
+COMBINED_MAX_SHARE = 0.90
+
+
+@pytest.mark.parametrize("share", [None, 0.1, 0.05, 0.01])
+def test_bot_plus_research_stay_inside_the_official_limits(share: float | None) -> None:
+    """Two processes, two limiters, one token: their sum, even with both
+    saturated, must stay <= 90 % of the official Upstox limits (worst case
+    with the configured and the maximum allowed research share)."""
+    from config.hard_limits import UPSTOX_OFFICIAL_LIMITS
     from config.loader import load_config
     from research.__main__ import research_limits
     from research.config import load_research_config
 
     cfg = load_config(use_default_env_file=False)
     rcfg = load_research_config()
-    assert 0 < rcfg.rate_share <= 0.5
-    mine, bot = research_limits(cfg, rcfg.rate_share), cfg.risk.rate_limits.effective
-    for cat in ("standard_api", "order_api"):
-        for window in ("per_second", "per_minute", "per_30_minutes"):
-            assert getattr(getattr(mine, cat), window) <= getattr(getattr(bot, cat), window) * 0.5
+    mine = research_limits(cfg, rcfg.rate_share if share is None else share)
+    bot = cfg.risk.rate_limits.effective
+    for cat, windows in UPSTOX_OFFICIAL_LIMITS.items():
+        for window, official in windows.items():
+            combined = getattr(getattr(bot, cat), window) + getattr(getattr(mine, cat), window)
+            assert combined <= official * COMBINED_MAX_SHARE, f"{cat}.{window}: {combined} > 90% of {official}"
+
+
+def test_research_rate_share_cannot_exceed_ten_percent() -> None:
+    from research.config import ResearchConfig, load_research_config
+
+    base = load_research_config().model_dump()
+    with pytest.raises(ValueError):
+        ResearchConfig.model_validate({**base, "rate_share": 0.11})
+
+
+def test_every_network_command_is_blocked_during_the_session_window() -> None:
+    from datetime import datetime
+
+    from core.clock import IST
+    from research.__main__ import NETWORK_COMMANDS, SESSION_ALLOWED_COMMANDS, network_guard
+    from research.config import load_research_config
+
+    window = load_research_config().history.blocked_window
+    session = datetime(2026, 11, 13, 10, 0, tzinfo=IST)  # Friday
+    for cmd in NETWORK_COMMANDS:
+        assert network_guard(cmd, during_session=False, now=session, window=window) is not None, cmd
+        allowed = network_guard(cmd, during_session=True, now=session, window=window) is None
+        assert allowed == (cmd in SESSION_ALLOWED_COMMANDS), cmd
+    assert {"contracts", "chain-snapshot"} == SESSION_ALLOWED_COMMANDS  # never history / smoke
+    for when in (datetime(2026, 11, 13, 8, 29, tzinfo=IST), datetime(2026, 11, 13, 15, 40, tzinfo=IST),
+                 datetime(2026, 11, 14, 10, 0, tzinfo=IST)):  # before / after the window, Saturday
+        assert all(network_guard(c, during_session=False, now=when, window=window) is None for c in NETWORK_COMMANDS)
+    for offline in ("init", "status", "calendar", "summarize-quotes"):
+        assert network_guard(offline, during_session=False, now=session, window=window) is None
 
 
 @pytest.mark.parametrize("pkg", BOT_PACKAGES)

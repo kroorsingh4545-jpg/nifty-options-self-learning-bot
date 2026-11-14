@@ -101,6 +101,7 @@ def store(tmp_path: Path) -> Iterator[ResearchStore]:
 def test_default_research_config_is_valid() -> None:
     assert RCFG.store_path == Path("data/research.db")
     assert RCFG.instruments.india_vix_key == VIX
+    assert RCFG.rate_share == 0.1 and RCFG.queue_timeout_seconds == 120.0
     assert [r.weekday for r in RCFG.weekly_expiry_rules] == [3, 1]  # Thursday, then Tuesday
 
 
@@ -138,7 +139,9 @@ def test_blocked_window_only_on_weekdays_in_session() -> None:
     with pytest.raises(BulkDownloadBlockedError):
         ensure_outside_window(datetime(2026, 11, 13, 9, 0, tzinfo=IST), w)  # Friday
     ensure_outside_window(datetime(2026, 11, 13, 15, 40, tzinfo=IST), w)
-    ensure_outside_window(datetime(2026, 11, 13, 8, 59, tzinfo=IST), w)
+    ensure_outside_window(datetime(2026, 11, 13, 8, 29, tzinfo=IST), w)
+    with pytest.raises(BulkDownloadBlockedError):
+        ensure_outside_window(datetime(2026, 11, 13, 8, 30, tzinfo=IST), w)
     ensure_outside_window(datetime(2026, 11, 14, 11, 0, tzinfo=IST), w)  # Saturday
 
 
@@ -164,6 +167,49 @@ async def test_api_errors_are_logged_and_the_run_continues(store: ResearchStore)
     statuses = [r["status"] for r in store.fetch_log()]
     assert statuses == ["ERROR", "OK"]
     assert store.completed_ranges(VIX, "minutes", 1) == {(date(2022, 2, 1), date(2022, 2, 28))}
+
+
+class BadDaySource(FakeSource):
+    """Like Upstox: one invalid candle makes the whole response fail validation."""
+
+    def __init__(self, sessions: list[date], bad: set[date]) -> None:
+        super().__init__(sessions)
+        self.bad = bad
+
+    async def get_daily_candles(self, key: str, a: date, b: date) -> list[Candle]:
+        self.calls.append(("days", key, a, b))
+        if any(a <= d <= b for d in self.bad):
+            raise ValueError("1 validation error for Candle\n  Value error, inconsistent OHLC")
+        return [daily(key, d) for d in self.sessions if a <= d <= b]
+
+
+async def test_invalid_upstox_candles_are_isolated_and_skipped(store: ResearchStore) -> None:
+    sessions = weekdays(date(2009, 3, 2), date(2010, 12, 31))
+    bad = {date(2009, 7, 14), date(2010, 2, 3)}
+    src = BadDaySource(sessions, bad)
+    s = await download_daily(src, store, VIX, start=date(2009, 1, 1), end=date(2010, 12, 31), chunk_years=5,
+                             now=lambda: at(date(2026, 11, 14)))
+    assert sorted(s.invalid_days) == sorted(bad) and not s.errors
+    assert s.rows == len(sessions) - 2  # every valid candle kept
+    assert not set(store.daily_sessions(VIX)) & bad
+    (log,) = store.fetch_log()
+    assert log["status"] == "OK" and "2009-07-14" in log["note"] and "2010-02-03" in log["note"]
+    assert len(src.calls) <= 1 + 64
+    # resumable: the range is complete, so a re-run makes no call
+    src.calls.clear()
+    await download_daily(src, store, VIX, start=date(2009, 1, 1), end=date(2010, 12, 31), chunk_years=5,
+                         now=lambda: at(date(2026, 11, 15)))
+    assert src.calls == []
+
+
+async def test_bisection_budget_turns_into_a_logged_error(store: ResearchStore) -> None:
+    sessions = weekdays(date(2009, 1, 1), date(2013, 12, 31))
+    src = BadDaySource(sessions, set(sessions[::5]))  # far too many bad days
+    s = await download_daily(src, store, VIX, start=date(2009, 1, 1), end=date(2013, 12, 31), chunk_years=5,
+                             now=lambda: at(date(2026, 11, 14)))
+    assert s.rows == 0 and len(s.errors) == 1 and "inconsistent OHLC" in s.errors[0]
+    assert store.fetch_log()[-1]["status"] == "ERROR"
+    assert len(src.calls) <= 1 + 64
 
 
 async def test_auth_failure_stops_the_run(store: ResearchStore) -> None:
@@ -251,6 +297,7 @@ def test_calendar_from_sessions() -> None:
     assert wrong.configured_mismatches(2026) == {"configured_but_traded": [date(2026, 11, 4)],
                                                  "closed_but_not_configured": [date(2026, 11, 10)]}
     assert date(2026, 11, 4) in wrong.special_sessions  # configured holiday that traded
+    assert wrong.configured_mismatches(2025) == {} and not wrong.has_configured_year(2025)
 
 
 def test_holiday_shifted_tuesday_expiries_2026() -> None:
