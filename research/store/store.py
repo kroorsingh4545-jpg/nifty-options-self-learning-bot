@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -16,7 +16,7 @@ from typing import Any
 from core.clock import now_ist
 from core.models import Candle, Instrument
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 MINUTES_PER_DAY = 1440
 
@@ -102,6 +102,9 @@ class ResearchStore:
                                  (SCHEMA_VERSION, now_ist().isoformat()))
             elif current > SCHEMA_VERSION:
                 raise ResearchStoreError(f"research database is version {current}; this code knows {SCHEMA_VERSION}")
+            elif current < SCHEMA_VERSION:  # every table is CREATE IF NOT EXISTS: the script above migrated it
+                self.con.execute("INSERT INTO schema_version(version, applied_at) VALUES (?, ?)",
+                                 (SCHEMA_VERSION, now_ist().isoformat()))
 
     def close(self) -> None:
         self.con.close()
@@ -182,7 +185,8 @@ class ResearchStore:
 
     def count(self, table: str) -> int:
         if table not in {"daily_candles", "minute_candles", "contracts", "chain_snapshots", "chain_snapshot_rows",
-                         "quote_minute_bars", "fetch_log", "observations"}:
+                         "quote_minute_bars", "fetch_log", "observations", "vol_forecasts", "vol_outcomes",
+                         "reports"}:
             raise ValueError(table)
         return int(self.con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])  # noqa: S608 - whitelisted
 
@@ -257,6 +261,31 @@ class ResearchStore:
                 "INSERT INTO observations VALUES (?,?,?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value,"
                 " evidence=excluded.evidence, observed_at=excluded.observed_at",
                 (name, value, evidence, (at or now_ist()).isoformat()))
+
+    # ------------------------------------------------------------------ #
+    # forecast-vs-reality (v2)
+    # ------------------------------------------------------------------ #
+    def upsert_rows(self, table: str, rows: Sequence[Mapping[str, Any]]) -> int:
+        """Insert or replace rows of ``vol_forecasts`` / ``vol_outcomes`` keyed by
+        session_date. A forecast recorded live is never touched (kept as made)."""
+        if table not in {"vol_forecasts", "vol_outcomes"}:
+            raise ValueError(table)
+        if not rows:
+            return 0
+        cols = list(rows[0])
+        if "session_date" not in cols or any(list(r) != cols for r in rows):
+            raise ResearchStoreError("rows must share the same columns, including session_date")
+        updates = ", ".join(f"{c}=excluded.{c}" for c in cols if c != "session_date")
+        guard = " WHERE vol_forecasts.recorded_live = 0" if table == "vol_forecasts" else ""
+        sql = (f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})"  # noqa: S608
+               f" ON CONFLICT(session_date) DO UPDATE SET {updates}{guard}")
+        with self.con:
+            self.con.executemany(sql, [tuple(r[c] for c in cols) for r in rows])
+        return len(rows)
+
+    def save_report(self, name: str, body: str, *, at: datetime | None = None) -> None:
+        with self.con:
+            self.con.execute("INSERT INTO reports VALUES (?,?,?)", (name, (at or now_ist()).isoformat(), body))
 
     def observation(self, name: str) -> str | None:
         row = self.con.execute("SELECT value FROM observations WHERE name=?", (name,)).fetchone()

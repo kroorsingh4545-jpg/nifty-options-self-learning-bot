@@ -16,6 +16,8 @@ with a running PAPER session for the rate limit. ``contracts`` and
 ``history`` and ``smoke`` never can.
     summarize-quotes   copy the bot's recorded option quotes into 1-minute bars (trading.db read-only)
     calendar           derived session calendar + weekly expiries for a year
+    forecast           build forecast (before each session) and outcome rows from stored history
+    report [--json]    forecast-vs-reality and volatility report (markdown, or JSON); JSON also stored
 
 This is the research composition root: the only research module that builds
 the Upstox client. It loads the bot configuration read-only (the Upstox
@@ -28,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import date, datetime, timedelta
@@ -42,6 +45,9 @@ from research.collect.chain import capture_contracts, snapshot_chains
 from research.collect.history import BulkDownloadBlockedError, download_daily, download_minutes, ensure_outside_window
 from research.collect.quotes import summarize_recorded_quotes
 from research.config import BlockedWindow, ResearchConfig, load_research_config
+from research.forecast.analysis import full_report
+from research.forecast.run import run_build
+from research.reports.forecast_report import render_markdown
 from research.sessions import SessionCalendar, weekly_expiries
 from research.smoke import run_smoke
 from research.sources import ReadOnlySource
@@ -107,6 +113,8 @@ def _parser() -> argparse.ArgumentParser:
                                           help="allow during the weekday session window (a few calls)")
     q = sub.add_parser("summarize-quotes")
     q.add_argument("--day", type=date.fromisoformat, action="append", default=None)
+    sub.add_parser("forecast")
+    sub.add_parser("report").add_argument("--json", action="store_true", help="print JSON instead of markdown")
     c = sub.add_parser("calendar")
     c.add_argument("--year", type=int, default=None)
     return p
@@ -207,6 +215,21 @@ def _dispatch(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, st
         return _history(args, cfg, rcfg, store)
     if cmd == "calendar":
         return _calendar(args, cfg, rcfg, store)
+    if cmd == "forecast":
+        summary = run_build(store, rcfg, configured_holidays=cfg.settings.market_session.holidays, now=now_ist())
+        for line in summary.lines():
+            print(line)
+        return 0 if summary.forecasts else 1
+    if cmd == "report":
+        if store.count("vol_forecasts") == 0:
+            print("no forecast rows yet: run `python -m research forecast` first")
+            return 1
+        rep = full_report(store, rcfg.instruments.nifty_index_key, rcfg.instruments.india_vix_key,
+                          block=rcfg.forecast.block_bootstrap)
+        body = json.dumps(rep, indent=1, default=str)
+        store.save_report("forecast_vs_reality", body)
+        print(body if args.json else render_markdown(rep))
+        return 0
     if cmd == "summarize-quotes":
         try:
             trading = open_trading_db_readonly(cfg.database_path)
