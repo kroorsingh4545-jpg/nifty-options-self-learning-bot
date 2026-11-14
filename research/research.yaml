@@ -50,15 +50,18 @@ forecast:
   intraday_step_minutes: 5          # intraday RV sampling
   reliable_open_from: "2011-01-01"  # NIFTY daily opens before this often equal the previous close
   block_bootstrap: 20               # block length (sessions) for confidence intervals
+  live_margin_minutes: 5            # "recorded live" only if made >= 5 min before 09:15 (PC clock drift)
+  daily_final_after: "15:40"        # today's daily candle counts as final only after this time (IST)
 
 # NIFTY weekly option expiry weekday by period (0 = Monday). A rule expiry on
-# an exchange holiday moves to the previous trading day. These are RULES, not
-# observations: every derived expiry is marked "rule" until it is seen in an
-# Upstox contract list. Owner to verify against the NSE circular.
+# an exchange holiday moves to the previous trading day (holidays are observed
+# from the candles). The switch dates below were CONFIRMED by the owner against
+# NSE circular 103/2025 on 2026-11-14. A derived expiry is still labelled "rule"
+# (not "observed") until it is seen in an Upstox contract list.
 weekly_expiry_rules:
   - effective_from: "2019-02-11"    # NIFTY weekly options launched (Thursday expiry)
     weekday: 3
-    source: "NSE; Thursday weekly expiry until the 28 Aug 2025 contract"
+    source: "NSE: Thursday weekly expiry until the 28 Aug 2025 contract (end confirmed by owner, NSE circular 103/2025)"
   - effective_from: "2025-09-01"
     weekday: 1
-    source: "NSE circular NSE/FAOP/68747 (June 2025, per secondary sources): last Thursday expiry 2025-08-28, first Tuesday expiry 2025-09-02"
+    source: "NSE circular 103/2025 (confirmed by owner 2026-11-14): last Thursday expiry 2025-08-28, first Tuesday expiry 2025-09-02"

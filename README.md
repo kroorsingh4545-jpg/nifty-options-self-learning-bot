@@ -251,6 +251,41 @@ shortcut if you like (e.g. "NIFTY PAPER bot"); to give it an icon, right-click i
 Icon…**. Keep the `.bat` itself in `scripts\`: the shortcut only points to it, and the file finds the project
 folder from its own location.
 
+### Daily research update (after 15:40)
+
+`scripts\daily-research.bat` updates the research layer (see `docs/research.md`) in one double-click. It is
+**research only**: it never starts, stops or talks to the PAPER bot, changes no trading setting and places no
+orders. It uses the same Python as the start files: the project's `.venv` if it exists (home PC), otherwise
+`C:\Users\Prince\venvs\nifty-bot` (office PC).
+
+**When:** after **15:40** on a trading day, or any time at the weekend. Research refuses Upstox calls on weekdays
+08:30–15:40 IST so it never competes with a running PAPER session. If you double-click too early, it stops with
+a message and does nothing.
+
+**What it does**, in this order:
+
+1. `history --to today` refreshes the NIFTY and India VIX candles (a few Upstox calls; already-complete ranges
+   are skipped);
+2. `summarize-quotes` copies the bot's recorded option quotes into the research database before the bot's
+   30-day purge (no Upstox call; the trading database is opened read-only);
+3. `chain-snapshot` saves an option-chain snapshot of the nearest expiries plus the next monthly (a few calls);
+4. `forecast` adds today's outcome and **tomorrow's forecast**, made before the open so it is recorded live and
+   can never be changed later;
+5. `report` saves the full report to `logs\research\report-YYYY-MM-DD.md`.
+
+**Reading the result.** The window stays open at the end:
+
+- `Done.` means every step worked. The forecast step's lines say whether tomorrow's forecast was recorded
+  live.
+- `Finished WITH PROBLEMS in: …` names the failed step(s). The messages above it say why (for example an
+  expired Upstox token).
+- If the forecast step says *today's NIFTY daily candle is not in the history yet*, Upstox had not published
+  today's candle when you ran it. Double-click again later in the evening, or before 08:30 the next morning;
+  a forecast made by 09:10 still counts as live.
+
+Make a desktop shortcut the same way as for the start files (right-click `daily-research.bat` → **Send to →
+Desktop (create shortcut)**).
+
 ## Docker
 
 ```bash

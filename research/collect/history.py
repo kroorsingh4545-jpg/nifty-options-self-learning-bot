@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from broker.errors import AuthError, BrokerError, RateLimitError, TokenScopeError
 from core.models import Candle
@@ -116,9 +116,20 @@ async def _fetch_valid(fetch: Callable[[date, date], Awaitable[list[Candle]]], a
                 + await _fetch_valid(fetch, mid + timedelta(days=1), b, invalid, budget))
 
 
+def _usable(c: Candle, now: datetime, final_after: time | None) -> Candle | None:
+    """A complete candle, or today's daily candle once the session is over
+    (``final_after``), marked complete; ``None`` otherwise."""
+    if c.complete:
+        return c
+    if final_after is not None and c.start.date() == now.date() and now.time() >= final_after:
+        return c.model_copy(update={"complete": True})
+    return None
+
+
 async def _run(store: ResearchStore, summary: FetchSummary, chunks: Sequence[Range],
                fetch: Callable[[date, date], Awaitable[list[Candle]]],
-               save: Callable[[list[Candle]], int], now: Callable[[], datetime]) -> FetchSummary:
+               save: Callable[[list[Candle]], int], now: Callable[[], datetime],
+               final_after: time | None = None) -> FetchSummary:
     done = store.completed_ranges(summary.instrument_key, summary.unit, summary.interval)
     for a, b in chunks:
         if (a, b) in done:
@@ -127,8 +138,9 @@ async def _run(store: ResearchStore, summary: FetchSummary, chunks: Sequence[Ran
         summary.chunks += 1
         invalid: list[date] = []
         try:
-            candles = [c for c in await _fetch_valid(fetch, a, b, invalid, _Budget(MAX_BISECT_REQUESTS))
-                       if c.complete]
+            t = now()
+            fetched = await _fetch_valid(fetch, a, b, invalid, _Budget(MAX_BISECT_REQUESTS))
+            candles = [u for u in (_usable(c, t, final_after) for c in fetched) if u is not None]
         except _FATAL as exc:
             store.log_fetch(summary.instrument_key, summary.unit, summary.interval, a, b, 0, "ERROR",
                             f"{type(exc).__name__}: {exc}", at=now())
@@ -151,12 +163,15 @@ async def _run(store: ResearchStore, summary: FetchSummary, chunks: Sequence[Ran
 
 
 async def download_daily(source: ResearchSource, store: ResearchStore, instrument_key: str, *, start: date,
-                         end: date, chunk_years: int, now: Callable[[], datetime]) -> FetchSummary:
+                         end: date, chunk_years: int, now: Callable[[], datetime],
+                         final_after: time | None = None) -> FetchSummary:
+    """``final_after``: accept TODAY's daily candle (Upstox marks it incomplete
+    until midnight) once the IST time is past this, e.g. 15:40."""
     async def fetch(a: date, b: date) -> list[Candle]:
         return await source.get_daily_candles(instrument_key, a, b)
 
     return await _run(store, FetchSummary(instrument_key, "days", 1), daily_chunks(start, end, chunk_years), fetch,
-                      lambda cs: store.upsert_daily(cs, at=now()), now)
+                      lambda cs: store.upsert_daily(cs, at=now()), now, final_after)
 
 
 async def download_minutes(source: ResearchSource, store: ResearchStore, instrument_key: str, *, start: date,

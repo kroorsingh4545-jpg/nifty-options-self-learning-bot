@@ -71,6 +71,12 @@ class ForecastSection(_Frozen):
     intraday_step_minutes: int = Field(default=5, ge=1, le=30)
     reliable_open_from: date = date(2011, 1, 1)  # NIFTY daily opens before this often equal the previous close
     block_bootstrap: int = Field(default=20, ge=5, le=250)
+    # A next-session forecast counts as recorded LIVE only when it was made at least this many minutes before
+    # the 09:15 open, so a PC clock that runs a little fast (this laptop: about 7 s, NTP stopped) can never
+    # label a forecast made after the open as a real pre-session prediction.
+    live_margin_minutes: int = Field(default=5, ge=1, le=60)
+    # Today's daily candle from Upstox is accepted as final only after this time (IST)
+    daily_final_after: time = time(15, 40)
 
     @model_validator(mode="after")
     def _terciles(self) -> ForecastSection:
