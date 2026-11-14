@@ -53,6 +53,33 @@ class SmokeSection(_Frozen):
     iv_check_rate: float = Field(default=0.065, ge=0.0, le=0.2)
 
 
+class ForecastSection(_Frozen):
+    """Forecast-vs-reality settings. Regime cut-offs here are PROVISIONAL
+    reporting buckets for R2 (data-driven terciles / a 1-sigma trend test);
+    the validated regime engine is R3."""
+
+    method_version: str = "r2.1"
+    rv_window: int = Field(default=20, ge=5, le=120)
+    ewma_lambda: float = Field(default=0.94, gt=0.5, lt=1.0)
+    har_min_train: int = Field(default=500, ge=250)
+    har_refit_every: int = Field(default=21, ge=1, le=252)
+    regime_lookback: int = Field(default=252, ge=60, le=1260)
+    vol_terciles: tuple[float, float] = (1 / 3, 2 / 3)
+    trend_window: int = Field(default=20, ge=5, le=120)
+    trend_z: float = Field(default=1.0, gt=0.0, le=3.0)
+    min_intraday_minutes: int = Field(default=360, ge=60, le=375)
+    intraday_step_minutes: int = Field(default=5, ge=1, le=30)
+    reliable_open_from: date = date(2011, 1, 1)  # NIFTY daily opens before this often equal the previous close
+    block_bootstrap: int = Field(default=20, ge=5, le=250)
+
+    @model_validator(mode="after")
+    def _terciles(self) -> ForecastSection:
+        lo, hi = self.vol_terciles
+        if not 0.0 < lo < hi < 1.0:
+            raise ValueError("vol_terciles must be 0 < low < high < 1")
+        return self
+
+
 class ExpiryRule(_Frozen):
     effective_from: date
     weekday: int = Field(ge=0, le=4)
@@ -71,6 +98,7 @@ class ResearchConfig(_Frozen):
     history: HistorySection = HistorySection()
     chain: ChainSection = ChainSection()
     smoke: SmokeSection = SmokeSection()
+    forecast: ForecastSection = ForecastSection()
     weekly_expiry_rules: tuple[ExpiryRule, ...] = Field(min_length=1)
 
     @model_validator(mode="after")

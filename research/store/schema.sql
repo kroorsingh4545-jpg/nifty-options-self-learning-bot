@@ -136,3 +136,78 @@ CREATE TABLE IF NOT EXISTS observations (
     evidence     TEXT NOT NULL,
     observed_at  TEXT NOT NULL
 );
+
+-- ============================================================================
+-- v2 (R2): forecast-vs-reality. One row per regular NIFTY session.
+-- ============================================================================
+
+-- What was predicted for a session, using ONLY data from before its open.
+-- recorded_live = 1: written before the session opened (a real prediction);
+-- such a row can never be changed or deleted. recorded_live = 0: reconstructed
+-- from history (point-in-time, but computed after the fact).
+CREATE TABLE IF NOT EXISTS vol_forecasts (
+    session_date      TEXT PRIMARY KEY,
+    prev_date         TEXT NOT NULL,
+    cal_days          INTEGER NOT NULL CHECK (cal_days >= 1),
+    prev_close        REAL NOT NULL,
+    vix_prev          REAL,            -- India VIX close of prev_date (annualised %, calendar time)
+    sigma_vix_cal     REAL,            -- per-session log-return sd: VIX/100 * sqrt(cal_days/365)
+    sigma_vix_trd     REAL,            -- VIX/100 * sqrt(1/252)
+    sigma_atm_iv      REAL,            -- from an option-chain snapshot, when one exists
+    sigma_rv20        REAL,            -- trailing 20-session close-to-close
+    sigma_ewma        REAL,            -- RiskMetrics EWMA (lambda from research.yaml)
+    sigma_har         REAL,            -- HAR-log, refitted on past data only
+    vix_pctl          REAL,            -- share of the trailing lookback VIX closes below vix_prev
+    vix_chg5          REAL,            -- ln(VIX prev / VIX 5 sessions earlier)
+    vol_regime        TEXT,            -- LOW | MID | HIGH (provisional, VIX percentile terciles)
+    trend_z           REAL,
+    trend_regime      TEXT,            -- DOWN | RANGE | UP (provisional)
+    dte               INTEGER,         -- sessions to the next weekly expiry (0 = expiry day); NULL before weeklies
+    is_expiry         INTEGER CHECK (is_expiry IN (0,1)),
+    expiry_shifted    INTEGER CHECK (expiry_shifted IN (0,1)),
+    is_monthly_expiry INTEGER CHECK (is_monthly_expiry IN (0,1)),
+    data_issue        TEXT,
+    method_version    TEXT NOT NULL,
+    recorded_live     INTEGER NOT NULL CHECK (recorded_live IN (0,1)),
+    created_at        TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_vol_forecasts_live_no_update
+BEFORE UPDATE ON vol_forecasts WHEN OLD.recorded_live = 1
+BEGIN
+    SELECT RAISE(ABORT, 'a forecast recorded before its session can never be changed');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_vol_forecasts_live_no_delete
+BEFORE DELETE ON vol_forecasts WHEN OLD.recorded_live = 1
+BEGIN
+    SELECT RAISE(ABORT, 'a forecast recorded before its session can never be deleted');
+END;
+
+-- What actually happened in the session.
+CREATE TABLE IF NOT EXISTS vol_outcomes (
+    session_date   TEXT PRIMARY KEY,
+    open           REAL NOT NULL,
+    high           REAL NOT NULL,
+    low            REAL NOT NULL,
+    close          REAL NOT NULL,
+    prev_close     REAL NOT NULL,
+    r_cc           REAL NOT NULL,      -- ln(close / prev close)
+    r_gap          REAL NOT NULL,      -- ln(open / prev close)
+    gap_reliable   INTEGER NOT NULL CHECK (gap_reliable IN (0,1)),  -- 0 before reliable_open_from
+    r_oc           REAL NOT NULL,      -- ln(close / open)
+    ln_hl          REAL NOT NULL,      -- ln(high / low)
+    park_var       REAL NOT NULL,
+    gk_var         REAL NOT NULL,
+    rv5_var        REAL,               -- 5-minute intraday realised variance (1-minute data, 2022+)
+    n_minutes      INTEGER,
+    created_at     TEXT NOT NULL
+);
+
+-- Generated report summaries (JSON), newest kept per name.
+CREATE TABLE IF NOT EXISTS reports (
+    name        TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    PRIMARY KEY (name, created_at)
+);

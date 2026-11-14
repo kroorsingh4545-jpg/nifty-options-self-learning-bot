@@ -34,6 +34,23 @@ chain:
 smoke:
   iv_check_rate: 0.065              # risk-free rate used ONLY to infer the chain's IV unit
 
+# Forecast-vs-reality (R2). Regime cut-offs are PROVISIONAL reporting buckets
+# (VIX-percentile terciles, a 1-sigma trend test); R3 validates a regime engine.
+forecast:
+  method_version: "r2.1"
+  rv_window: 20                     # trailing close-to-close sessions
+  ewma_lambda: 0.94                 # RiskMetrics
+  har_min_train: 500                # sessions before the first HAR fit
+  har_refit_every: 21               # refit on past data only, every N sessions
+  regime_lookback: 252              # VIX percentile against the trailing N closes
+  vol_terciles: [0.3333, 0.6667]
+  trend_window: 20
+  trend_z: 1.0
+  min_intraday_minutes: 360         # a session needs this many 1-minute candles for intraday RV
+  intraday_step_minutes: 5          # intraday RV sampling
+  reliable_open_from: "2011-01-01"  # NIFTY daily opens before this often equal the previous close
+  block_bootstrap: 20               # block length (sessions) for confidence intervals
+
 # NIFTY weekly option expiry weekday by period (0 = Monday). A rule expiry on
 # an exchange holiday moves to the previous trading day. These are RULES, not
 # observations: every derived expiry is marked "rule" until it is seen in an
