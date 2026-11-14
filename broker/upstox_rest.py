@@ -77,8 +77,20 @@ MARKET_DATA_PATH_PREFIXES: tuple[str, ...] = (
 )
 
 
+#: Upstox V3 daily candles: at most one decade per request.
+DAILY_MAX_YEARS_PER_REQUEST = 10
+MINUTES_PER_DAY = 1440
+
+
 def is_market_data_path(path: str) -> bool:
     return path.startswith(MARKET_DATA_PATH_PREFIXES)
+
+
+def _add_years(d: date, years: int) -> date:
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:  # 29 Feb -> 28 Feb
+        return d.replace(year=d.year + years, day=28)
 
 TokenProvider = Callable[[], str | None]
 
@@ -443,6 +455,28 @@ class UpstoxRestClient(MarketDataSource):
                 f"{to_date.isoformat()}/{from_date.isoformat()}")
         data = await self._get(path)
         return parse_candles(instrument_key, (data or {}).get("candles", []), interval_minutes, self._now())
+
+    async def get_daily_candles(self, instrument_key: str, from_date: date, to_date: date) -> list[Candle]:
+        """V3 daily candles, oldest first (both dates inclusive).
+
+        Read-only market data (same ``/v3/historical-candle/`` path as the
+        minute candles, so an analytics token may call it), sent through the
+        central rate limiter like every other request. Upstox serves daily
+        candles from January 2000, at most one decade per request; a longer
+        range is refused here before anything is sent.
+
+        Each candle covers one session date: ``start`` is that date's
+        00:00 IST, ``end`` the next 00:00, and ``timeframe_minutes`` is 1440.
+        Today's candle is ``complete=False`` until the day is over.
+        """
+        if from_date > to_date:
+            raise ValueError("from_date must not be after to_date")
+        if to_date >= _add_years(from_date, DAILY_MAX_YEARS_PER_REQUEST):
+            raise ValueError(f"daily candles: at most {DAILY_MAX_YEARS_PER_REQUEST} years per request")
+        path = (f"/v3/historical-candle/{quote(instrument_key, safe='')}/days/1/"
+                f"{to_date.isoformat()}/{from_date.isoformat()}")
+        data = await self._get(path)
+        return parse_candles(instrument_key, (data or {}).get("candles", []), MINUTES_PER_DAY, self._now())
 
     # ------------------------------------------------------------------ #
     # Account (read-only; daily token only — an analytics token is refused)
