@@ -57,9 +57,9 @@ sessions since 2000 include the 1 Feb 2026 Budget Sunday and the 8 Nov 2026 Muhu
   near-ATM quotes, measured on a Saturday against Friday's prices, which is why it is not exactly 100). It is
   stored raw (`iv_raw`). The WebSocket IV in `option_quotes` is a **decimal** (0.126 = 12.6 %). Never mix the two
   without converting.
-* **The expiry weekday rules** (Thursday until the 28 Aug 2025 contract, Tuesday from 2 Sep 2025) come from
-  secondary sources citing NSE circular NSE/FAOP/68747. The owner should verify them against the circular.
-  Derived expiries stay `rule` until seen in an Upstox contract list.
+* **The expiry weekday rules** (Thursday until the 28 Aug 2025 contract, Tuesday from 2 Sep 2025) were
+  **confirmed by the owner against NSE circular 103/2025** (2026-11-14). Derived expiries are still labelled
+  `rule` (not `observed`) until seen in an Upstox contract list. Holidays come from the candles.
 * **Trading days are observed from candles**, not typed in. A weekday without a NIFTY candle is a holiday. A
   weekend or configured-holiday date with a candle is a special session (Muhurat, Budget Saturday) and is never
   used as an expiry.
@@ -83,8 +83,12 @@ Findings in plain words, with the full generated report: [`docs/research-r2-find
 | `forecast` | Builds one forecast row per regular NIFTY session (from data before its open) and one outcome row (after its close). The next session's forecast is **recorded live** when run before 09:15; a live row can never be changed or deleted (database triggers). Stale history makes no next-session forecast. |
 | `report [--json]` | Forecast-quality report: VIX calibration (calendar vs trading time), weekend multiple, breakdowns (year, regime, trend, VIX change, weekday, gap, expiry), overnight share, forecaster comparison, VRP, and the current state with data-quality warnings. |
 
-Daily routine after the close (outside 08:30–15:40 on weekdays): `history` → `chain-snapshot` → `forecast` →
-`report`.
+Daily routine after the close (outside 08:30–15:40 on weekdays): double-click `scripts\daily-research.bat`, which
+runs `history --to today` → `summarize-quotes` → `chain-snapshot` → `forecast` → `report` (README, "Daily
+research update"). A next-session forecast counts as **recorded live** only if it is made at least
+`live_margin_minutes` (5) before the 09:15 open, so that a PC clock running a little fast cannot mislabel it.
+Today's daily candle is accepted as final only after 15:40 IST. A run after the close that does not have today's
+candle yet makes no next-session forecast and says so.
 
 ## Conventions
 

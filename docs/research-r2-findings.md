@@ -82,7 +82,8 @@ Reproduce: `python -m research history`, `python -m research forecast`, `python 
 - NIFTY daily opens before 2011 are unreliable (they often equal the previous close), so gap statistics start
   in 2011. India VIX has 15 missing or invalid days (Dec 2009, Apr–May 2013, 22 Aug 2013, 2 Jul 2019). They
   are left missing.
-- Expiry dates are derived from rules plus observed holidays, not from NSE's expiry list. Upstox Plus would be
+- Expiry dates are derived from rules plus observed holidays, not from NSE's expiry list. The rules' switch dates
+  were confirmed by the owner against NSE circular 103/2025 (2026-11-14). Upstox Plus would be
   needed for real expired contracts.
 - Regime buckets are provisional, and many breakdowns have wide intervals. Read the CI column before trusting a
   number.
