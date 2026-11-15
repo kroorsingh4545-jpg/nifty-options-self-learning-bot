@@ -17,7 +17,7 @@ from core.clock import IST as IST_TZ
 from core.clock import now_ist
 from core.models import Candle, Instrument
 
-SCHEMA_VERSION = 3  # v3: quote_archive, archive_log (decision-engine D1)
+SCHEMA_VERSION = 4  # v3: quote_archive, archive_log (D1); v4: shadow_outcomes (D2)
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 MINUTES_PER_DAY = 1440
 
@@ -218,7 +218,7 @@ class ResearchStore:
     def count(self, table: str) -> int:
         if table not in {"daily_candles", "minute_candles", "contracts", "chain_snapshots", "chain_snapshot_rows",
                          "quote_minute_bars", "fetch_log", "observations", "vol_forecasts", "vol_outcomes",
-                         "reports", "quote_archive", "archive_log"}:
+                         "reports", "quote_archive", "archive_log", "shadow_outcomes"}:
             raise ValueError(table)
         return int(self.con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])  # noqa: S608 - whitelisted
 
@@ -298,6 +298,40 @@ class ResearchStore:
                              " rows=excluded.rows, archived_at=excluded.archived_at",
                              (day.isoformat(), kind, n, (at or now_ist()).isoformat()))
         return n
+
+    def archived_quotes(self, instrument_key: str, start_ms: int, end_ms: int, *, kind: str = "OPT"
+                        ) -> list[sqlite3.Row]:
+        """Archived quotes of one instrument received in [start_ms, end_ms], oldest first."""
+        return list(self.con.execute(
+            "SELECT * FROM quote_archive WHERE instrument_key=? AND kind=? AND received_ms BETWEEN ? AND ?"
+            " ORDER BY received_ms, exchange_ms", (instrument_key, kind, start_ms, end_ms)))
+
+    def last_archived_quote(self, instrument_key: str, at_ms: int, *, kind: str = "MKT",
+                            max_age_ms: int = 60_000) -> sqlite3.Row | None:
+        """The newest archived quote of ``instrument_key`` received at or before
+        ``at_ms`` and at most ``max_age_ms`` old."""
+        row: sqlite3.Row | None = self.con.execute(
+            "SELECT * FROM quote_archive WHERE instrument_key=? AND kind=? AND received_ms BETWEEN ? AND ?"
+            " ORDER BY received_ms DESC LIMIT 1", (instrument_key, kind, at_ms - max_age_ms, at_ms)).fetchone()
+        return row
+
+    def upsert_shadow(self, rows: Sequence[Mapping[str, Any]], *, at: datetime | None = None) -> int:
+        """Insert or replace shadow outcomes (recomputed when the data or the simulator improves)."""
+        if not rows:
+            return 0
+        stamp = (at or now_ist()).isoformat()
+        cols = [*rows[0], "computed_at"]
+        if any(list(r) != cols[:-1] for r in rows):
+            raise ResearchStoreError("shadow rows must share the same columns")
+        sql = (f"INSERT OR REPLACE INTO shadow_outcomes ({', '.join(cols)}) "  # noqa: S608 - fixed column names
+               f"VALUES ({', '.join('?' * len(cols))})")
+        with self.con:
+            self.con.executemany(sql, [(*r.values(), stamp) for r in rows])
+        return len(rows)
+
+    def shadow_rows(self, sim_version: str) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.con.execute(
+            "SELECT * FROM shadow_outcomes WHERE sim_version=? ORDER BY generated_at, signal_id", (sim_version,))]
 
     def archived_days(self, kind: str) -> set[date]:
         rows = self.con.execute("SELECT session_date FROM archive_log WHERE kind=?", (kind,))
