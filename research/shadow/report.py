@@ -182,4 +182,24 @@ def render_regime(regimes: Sequence[Mapping[str, Any]], rows: Sequence[Mapping[s
     return lines
 
 
-__all__ = ["MIN_SAMPLE", "evidence_summary", "render_regime", "render_evidence", "render_text", "summarize"]
+def render_decisions(decisions: Sequence[Mapping[str, Any]], rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    by_id = {r["signal_id"]: r for r in rows}
+    if not decisions:
+        return []
+    d0 = decisions[0]
+    lines = ["", f"Shadow decision engine {d0['rules_version']} (pre-registered, fingerprint "
+                 f"{str(d0['rules_fingerprint'])[:12]}...; never affects orders):",
+             "signal time          dir  verdict                p*      conf   bias (source)    counted  R"]
+    for d in decisions:
+        r = by_id.get(d["signal_id"], {})
+        p = d.get("p_star")
+        b = d.get("bias")
+        lines.append(f"{str(d['generated_at'])[:19]}  {str(r.get('option_type', '')):3s}  {d['verdict']:21s}  "
+                     f"{'-' if p is None else f'{p:.3f}':6s}  {d['confidence']:.2f}   "
+                     f"{'-' if b is None else f'{b:.3f}'} ({d.get('bias_source') or '-'}){'':4s}"
+                     f"{'no (before registration)' if d['before_registration'] else 'yes':8s}  {r.get('r_net')}")
+    return lines
+
+
+__all__ = ["MIN_SAMPLE", "evidence_summary", "render_decisions", "render_evidence", "render_regime",
+           "render_text", "summarize"]

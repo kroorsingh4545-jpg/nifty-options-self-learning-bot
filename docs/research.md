@@ -197,6 +197,41 @@ years (each with at least 30 samples per group) AND a pooled day-block bootstrap
 * Seven tests at once: some passes would occur by chance; the 3-of-4-years rule plus the pooled interval limits
   that, it does not remove it. A kept hypothesis is a candidate for D7 shadow evaluation, not a trading rule.
 
+## D7: shadow decision engine (2026-11-15)
+
+Rules **pre-registered first**, in their own commit (`docs/decision-engine-d7-preregistration.md`, rules
+`research/decision/rules.py` `RULES_V1`, version `d7.v1`, SHA-256 `4632769f...c767`), before the engine existed or
+ran on any signal. `tests/unit/test_decision_rules_registered.py` fails on any unregistered change, and the engine
+refuses to run rules that do not match their fingerprint.
+
+| Part | What it does |
+|---|---|
+| `research/decision/engine.py` | Per signal: the breakeven hit rate `p*` of its direction over 30 minutes from D3 (delta, gamma, business-time decay, costs, expected move) and the D4 kept hypothesis (variance bias by VIX-change state). TRADE if `p* <= 0.55`, NO_TRADE above, INSUFFICIENT_EVIDENCE when an input is missing; confidence and reasons. D5 Thrust / PairFlow and D6 CrossFlow are slots: NOT_AVAILABLE, never change a v1 verdict. |
+| `research/decision/bias.py` | The variance bias, point in time: realised / VIX-implied variance of 30-minute windows in the same VIX-change state over the 252 sessions before the signal day (pooled below 100 windows). |
+| `research/decision/shadow.py`, `evaluate.py` | Verdicts stored in `shadow_decisions` (research store v7) by `shadow`; `python -m research decision-report` runs the registered forward evaluation (signals from 2026-11-16 only). |
+| `research/decision/orb_direction.py` | `python -m research orb-direction`: how often historical ORB signals moved their own way. |
+
+### Historical ORB signals: did they move in their own direction? (2022-01-03 .. 2026-11-13, scratch copy)
+
+| After | Own direction | 95 % CI | Mean move in the signal's direction | By year |
+|---|---|---|---|---|
+| 30 minutes | **557 of 1,086 = 51.3 %** | 48.3-54.2 % | -0.4 bps | 2022 56.6, 2023 45.3, 2024 50.7, 2025 52.2, 2026 51.7 % |
+| 60 minutes | **568 of 1,084 = 52.4 %** | 49.4-55.4 % | -0.9 bps | 2022 51.6, 2023 48.0, 2024 55.5, 2025 53.7, 2026 53.4 % |
+
+Calls: 54.4 % / 53.8 % (30 / 60 min); puts: 48.4 % / 51.1 %. A coin flip is inside both intervals: the ORB
+breakout direction has had no reliable edge over these holds (every signal assumed taken).
+
+### First verdicts (the 10 recorded signals, all BEFORE registration: shown, never counted)
+
+All 10 are **NO_TRADE**, with `p*` from 0.557 to 0.599: after decay, costs and the variance premium (bias 0.64 on
+2026-11-12, VIX expanding; 0.42 on 2026-11-13, VIX contracting) a long ATM option held 30 minutes needed its
+direction right 56-60 % of the time to break even, against the 51-52 % ORB managed historically. The evaluation
+status is NOT_YET_EVALUABLE (0 counted signals).
+
+**Consequence to watch:** if the engine keeps answering NO_TRADE to nearly every signal, its TRADE group may never
+reach the registered 100 signals, and v1 will stay *not yet evaluable*. That is an outcome of the evidence, not
+something to tune away: a different comparison would need a new pre-registered version (v2).
+
 ## Data caveats
 
 * **Expired option prices need Upstox Plus** (about 6 months, OHLC + OI, no bid/ask, no IV). Not used.

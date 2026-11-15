@@ -17,8 +17,27 @@ from core.clock import IST as IST_TZ
 from core.clock import now_ist
 from core.models import Candle, Instrument
 
-SCHEMA_VERSION = 6  # v3: quote_archive, archive_log (D1); v4: shadow_outcomes (D2); v5: shadow_evidence (D3);
-#                    v6: shadow_regime (D4)
+SCHEMA_VERSION = 7  # v3: quote_archive, archive_log (D1); v4: shadow_outcomes (D2); v5: shadow_evidence (D3);
+#                    v6: shadow_regime (D4); v7: shadow_decisions (D7)
+
+DECISION_COLUMNS = (
+    "signal_id",
+    "sim_version",
+    "rules_version",
+    "rules_fingerprint",
+    "generated_at",
+    "before_registration",
+    "verdict",
+    "confidence",
+    "p_star",
+    "variance_hold",
+    "bias",
+    "bias_source",
+    "bias_windows",
+    "components_json",
+    "reasons_json",
+    "inputs_json",
+)
 
 REGIME_COLUMNS = (
     "signal_id",
@@ -289,7 +308,7 @@ class ResearchStore:
         if table not in {"daily_candles", "minute_candles", "contracts", "chain_snapshots", "chain_snapshot_rows",
                          "quote_minute_bars", "fetch_log", "observations", "vol_forecasts", "vol_outcomes",
                          "reports", "quote_archive", "archive_log", "shadow_outcomes", "shadow_evidence",
-                         "shadow_regime"}:
+                         "shadow_regime", "shadow_decisions"}:
             raise ValueError(table)
         return int(self.con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])  # noqa: S608 - whitelisted
 
@@ -430,6 +449,26 @@ class ResearchStore:
             self.con.executemany(sql, [(*(r.get(c) for c in REGIME_COLUMNS), stamp) for r in rows])
         return len(rows)
 
+    def upsert_decisions(self, rows: Sequence[Mapping[str, Any]], *, at: datetime | None = None) -> int:
+        """Insert or replace engine verdicts (recomputed as evidence arrives; the rules never change)."""
+        if not rows:
+            return 0
+        unknown = {k for r in rows for k in r} - set(DECISION_COLUMNS)
+        if unknown:
+            raise ResearchStoreError(f"unknown decision columns: {sorted(unknown)}")
+        stamp = (at or now_ist()).isoformat()
+        cols = [*DECISION_COLUMNS, "computed_at"]
+        sql = (f"INSERT OR REPLACE INTO shadow_decisions ({', '.join(cols)}) "  # noqa: S608 - fixed column names
+               f"VALUES ({', '.join('?' * len(cols))})")
+        with self.con:
+            self.con.executemany(sql, [(*(r.get(c) for c in DECISION_COLUMNS), stamp) for r in rows])
+        return len(rows)
+
+    def decision_rows(self, sim_version: str, rules_version: str) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.con.execute(
+            "SELECT * FROM shadow_decisions WHERE sim_version=? AND rules_version=? ORDER BY generated_at",
+            (sim_version, rules_version))]
+
     def regime_rows(self, sim_version: str, regime_version: str) -> list[dict[str, Any]]:
         return [dict(r) for r in self.con.execute(
             "SELECT * FROM shadow_regime WHERE sim_version=? AND regime_version=? ORDER BY signal_id",
@@ -514,5 +553,5 @@ class ResearchStore:
         return None if row is None else str(row[0])
 
 
-__all__ = ["ARCHIVE_COLUMNS", "EVIDENCE_COLUMNS", "REGIME_COLUMNS", "SCHEMA_VERSION", "ArchivedQuote", "ChainRow",
-           "QuoteBar", "ResearchStore", "ResearchStoreError"]
+__all__ = ["ARCHIVE_COLUMNS", "DECISION_COLUMNS", "EVIDENCE_COLUMNS", "REGIME_COLUMNS", "SCHEMA_VERSION",
+           "ArchivedQuote", "ChainRow", "QuoteBar", "ResearchStore", "ResearchStoreError"]

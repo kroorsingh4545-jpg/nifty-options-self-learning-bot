@@ -13,10 +13,10 @@ PairFlow, CrossFlow (optional), decision engine in shadow, learning from history
 | D1 | Data audit and recorder: stop losing data, measure its quality | **merged** (PR #19); exit = 10 clean sessions |
 | D2 | Shadow harness: counterfactual P&L of every recorded signal from recorded quotes | **merged** (PR #20) |
 | D3 | Volatility evidence (theta and costs vs expected move, IV-RV on matched horizons, position Greeks) | **merged** (PR #21) |
-| D4 | Regime (R3) and Momentum Pulse, validated on 2022-2026 NIFTY history | **built** (branch `decision-d4-regime-momentum`); kept: VIX-expansion variance bias only |
-| D5 | Thrust and PairFlow, shadow-recorded (needs at least 40 recorded sessions) | not started |
-| D6 | CrossFlow, only if the D1 audit shows the data can support it (optional) | not started |
-| D7 | Central decision engine in shadow (pre-registered; at least about 440 signals before any verdict) | not started |
+| D4 | Regime (R3) and Momentum Pulse, validated on 2022-2026 NIFTY history | **merged** (PR #22); kept: VIX-expansion variance bias only |
+| D5 | Thrust and PairFlow, shadow-recorded (needs at least 40 recorded sessions) | not started; engine slot ready (inert in v1) |
+| D6 | CrossFlow, only if the D1 audit shows the data can support it (optional) | not started; engine slot ready (inert in v1) |
+| D7 | Central decision engine in shadow (pre-registered; at least about 440 signals before any verdict) | **built** in shadow (branch `decision-d7-shadow-engine`); rules v1 pre-registered 2026-11-15 |
 | D8 | Learning from history (only after the sample thresholds) | not started |
 
 Promotion beyond shadow needs the owner's approval and `/audit-risk`, and could only ever act through the
