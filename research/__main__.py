@@ -22,6 +22,8 @@ so may ``chain-schedule`` (about 5 calls per scheduled time);
     shadow             counterfactual outcome + volatility evidence of every recorded signal (D2, D3); JSON stored
     intraday-vol       India VIX vs realised NIFTY variance over 15-60 minute windows, three clocks (D3); JSON stored
     regime-validate    regime + Momentum Pulse hypotheses, purged walk-forward by year on 2022+ history (D4)
+    decision-report    the shadow engine's pre-registered forward evaluation (D7); JSON also stored
+    orb-direction      how often historical ORB signals moved their own way after 30 and 60 minutes (D7)
     calendar           derived session calendar + weekly expiries for a year
     forecast           build forecast (before each session) and outcome rows from stored history
     report [--json]    forecast-vs-reality and volatility report (markdown, or JSON); JSON also stored
@@ -41,7 +43,9 @@ import json
 import sqlite3
 import sys
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
+from typing import Any
 
 import pandas as pd
 
@@ -58,6 +62,13 @@ from research.collect.chain import SnapshotResult, capture_contracts, run_chain_
 from research.collect.history import BulkDownloadBlockedError, download_daily, download_minutes, ensure_outside_window
 from research.collect.quotes import summarize_recorded_quotes
 from research.config import BlockedWindow, ResearchConfig, load_research_config
+from research.decision.bias import VarianceBias
+from research.decision.evaluate import evaluate as evaluate_engine
+from research.decision.evaluate import render_text as render_engine
+from research.decision.orb_direction import orb_direction
+from research.decision.orb_direction import render_text as render_orb_direction
+from research.decision.rules import RULES_V1, RULES_VERSION
+from research.decision.shadow import decision_rows
 from research.forecast.analysis import full_report
 from research.forecast.intraday import minute_closes_by_day, trailing_overnight_shares
 from research.forecast.intraday import render_text as render_intraday
@@ -76,7 +87,7 @@ from research.reports.forecast_report import render_markdown
 from research.sessions import SessionCalendar, weekly_expiries
 from research.shadow.calibrate import ActualTrade
 from research.shadow.evidence import VolContext, evidence_rows, gap_weights, weekend_gap_weight
-from research.shadow.report import evidence_summary, render_evidence, render_regime, summarize
+from research.shadow.report import evidence_summary, render_decisions, render_evidence, render_regime, summarize
 from research.shadow.report import render_text as render_shadow
 from research.shadow.rules import TradeRules
 from research.shadow.run import ShadowInputs, evaluate
@@ -177,6 +188,8 @@ def _parser() -> argparse.ArgumentParser:
     sh.add_argument("--no-log", action="store_true", help="do not rebuild pre-v7 signals from the bot's JSON log")
     sub.add_parser("intraday-vol").add_argument("--json", action="store_true", help="print JSON instead of text")
     sub.add_parser("regime-validate").add_argument("--json", action="store_true", help="print JSON instead of text")
+    sub.add_parser("decision-report").add_argument("--json", action="store_true", help="print JSON instead of text")
+    sub.add_parser("orb-direction").add_argument("--json", action="store_true", help="print JSON instead of text")
     sub.add_parser("forecast")
     sub.add_parser("report").add_argument("--json", action="store_true", help="print JSON instead of markdown")
     c = sub.add_parser("calendar")
@@ -330,16 +343,20 @@ def _shadow(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, stor
     evidence = evidence_rows(rows, _vol_context(cfg, rcfg, store, trading, inp.cost_fn))
     store.upsert_evidence(evidence, at=now_ist())
     ev_summary = evidence_summary(evidence, rows)
-    regimes = regime_rows(rows, _regime_context(cfg, rcfg, store, trading))
+    history = _history_samples(cfg, rcfg, store)
+    regimes = regime_rows(rows, _regime_context(cfg, rcfg, store, trading, history))
     store.upsert_regime(regimes, at=now_ist())
+    decisions = _decisions(rcfg, rows, evidence, regimes, history)
+    store.upsert_decisions(decisions, at=now_ist())
     body = json.dumps({"sim_version": sc.sim_version, "evidence_version": rcfg.volatility.evidence_version,
                        "summary": summary, "calibration": calib, "evidence_summary": ev_summary, "outcomes": rows,
-                       "evidence": evidence, "regime": regimes, "unrebuilt_log_signals": unrebuilt}, indent=1,
-                      default=str)
+                       "evidence": evidence, "regime": regimes, "decisions": decisions,
+                       "unrebuilt_log_signals": unrebuilt}, indent=1, default=str)
     store.save_report("shadow", body)
     print(body if args.json else "\n".join(render_shadow(summary, rows, calib)
                                               + render_evidence(ev_summary, evidence, rows)
-                                              + render_regime(regimes, rows)))
+                                              + render_regime(regimes, rows)
+                                              + render_decisions(decisions, rows)))
     if unrebuilt and not args.json:
         print(f"{len(unrebuilt)} logged signal(s) could not be rebuilt (no per-candle decision line or no "
               f"direction in the log, e.g. a session before per-candle decision logging): {', '.join(unrebuilt)}")
@@ -431,7 +448,8 @@ def _hhmm(v: object) -> time:
     return time(int(h), int(m))
 
 
-def _history_samples(cfg: BotConfig, rcfg: ResearchConfig, store: ResearchStore) -> list[Sample]:
+def _history_samples(cfg: BotConfig, rcfg: ResearchConfig, store: ResearchStore,
+                     settings: SampleSettings | None = None) -> list[Sample]:
     """Every checkpoint and ORB sample of the stored 1-minute NIFTY history (point in time)."""
     nkey, vkey = rcfg.instruments.nifty_index_key, rcfg.instruments.india_vix_key
     m = pd.read_sql("SELECT start_time, open, high, low, close FROM minute_candles WHERE instrument_key = ? AND"
@@ -456,14 +474,54 @@ def _history_samples(cfg: BotConfig, rcfg: ResearchConfig, store: ResearchStore)
     cal = SessionCalendar.from_sessions(sessions, configured_holidays=cfg.settings.market_session.holidays)
     expiries = {e.expiry for e in weekly_expiries(sessions[0], sessions[-1], rcfg.weekly_expiry_rules, cal,
                                                   observed=store.observed_expiries(nkey))} if sessions else set()
-    return build_samples(bars, minute_closes_by_day(vix_m), daily, shares, expiries, sample_settings(cfg, rcfg),
-                         tz=IST, default_share=v.default_overnight_share)
+    return build_samples(bars, minute_closes_by_day(vix_m), daily, shares, expiries,
+                         settings or sample_settings(cfg, rcfg), tz=IST, default_share=v.default_overnight_share)
+
+
+def _decisions(rcfg: ResearchConfig, rows: list[dict[str, Any]], evidence: list[dict[str, Any]],
+               regimes: list[dict[str, Any]], history: list[Sample]) -> list[dict[str, Any]]:
+    """Engine verdicts (D7). The evidence must describe the hold the rules were registered for."""
+    h = int(RULES_V1["horizon_minutes"])
+    if rcfg.volatility.horizon_minutes != h or rcfg.regime.horizon_minutes != h:
+        print(f"decision engine skipped: research.yaml horizons must equal the registered {h} minutes")
+        return []
+    var = RULES_V1["variance"]
+    bias = VarianceBias(history, horizon=h, lookback=int(var["bias_lookback_sessions"]),
+                        min_windows=int(var["bias_min_windows"]))
+    return decision_rows(rows, evidence, regimes, bias)
+
+
+def _decision_report(args: argparse.Namespace, rcfg: ResearchConfig, store: ResearchStore) -> int:
+    decisions = store.decision_rows(rcfg.shadow.sim_version, RULES_VERSION)
+    if not decisions:
+        print("no engine verdicts yet: run `python -m research shadow` first")
+        return 1
+    rep = evaluate_engine(decisions, store.shadow_rows(rcfg.shadow.sim_version))
+    body = json.dumps(rep, indent=1, default=str)
+    store.save_report("decision_engine", body)
+    print(body if args.json else "\n".join(render_engine(rep)))
+    return 0
+
+
+def _orb_direction(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, store: ResearchStore) -> int:
+    base = sample_settings(cfg, rcfg)
+    by_h = {h: [s for s in _history_samples(cfg, rcfg, store, replace(base, horizon=h)) if s.kind == "ORB"]
+            for h in (30, 60)}
+    if not any(by_h.values()):
+        print("no NIFTY 1-minute history yet: run `python -m research history` first")
+        return 1
+    rep = orb_direction(by_h)
+    days = sorted({s.day for v in by_h.values() for s in v})
+    rep_all = {"from": str(days[0]), "to": str(days[-1]), "horizons": rep}
+    store.save_report("orb_direction", json.dumps(rep_all, indent=1, default=str))
+    print(json.dumps(rep_all, indent=1, default=str) if args.json
+          else "\n".join(render_orb_direction(rep, first=str(days[0]), last=str(days[-1]))))
+    return 0
 
 
 def _regime_context(cfg: BotConfig, rcfg: ResearchConfig, store: ResearchStore,
-                    trading: sqlite3.Connection) -> RegimeContext:
+                    trading: sqlite3.Connection, history: list[Sample]) -> RegimeContext:
     nkey, vkey = rcfg.instruments.nifty_index_key, rcfg.instruments.india_vix_key
-    history = _history_samples(cfg, rcfg, store)
     checkpoints = [s for s in history if s.kind == "CHECKPOINT"]
     cache: dict[date, Cutoffs | None] = {}
 
@@ -609,6 +667,10 @@ def _dispatch(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, st
         return _intraday_vol(args, rcfg, store)
     if cmd == "regime-validate":
         return _regime_validate(args, cfg, rcfg, store)
+    if cmd == "decision-report":
+        return _decision_report(args, rcfg, store)
+    if cmd == "orb-direction":
+        return _orb_direction(args, cfg, rcfg, store)
     if cmd == "forecast":
         summary = run_build(store, rcfg, configured_holidays=cfg.settings.market_session.holidays, now=now_ist())
         for line in summary.lines():

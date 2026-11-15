@@ -392,3 +392,31 @@ CREATE TABLE IF NOT EXISTS shadow_regime (
     computed_at              TEXT NOT NULL,
     PRIMARY KEY (signal_id, sim_version, regime_version)
 ) WITHOUT ROWID;
+
+-- ---------------------------------------------------------------------------
+-- v7 (decision-engine D7): the shadow engine's verdict on each signal, with the
+-- pre-registered rules' version and fingerprint, every input, the components
+-- (D5 / D6 slots NOT_AVAILABLE in v1) and the reasons. Shadow only: never read
+-- by trading. before_registration = 1: shown, never counted in the evaluation.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS shadow_decisions (
+    signal_id              TEXT NOT NULL,
+    sim_version            TEXT NOT NULL,
+    rules_version          TEXT NOT NULL,
+    rules_fingerprint      TEXT NOT NULL,
+    generated_at           TEXT NOT NULL,
+    before_registration    REAL,
+    verdict                TEXT NOT NULL,
+    confidence             REAL,
+    p_star                 REAL,
+    variance_hold          REAL,
+    bias                   REAL,
+    bias_source            TEXT,
+    bias_windows           REAL,
+    components_json        TEXT,
+    reasons_json           TEXT,
+    inputs_json            TEXT,
+    computed_at            TEXT NOT NULL,
+    PRIMARY KEY (signal_id, sim_version, rules_version),
+    CHECK (verdict IN ('TRADE','NO_TRADE','INSUFFICIENT_EVIDENCE'))
+) WITHOUT ROWID;
