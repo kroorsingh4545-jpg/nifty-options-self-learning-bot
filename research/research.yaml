@@ -30,6 +30,21 @@ history:
 chain:
   nearest_expiries: 3               # snapshot this many upcoming expiries ...
   include_next_monthly: true        # ... plus the nearest monthly expiry if not already in
+  # `chain-schedule --during-session` takes a snapshot at each of these IST times (about 5 calls each)
+  schedule: ["09:20", "11:00", "13:30", "15:20"]
+
+# `data-quality`: review thresholds for each recorded session (decision-engine D1). Never trading rules.
+data_quality:
+  quote_interval_seconds: 5         # the bot's market_recording.quote_interval_seconds
+  min_completeness: 0.99            # samples recorded / expected, per instrument, over its subscribed span
+  max_gap_seconds: 30               # longest silence between two samples of one instrument
+  max_missing_share: 0.01           # IV, Greeks, tbq/tsq, bid/ask: at most 1 % of option rows without them
+  abnormal_spread_pct: 5.0          # (ask - bid) / mid above this is abnormal ...
+  max_abnormal_spread_share: 0.01   # ... and may affect at most 1 % of option quotes
+  stale_trade_seconds: 60           # last trade older than this when the quote arrived
+  max_clock_offset_seconds: 2.0     # median NIFTY receipt - exchange time
+  edge_tolerance_seconds: 120       # the index must be recorded within 2 minutes of the open and the close
+  clean_sessions_required: 10       # D1 exit: this many clean sessions in a row
 
 smoke:
   iv_check_rate: 0.065              # risk-free rate used ONLY to infer the chain's IV unit

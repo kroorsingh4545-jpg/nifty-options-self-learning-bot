@@ -47,6 +47,29 @@ class HistorySection(_Frozen):
 class ChainSection(_Frozen):
     nearest_expiries: int = Field(default=3, ge=1, le=6)
     include_next_monthly: bool = True
+    # In-session snapshot times (IST) for `chain-schedule --during-session` (about 5 calls each).
+    schedule: tuple[time, ...] = (time(9, 20), time(11, 0), time(13, 30), time(15, 20))
+
+    @model_validator(mode="after")
+    def _schedule(self) -> ChainSection:
+        if list(self.schedule) != sorted(set(self.schedule)) or len(self.schedule) > 8:
+            raise ValueError("chain.schedule must be at most 8 distinct times in increasing order")
+        return self
+
+
+class DataQualitySection(_Frozen):
+    """Review thresholds for `data-quality` (never trading rules)."""
+
+    quote_interval_seconds: float = Field(default=5.0, gt=0.0, le=60.0)  # the bot's market_recording interval
+    min_completeness: float = Field(default=0.99, gt=0.0, le=1.0)
+    max_gap_seconds: float = Field(default=30.0, gt=0.0)
+    max_missing_share: float = Field(default=0.01, ge=0.0, le=1.0)
+    abnormal_spread_pct: float = Field(default=5.0, gt=0.0)
+    max_abnormal_spread_share: float = Field(default=0.01, ge=0.0, le=1.0)
+    stale_trade_seconds: float = Field(default=60.0, gt=0.0)
+    max_clock_offset_seconds: float = Field(default=2.0, gt=0.0)
+    edge_tolerance_seconds: float = Field(default=120.0, gt=0.0)
+    clean_sessions_required: int = Field(default=10, ge=1, le=60)  # D1 exit criterion
 
 
 class SmokeSection(_Frozen):
@@ -105,6 +128,7 @@ class ResearchConfig(_Frozen):
     chain: ChainSection = ChainSection()
     smoke: SmokeSection = SmokeSection()
     forecast: ForecastSection = ForecastSection()
+    data_quality: DataQualitySection = DataQualitySection()
     weekly_expiry_rules: tuple[ExpiryRule, ...] = Field(min_length=1)
 
     @model_validator(mode="after")

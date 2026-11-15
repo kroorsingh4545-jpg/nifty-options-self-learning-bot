@@ -11,9 +11,9 @@ chain's IV unit is not documented; ``research smoke`` records the unit.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from broker.errors import BrokerError
@@ -116,4 +116,36 @@ async def snapshot_chains(source: ResearchSource, store: ResearchStore, underlyi
     return out
 
 
-__all__ = ["SnapshotResult", "capture_contracts", "chain_rows", "choose_expiries", "snapshot_chains"]
+def due_times(schedule: Sequence[time], now: datetime, *, late_tolerance: timedelta = timedelta(minutes=10)
+              ) -> list[datetime]:
+    """Today's snapshot times still to take: those ahead of ``now``, plus one
+    missed by at most ``late_tolerance`` (a run started a little late)."""
+    out = []
+    for t in schedule:
+        at = datetime.combine(now.date(), t, tzinfo=now.tzinfo)
+        if at >= now - late_tolerance:
+            out.append(at)
+    return out
+
+
+async def run_chain_schedule(schedule: Sequence[time], *, now: Callable[[], datetime],
+                             sleep: Callable[[float], Awaitable[None]],
+                             take: Callable[[], Awaitable[list[SnapshotResult]]],
+                             report: Callable[[datetime, list[SnapshotResult] | str], None]) -> int:
+    """Take one snapshot set at each remaining time today, then return how
+    many sets were taken. A failed set is reported and the schedule goes on."""
+    taken = 0
+    for at in due_times(schedule, now()):
+        wait = (at - now()).total_seconds()
+        if wait > 0:
+            await sleep(wait)
+        try:
+            report(at, await take())
+            taken += 1
+        except BrokerError as exc:
+            report(at, f"{type(exc).__name__}: {exc}")
+    return taken
+
+
+__all__ = ["SnapshotResult", "capture_contracts", "chain_rows", "choose_expiries", "due_times", "run_chain_schedule",
+           "snapshot_chains"]

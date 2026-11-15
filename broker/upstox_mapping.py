@@ -203,6 +203,7 @@ def _tick_from_feed(key: str, feed: Any, is_snapshot: bool, fallback_ts: datetim
     bid = ask = None
     bid_qty = ask_qty = None
     vtt = oi = iv = atp = None
+    tbq = tsq = None
     greeks = None
     if union == "ltpc":
         ltpc = feed.ltpc
@@ -216,6 +217,8 @@ def _tick_from_feed(key: str, feed: Any, is_snapshot: bool, fallback_ts: datetim
                 q = m.marketLevel.bidAskQuote[0]
                 bid, ask, bid_qty, ask_qty = q.bidP or None, q.askP or None, int(q.bidQ), int(q.askQ)
             vtt, oi, iv, atp = int(m.vtt), m.oi, m.iv, m.atp
+            # resting quantity across all depth levels (not executed volume); never negative
+            tbq, tsq = (m.tbq if m.tbq >= 0 else None), (m.tsq if m.tsq >= 0 else None)
             if m.HasField("optionGreeks"):
                 greeks = _greeks(m.optionGreeks)
         elif kind == "indexFF":
@@ -247,6 +250,8 @@ def _tick_from_feed(key: str, feed: Any, is_snapshot: bool, fallback_ts: datetim
         oi=oi,
         iv=iv,
         atp=atp,
+        total_buy_qty=tbq,
+        total_sell_qty=tsq,
         greeks=greeks,
         is_snapshot=is_snapshot,
     )

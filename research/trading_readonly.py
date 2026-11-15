@@ -69,4 +69,71 @@ def quote_minute_bars(con: sqlite3.Connection, day: date) -> list[QuoteBar]:
             for r in con.execute(_BARS_SQL, (lo, hi))]
 
 
-__all__ = ["TradingDbUnavailableError", "open_trading_db_readonly", "quote_minute_bars", "recorded_quote_days"]
+#: columns research reads from the bot's quote tables; any the database does not have yet
+#: (a v6 database before the bot migrated it) come back as NULL
+QUOTE_COLUMNS = {
+    "option_quotes": ("instrument_key", "exchange_time", "received_at", "ltp", "bid", "ask", "bid_qty", "ask_qty",
+                      "volume_today", "oi", "iv", "delta", "gamma", "theta", "vega", "tbq", "tsq", "ltq", "atp",
+                      "held"),
+    "market_quotes": ("instrument_key", "exchange_time", "received_at", "ltp", "bid", "ask", "bid_qty", "ask_qty",
+                      "volume_today", "oi", "tbq", "tsq", "ltq", "atp"),
+}
+
+
+def table_columns(con: sqlite3.Connection, table: str) -> set[str]:
+    """Column names of ``table``; empty when the table does not exist."""
+    if table not in QUOTE_COLUMNS and table != "signals":
+        raise ValueError(table)
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+        return set()
+    return {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+
+
+def recorded_days(con: sqlite3.Connection, table: str) -> list[date]:
+    """Days on which rows of ``option_quotes`` or ``market_quotes`` were RECEIVED
+    (the last-trade time of a contract that did not trade today is an earlier day)."""
+    if not table_columns(con, table):
+        return []
+    rows = con.execute(f"SELECT DISTINCT substr(received_at, 1, 10) FROM {table} ORDER BY 1")  # noqa: S608
+    return [date.fromisoformat(r[0]) for r in rows]
+
+
+#: raw_quotes reads rows whose last trade is at most this many days before the day received
+STALE_LOOKBACK_DAYS = 7
+
+
+def _day_bounds(day: date) -> tuple[str, str]:
+    start = datetime.combine(day, datetime.min.time())
+    return start.strftime("%Y-%m-%dT%H:%M"), (start + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M")
+
+
+def raw_quotes(con: sqlite3.Connection, day: date, table: str) -> list[dict[str, object]]:
+    """Every row of ``option_quotes`` or ``market_quotes`` RECEIVED on ``day``,
+    oldest first per instrument, as plain dicts (missing columns are None).
+    The exchange-time index narrows the scan: a last trade more than
+    ``STALE_LOOKBACK_DAYS`` before the day it was received is not read."""
+    have = table_columns(con, table)
+    if not have:
+        return []
+    cols = QUOTE_COLUMNS[table]
+    select = ", ".join(c if c in have else f"NULL AS {c}" for c in cols)
+    lo, hi = _day_bounds(day)
+    ex_lo, ex_hi = _day_bounds(day - timedelta(days=STALE_LOOKBACK_DAYS))[0], _day_bounds(day + timedelta(days=1))[0]
+    sql = (f"SELECT {select} FROM {table} WHERE exchange_time >= ? AND exchange_time < ? "  # noqa: S608
+           "AND received_at >= ? AND received_at < ? ORDER BY instrument_key, received_at, id")
+    return [dict(zip(cols, r, strict=True)) for r in con.execute(sql, (ex_lo, ex_hi, lo, hi))]
+
+
+def recorded_signals(con: sqlite3.Connection, day: date) -> list[dict[str, object]]:
+    """The bot's recorded signals with a candle ending on ``day`` (empty before v7)."""
+    if not table_columns(con, "signals"):
+        return []
+    lo, hi = _day_bounds(day)
+    rows = con.execute("SELECT signal_id, strategy_id, candle_end, decided, approved FROM signals"
+                       " WHERE candle_end >= ? AND candle_end < ? ORDER BY candle_end", (lo, hi))
+    return [dict(r) for r in rows]
+
+
+__all__ = ["QUOTE_COLUMNS", "STALE_LOOKBACK_DAYS", "TradingDbUnavailableError", "open_trading_db_readonly",
+           "quote_minute_bars", "raw_quotes", "recorded_days", "recorded_quote_days", "recorded_signals",
+           "table_columns"]

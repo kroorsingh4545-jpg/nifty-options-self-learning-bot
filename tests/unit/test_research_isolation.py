@@ -215,12 +215,28 @@ def test_every_network_command_is_blocked_during_the_session_window() -> None:
         assert network_guard(cmd, during_session=False, now=session, window=window) is not None, cmd
         allowed = network_guard(cmd, during_session=True, now=session, window=window) is None
         assert allowed == (cmd in SESSION_ALLOWED_COMMANDS), cmd
-    assert {"contracts", "chain-snapshot"} == SESSION_ALLOWED_COMMANDS  # never history / smoke
+    # D1 (owner-approved 2026-11-15): chain-schedule, a few calls at a handful of fixed times
+    assert {"contracts", "chain-snapshot", "chain-schedule"} == SESSION_ALLOWED_COMMANDS
+    assert not {"history", "smoke"} & SESSION_ALLOWED_COMMANDS  # bulk downloads: never in session
     for when in (datetime(2026, 11, 13, 8, 29, tzinfo=IST), datetime(2026, 11, 13, 15, 40, tzinfo=IST),
                  datetime(2026, 11, 14, 10, 0, tzinfo=IST)):  # before / after the window, Saturday
         assert all(network_guard(c, during_session=False, now=when, window=window) is None for c in NETWORK_COMMANDS)
-    for offline in ("init", "status", "calendar", "summarize-quotes"):
+    for offline in ("init", "status", "calendar", "summarize-quotes", "archive-quotes", "data-quality"):
         assert network_guard(offline, during_session=False, now=session, window=window) is None
+
+
+def test_the_in_session_chain_schedule_is_small() -> None:
+    """chain-schedule may run during the session only because it is tiny: at most
+    8 times a day, each one contract list + at most nearest_expiries + 1 chains."""
+    from research.config import ResearchConfig, load_research_config
+
+    rcfg = load_research_config()
+    calls_per_time = 1 + rcfg.chain.nearest_expiries + int(rcfg.chain.include_next_monthly)
+    assert len(rcfg.chain.schedule) * calls_per_time <= 40
+    base = rcfg.model_dump()
+    with pytest.raises(ValueError):
+        ResearchConfig.model_validate({**base, "chain": {**base["chain"],
+                                                         "schedule": [f"{h:02d}:00" for h in range(9, 18)]}})
 
 
 @pytest.mark.parametrize("pkg", BOT_PACKAGES)

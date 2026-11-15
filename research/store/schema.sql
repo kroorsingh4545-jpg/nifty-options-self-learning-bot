@@ -211,3 +211,44 @@ CREATE TABLE IF NOT EXISTS reports (
     body        TEXT NOT NULL,
     PRIMARY KEY (name, created_at)
 );
+
+-- ---------------------------------------------------------------------------
+-- v3 (decision-engine D1): permanent raw copy of the bot's 5-second quotes.
+-- trading.db deletes option_quotes / market_quotes after 30 days; this copy is
+-- kept. Times are epoch MILLISECONDS (IST instants) to keep rows small.
+-- kind: OPT = option_quotes row, MKT = market_quotes row (index / future / VIX).
+-- Columns the bot did not record (before trading-db v7) are NULL.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS quote_archive (
+    instrument_key   TEXT NOT NULL,
+    exchange_ms      INTEGER NOT NULL,
+    received_ms      INTEGER NOT NULL,
+    kind             TEXT NOT NULL CHECK (kind IN ('OPT','MKT')),
+    ltp              REAL NOT NULL,
+    bid              REAL,
+    ask              REAL,
+    bid_qty          INTEGER,
+    ask_qty          INTEGER,
+    volume_today     INTEGER,
+    oi               REAL,
+    iv               REAL,
+    delta            REAL,
+    gamma            REAL,
+    theta            REAL,
+    vega             REAL,
+    tbq              REAL,
+    tsq              REAL,
+    ltq              INTEGER,
+    atp              REAL,
+    held             INTEGER NOT NULL DEFAULT 0 CHECK (held IN (0,1)),
+    PRIMARY KEY (instrument_key, exchange_ms, received_ms)
+) WITHOUT ROWID;
+
+-- One row per archived (day, kind): what was copied and when.
+CREATE TABLE IF NOT EXISTS archive_log (
+    session_date  TEXT NOT NULL,
+    kind          TEXT NOT NULL CHECK (kind IN ('OPT','MKT')),
+    rows          INTEGER NOT NULL,
+    archived_at   TEXT NOT NULL,
+    PRIMARY KEY (session_date, kind)
+) WITHOUT ROWID;

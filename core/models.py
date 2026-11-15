@@ -55,6 +55,10 @@ class Tick(_Model):
     oi: float | None = Field(default=None, ge=0)
     iv: float | None = None
     atp: float | None = None
+    # Total quantity RESTING on the bid / ask side across all depth levels (``full`` feed tbq / tsq).
+    # Displayed liquidity, NOT executed buying or selling.
+    total_buy_qty: float | None = Field(default=None, ge=0)
+    total_sell_qty: float | None = Field(default=None, ge=0)
     greeks: Greeks | None = None
     is_snapshot: bool = False  # initial snapshot / REST recovery rather than live update
 
