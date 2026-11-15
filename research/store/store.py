@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +17,33 @@ from core.clock import IST as IST_TZ
 from core.clock import now_ist
 from core.models import Candle, Instrument
 
-SCHEMA_VERSION = 5  # v3: quote_archive, archive_log (D1); v4: shadow_outcomes (D2); v5: shadow_evidence (D3)
+SCHEMA_VERSION = 6  # v3: quote_archive, archive_log (D1); v4: shadow_outcomes (D2); v5: shadow_evidence (D3);
+#                    v6: shadow_regime (D4)
+
+REGIME_COLUMNS = (
+    "signal_id",
+    "sim_version",
+    "regime_version",
+    "kept_json",
+    "regime_named",
+    "regime_trend",
+    "regime_vol",
+    "vol_change",
+    "expiry_day",
+    "regime_confidence",
+    "regime_reasons_json",
+    "pulse_label",
+    "pulse_direction",
+    "pulse_confidence",
+    "pulse_aligned",
+    "pulse_reasons_json",
+    "er",
+    "adx",
+    "disp",
+    "atrx",
+    "ml_trend",
+    "ml_vol",
+)
 
 EVIDENCE_COLUMNS = (
     "signal_id",
@@ -262,7 +288,8 @@ class ResearchStore:
     def count(self, table: str) -> int:
         if table not in {"daily_candles", "minute_candles", "contracts", "chain_snapshots", "chain_snapshot_rows",
                          "quote_minute_bars", "fetch_log", "observations", "vol_forecasts", "vol_outcomes",
-                         "reports", "quote_archive", "archive_log", "shadow_outcomes", "shadow_evidence"}:
+                         "reports", "quote_archive", "archive_log", "shadow_outcomes", "shadow_evidence",
+                         "shadow_regime"}:
             raise ValueError(table)
         return int(self.con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])  # noqa: S608 - whitelisted
 
@@ -388,6 +415,40 @@ class ResearchStore:
             self.con.executemany(sql, [(*(r.get(c) for c in EVIDENCE_COLUMNS), stamp) for r in rows])
         return len(rows)
 
+    def upsert_regime(self, rows: Sequence[Mapping[str, Any]], *, at: datetime | None = None) -> int:
+        """Insert or replace regime / Pulse rows; missing fields are stored as NULL."""
+        if not rows:
+            return 0
+        unknown = {k for r in rows for k in r} - set(REGIME_COLUMNS)
+        if unknown:
+            raise ResearchStoreError(f"unknown regime columns: {sorted(unknown)}")
+        stamp = (at or now_ist()).isoformat()
+        cols = [*REGIME_COLUMNS, "computed_at"]
+        sql = (f"INSERT OR REPLACE INTO shadow_regime ({', '.join(cols)}) "  # noqa: S608 - fixed column names
+               f"VALUES ({', '.join('?' * len(cols))})")
+        with self.con:
+            self.con.executemany(sql, [(*(r.get(c) for c in REGIME_COLUMNS), stamp) for r in rows])
+        return len(rows)
+
+    def regime_rows(self, sim_version: str, regime_version: str) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.con.execute(
+            "SELECT * FROM shadow_regime WHERE sim_version=? AND regime_version=? ORDER BY signal_id",
+            (sim_version, regime_version))]
+
+    def minute_bars(self, instrument_key: str, day: date) -> dict[time, tuple[float, float, float, float]]:
+        """{bar START time: (open, high, low, close)} of stored complete 1-minute candles of ``day``."""
+        rows = self.con.execute("SELECT start_time, open, high, low, close FROM minute_candles WHERE"
+                                " instrument_key=? AND interval_minutes=1 AND complete=1 AND start_time >= ? AND"
+                                " start_time < ? ORDER BY start_time",
+                                (instrument_key, day.isoformat(), (day + timedelta(days=1)).isoformat()))
+        return {datetime.fromisoformat(r[0]).time(): (float(r[1]), float(r[2]), float(r[3]), float(r[4]))
+                for r in rows}
+
+    def latest_report(self, name: str) -> str | None:
+        row = self.con.execute("SELECT body FROM reports WHERE name=? ORDER BY created_at DESC LIMIT 1",
+                               (name,)).fetchone()
+        return None if row is None else str(row[0])
+
     def evidence_rows(self, sim_version: str, evidence_version: str) -> list[dict[str, Any]]:
         return [dict(r) for r in self.con.execute(
             "SELECT * FROM shadow_evidence WHERE sim_version=? AND evidence_version=? ORDER BY signal_id",
@@ -453,5 +514,5 @@ class ResearchStore:
         return None if row is None else str(row[0])
 
 
-__all__ = ["ARCHIVE_COLUMNS", "EVIDENCE_COLUMNS", "SCHEMA_VERSION", "ArchivedQuote", "ChainRow",
+__all__ = ["ARCHIVE_COLUMNS", "EVIDENCE_COLUMNS", "REGIME_COLUMNS", "SCHEMA_VERSION", "ArchivedQuote", "ChainRow",
            "QuoteBar", "ResearchStore", "ResearchStoreError"]

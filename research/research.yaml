@@ -92,6 +92,23 @@ volatility:
   intraday_checkpoints: ["10:00", "11:30", "13:00", "14:00"]   # `intraday-vol`: forecast made at these times ...
   intraday_horizons: [15, 30, 60]                              # ... for the next N trading minutes
 
+# `regime` (decision-engine D4): regime (R3) and Momentum Pulse, validated by `regime-validate` with a purged
+# walk-forward, out of sample by calendar year. Fixed in advance; Pulse cutoffs are fitted on training years only.
+regime:
+  regime_version: "d4.1"
+  checkpoints: ["10:00", "10:30", "11:00", "11:30", "12:00", "12:30", "13:00", "13:30", "14:00", "14:30"]
+  horizon_minutes: 30               # outcome window after each checkpoint / ORB signal (same session)
+  lookback_bars: 20                 # 1-minute bars for efficiency ratio, displacement and trailing sd
+  adx_period: 10
+  atr_short: 10
+  atr_long: 20
+  required_years: 3                 # KEEP only with the right sign in >= 3 test years ...
+  min_group: 30                     # ... each with >= 30 samples per group, and a pooled 95 % CI excluding 0
+  min_train: 200                    # Pulse cutoffs need at least this many training checkpoints
+  n_boot: 1000                      # day-block bootstrap draws
+  vix_lookback_sessions: 252        # VIX level / change percentiles against the trailing year
+  trend_sessions: 20                # daily trend: 20-session move in sd units
+
 # NIFTY weekly option expiry weekday by period (0 = Monday). A rule expiry on
 # an exchange holiday moves to the previous trading day (holidays are observed
 # from the candles). The switch dates below were CONFIRMED by the owner against

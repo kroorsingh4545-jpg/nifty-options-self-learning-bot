@@ -8,7 +8,7 @@ mistake. This is the ONLY place research opens the trading database.
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
@@ -135,6 +135,17 @@ def index_minute_closes(con: sqlite3.Connection, instrument_key: str, start: dat
     return [(datetime.fromisoformat(str(r[0])), float(r[1])) for r in rows]
 
 
+def index_minute_bars(con: sqlite3.Connection, instrument_key: str,
+                      day: date) -> dict[time, tuple[float, float, float, float]]:
+    """{bar START time: (open, high, low, close)} of the bot's complete 1-minute candles of ``day``."""
+    lo, hi = _day_bounds(day)
+    rows = con.execute("SELECT start_time, open, high, low, close FROM candles WHERE instrument_key = ? AND"
+                       " timeframe_minutes = 1 AND complete = 1 AND start_time >= ? AND start_time < ?"
+                       " ORDER BY start_time", (instrument_key, lo, hi))
+    return {datetime.fromisoformat(str(r[0])).time(): (float(r[1]), float(r[2]), float(r[3]), float(r[4]))
+            for r in rows}
+
+
 #: raw_quotes reads rows whose last trade is at most this many days before the day received
 STALE_LOOKBACK_DAYS = 7
 
@@ -173,4 +184,5 @@ def recorded_signals(con: sqlite3.Connection, day: date) -> list[dict[str, objec
 
 __all__ = ["QUOTE_COLUMNS", "STALE_LOOKBACK_DAYS", "TradingDbUnavailableError", "open_trading_db_readonly",
            "quote_minute_bars", "raw_quotes", "recorded_days", "recorded_quote_days", "recorded_signals",
-           "closed_trades", "index_close_at", "index_minute_closes", "signal_rows", "table_columns"]
+           "closed_trades", "index_close_at", "index_minute_bars", "index_minute_closes", "signal_rows",
+           "table_columns"]

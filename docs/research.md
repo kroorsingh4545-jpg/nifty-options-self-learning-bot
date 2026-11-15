@@ -158,6 +158,45 @@ Per signal (10 signals with recorded quotes, all ATM weeklies 4-5 days to expiry
   around entry Greeks).
 * With 10 signals, none of this is evidence of an edge or a filter: every group is marked *too few to judge*.
 
+## D4: regime (R3) and Momentum Pulse, validated on history (2026-11-15)
+
+| Part | What it does |
+|---|---|
+| `research/regime/indicators.py` | Trailing 1-minute indicators within one session: Kaufman efficiency ratio, Wilder ATR and ADX, ATR expansion, displacement in ATR units, trailing sd. Checked against textbook loops; no value depends on later bars (tested). |
+| `research/regime/pulse.py` | **Momentum Pulse**: STRONG_TREND / DEVELOPING / WEAK / RANGE_CHOP / UNCERTAIN from four components that must agree (never one alone). Cutoffs are percentiles of a TRAINING distribution; the percentile levels (70 / 30 / 50 / 60) were fixed in advance. Every label has a direction, a confidence and the reasons. |
+| `research/regime/regime.py` | **Session regime (R3)**: VIX level (tercile of the trailing year), VIX change (EXPANSION / STABLE / CONTRACTION vs its own history), daily trend (20-session move in sd), expiry day, UNSTABLE (extreme gap or VIX jump). Output is the bot's `ml.regime_classifier.RegimePrediction` (extended through `extra`; `ml/` unchanged, no model trained). Event-driven days are not classified: no event calendar is recorded. |
+| `research/regime/orb.py` | The ORB strategy's signal rule, so ORB signals can be regenerated on history (research may not import the strategy); `test_regime_orb_parity.py` requires identical signals to `strategies/orb_options.py`. VWAP+EMA cannot be regenerated: there is no futures volume history. |
+| `research/regime/samples.py`, `validate.py` | Samples at 10:00-14:30 every 30 minutes and at every historical ORB signal, outcomes over the next 30 minutes of the session. Expanding walk-forward by calendar year (test 2023, 2024, 2025, 2026), purge as `backtest.purged_cv.PurgedKFold(forward_only=True)` (parity-tested), Pulse cutoffs fitted on training years only. |
+| `research/regime/shadow.py` | Pulse and regime at every shadow signal (cutoffs from history before the signal's day), stored in `shadow_regime` (research store v6) with the hypotheses the latest validation kept. |
+
+**`python -m research regime-validate [--json]`** (offline; report `regime_validation`). Seven hypotheses were
+fixed BEFORE the first run. A hypothesis is **KEPT** only with the expected sign in at least 3 of the 4 test
+years (each with at least 30 samples per group) AND a pooled day-block bootstrap 95 % interval excluding zero.
+
+### First results (real NIFTY 2022-01-03 .. 2026-11-13, scratch copy; 12,000 checkpoints, 1,086 ORB signals, 666 of them in test years)
+
+| Hypothesis | Pooled out-of-sample gain (95 % CI) | Right-sign years | Verdict |
+|---|---|---|---|
+| strong trends continue more than range-chop (Pulse) | +0.036 sd (-0.041 .. +0.115) | 3 of 4 | DROP |
+| ORB signals with a confirming Pulse continue more | +0.055 sd (-0.091 .. +0.188) | 3 of 4 | DROP |
+| the bot's 30-bar trailing trend rule (`trailing_regime`) | +0.006 sd (-0.039 .. +0.052) | 2 of 4 | DROP |
+| trending Pulse states are followed by more variance | **-0.060** (-0.105 .. -0.016) | 0 of 4 | DROP (reversed, see below) |
+| realised / VIX-implied variance: VIX expansion vs contraction | **+0.261** (+0.170 .. +0.344) | **4 of 4** | **KEEP** |
+| realised / VIX-implied variance: high vs low VIX | +0.098 (+0.017 .. +0.178) | 2 of 4 | DROP |
+| ORB signals in the daily trend's direction continue more | +0.016 sd (-0.170 .. +0.195) | 2 of 4 | DROP |
+
+* **Kept: VIX expansion.** When India VIX has risen over the last 5 sessions (top tercile of its own history),
+  realised intraday variance relative to VIX-implied is about 30 % higher (log +0.26) than when VIX has fallen,
+  in every test year (+0.07, +0.19, +0.31, +0.43). It complements D3: VIX over-prices midday variance, and less
+  so after VIX has been rising.
+* **Momentum Pulse did not pass.** Neither trend continuation nor ORB confirmation is stable out of sample; the
+  bot's own trailing-trend rule fails too. These labels are recorded per shadow signal but carry no tested value.
+* **A reversed observation, not a finding.** After trending Pulse states, the next 30 minutes had LESS variance
+  relative to the trailing window than after chop, in all four years. The pre-registered hypothesis said the
+  opposite and is dropped; the reverse may be tested only as a new hypothesis on data after 2026-11-13.
+* Seven tests at once: some passes would occur by chance; the 3-of-4-years rule plus the pooled interval limits
+  that, it does not remove it. A kept hypothesis is a candidate for D7 shadow evaluation, not a trading rule.
+
 ## Data caveats
 
 * **Expired option prices need Upstox Plus** (about 6 months, OHLC + OI, no bid/ask, no IV). Not used.
