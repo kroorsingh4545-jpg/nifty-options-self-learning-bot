@@ -360,3 +360,35 @@ CREATE TABLE IF NOT EXISTS shadow_evidence (
     computed_at                  TEXT NOT NULL,
     PRIMARY KEY (signal_id, sim_version, evidence_version)
 ) WITHOUT ROWID;
+
+-- ---------------------------------------------------------------------------
+-- v6 (decision-engine D4): regime and Momentum Pulse at each shadow signal.
+-- Pulse cutoffs come from history before the signal's day (point in time);
+-- kept_json lists the hypotheses the latest `regime-validate` run KEPT.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS shadow_regime (
+    signal_id                TEXT NOT NULL,
+    sim_version              TEXT NOT NULL,
+    regime_version           TEXT NOT NULL,
+    kept_json                TEXT,
+    regime_named             TEXT,
+    regime_trend             TEXT,
+    regime_vol               TEXT,
+    vol_change               TEXT,
+    expiry_day               REAL,
+    regime_confidence        REAL,
+    regime_reasons_json      TEXT,
+    pulse_label              TEXT,
+    pulse_direction          REAL,
+    pulse_confidence         REAL,
+    pulse_aligned            REAL,
+    pulse_reasons_json       TEXT,
+    er                       REAL,
+    adx                      REAL,
+    disp                     REAL,
+    atrx                     REAL,
+    ml_trend                 REAL,
+    ml_vol                   REAL,
+    computed_at              TEXT NOT NULL,
+    PRIMARY KEY (signal_id, sim_version, regime_version)
+) WITHOUT ROWID;

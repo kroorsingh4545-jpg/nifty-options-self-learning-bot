@@ -132,6 +132,32 @@ class VolatilityEvidenceSection(_Frozen):
         return self
 
 
+class RegimeSection(_Frozen):
+    """Regime (R3) and Momentum Pulse (decision-engine D4). Window lengths and the
+    validation rule are fixed in advance; Pulse cutoffs are fitted on training years."""
+
+    regime_version: str = Field(default="d4.1", min_length=1)
+    checkpoints: tuple[time, ...] = (time(10, 0), time(10, 30), time(11, 0), time(11, 30), time(12, 0),
+                                     time(12, 30), time(13, 0), time(13, 30), time(14, 0), time(14, 30))
+    horizon_minutes: int = Field(default=30, ge=5, le=120)
+    lookback_bars: int = Field(default=20, ge=5, le=120)
+    adx_period: int = Field(default=10, ge=3, le=50)
+    atr_short: int = Field(default=10, ge=2, le=60)
+    atr_long: int = Field(default=20, ge=3, le=120)
+    required_years: int = Field(default=3, ge=1, le=10)  # KEEP: right sign in this many test years ...
+    min_group: int = Field(default=30, ge=5)  # ... each with at least this many samples per group
+    min_train: int = Field(default=200, ge=50)
+    n_boot: int = Field(default=1000, ge=200, le=20000)
+    vix_lookback_sessions: int = Field(default=252, ge=60, le=1260)
+    trend_sessions: int = Field(default=20, ge=5, le=120)
+
+    @model_validator(mode="after")
+    def _check(self) -> RegimeSection:
+        if not self.checkpoints or self.atr_short >= self.atr_long:
+            raise ValueError("regime.checkpoints must not be empty and atr_short < atr_long")
+        return self
+
+
 class ShadowSection(_Frozen):
     """Shadow simulation (D2). Trade rules come from the bot configuration; these
     are research-only settings."""
@@ -165,6 +191,7 @@ class ResearchConfig(_Frozen):
     data_quality: DataQualitySection = DataQualitySection()
     shadow: ShadowSection = ShadowSection()
     volatility: VolatilityEvidenceSection = VolatilityEvidenceSection()
+    regime: RegimeSection = RegimeSection()
     weekly_expiry_rules: tuple[ExpiryRule, ...] = Field(min_length=1)
 
     @model_validator(mode="after")

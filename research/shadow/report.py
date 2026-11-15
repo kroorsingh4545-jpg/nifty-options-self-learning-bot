@@ -166,4 +166,20 @@ def render_evidence(summary: Mapping[str, Any], evidence: Sequence[Mapping[str, 
     return lines
 
 
-__all__ = ["MIN_SAMPLE", "evidence_summary", "render_evidence", "render_text", "summarize"]
+def render_regime(regimes: Sequence[Mapping[str, Any]], rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    by_id = {r["signal_id"]: r for r in rows}
+    kept = regimes[0].get("kept_json", "[]") if regimes else "[]"
+    lines = ["", f"Regime and Momentum Pulse at each signal (hypotheses kept by the latest validation: {kept}):",
+             "signal time          dir  pulse          aligned  conf   regime              VIX change   R"]
+    for g in regimes:
+        r = by_id.get(g["signal_id"], {})
+        a = g.get("pulse_aligned")
+        aligned = "-" if a is None else ("yes" if int(a) == 1 else "no")
+        conf = g.get("pulse_confidence")
+        lines.append(f"{str(r.get('generated_at', ''))[:19]}  {str(r.get('option_type', '')):3s}  "
+                     f"{str(g.get('pulse_label')):13s}  {aligned:7s}  {'-' if conf is None else f'{conf:.2f}':5s}  "
+                     f"{str(g.get('regime_named')):18s}  {str(g.get('vol_change')):11s}  {r.get('r_net')}")
+    return lines
+
+
+__all__ = ["MIN_SAMPLE", "evidence_summary", "render_regime", "render_evidence", "render_text", "summarize"]
