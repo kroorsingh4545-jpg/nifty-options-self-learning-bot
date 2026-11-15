@@ -76,6 +76,35 @@ two days recorded before D1; a property of the Upstox snapshot feed), stale trad
 
 Sessions recorded before D1 cannot be clean: they have no Greeks, no resting quantity and no market quotes.
 
+## D2: shadow mode (counterfactual outcomes, 2026-11-15)
+
+`python -m research shadow [--day D] [--json] [--no-log]` (no Upstox call; trading database and bot log read-only)
+simulates **every recorded strategy signal** as if it had been traded alone, one lot, with the bot's own rules, on
+the archived quotes (`archive-quotes` first), and stores one row per signal and simulator version in
+`shadow_outcomes` (research store v4); the JSON report goes to `reports` (`shadow`).
+
+| Part | What it does |
+|---|---|
+| `research/shadow/signals.py` | Signals from the bot's `signals` table (v7). Older sessions: rebuilt from three log lines per signal (decision line, risk line, `signal processed`). Signals that cannot be rebuilt are listed. |
+| `research/shadow/rules.py` | Stop, target and trailing rules restated as pure functions (research may not import `risk/`). `tests/unit/test_shadow_rules_parity.py` runs them against the bot's own code. |
+| `research/shadow/simulate.py` | Contract as the resolver picks it (nearest expiry, ATM by NIFTY spot); decision quote and stop from the ask; entry LIMIT ask + 2 ticks, fill ask + 1 tick with depth, 30 s timeout; trailing then exit check on every later quote; stops at the worse of bid and last, targets at the bid, minus 1 tick; square-off from 15:10. |
+| `research/shadow/calibrate.py` | Each approved signal against the real PAPER trade; every signal against the risk manager's log line. |
+
+**Sampling band.** The bot reacts to every tick but quotes are recorded every 5 s (1 s while held). A stop or
+target is usually crossed between two recorded quotes, so the real fill lies in a band: the stored outcome is the
+conservative end (the recorded quote for a stop, the target level for a target) and `exit_price_best` the other.
+
+**Calibration** (D2 exit criterion): a real trade is reproduced when the contract and exit reason match, the entry
+is within 1 tick and the real exit within 2 ticks of the band. It is judged on a replay from the ask the risk
+manager logged, which removes the decision-quote sampling error; the point-in-time differences are reported too.
+First run on the real data (2026-11-15, scratch copies): **both real trades with recorded quotes reproduced**
+(replay entry exact, exits inside the band); point-in-time sampling error median 2.5 ticks at entry, 7 at exit;
+the 2026-11-09 trade cannot be simulated (no quotes recorded then).
+
+**What the outcomes are not:** evidence. Each signal is traded alone (no daily loss limit, cooldown or kill
+switch), one lot, with today's YAML rules. Every figure is printed with its sample size, and groups under 30 filled
+trades are marked *too few to judge*. No engine uses these numbers yet (D7 does, in shadow, pre-registered).
+
 ## Data caveats
 
 * **Expired option prices need Upstox Plus** (about 6 months, OHLC + OI, no bid/ask, no IV). Not used.

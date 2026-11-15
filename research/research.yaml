@@ -68,6 +68,16 @@ forecast:
   live_margin_minutes: 5            # "recorded live" only if made >= 5 min before 09:15 (PC clock drift)
   daily_final_after: "15:40"        # today's daily candle counts as final only after this time (IST)
 
+# `shadow`: counterfactual outcome of every recorded signal (decision-engine D2). The trade rules
+# (stops, targets, trailing, strike selection, slippage, square-off) are read from the bot
+# configuration by the composition root; nothing here changes how the bot trades.
+shadow:
+  sim_version: "d2.1"               # recorded with every outcome; bump when the simulator changes
+  option_tick_size: 0.05            # NIFTY option tick (Upstox instrument list)
+  entry_tolerance_ticks: 1          # a real PAPER trade is reproduced when entry is within 1 tick ...
+  exit_tolerance_ticks: 2           # ... exit within 2 ticks, and the exit reason and contract match
+  spot_max_age_seconds: 60          # NIFTY price used to pick the ATM strike may be at most 60 s old
+
 # NIFTY weekly option expiry weekday by period (0 = Monday). A rule expiry on
 # an exchange holiday moves to the previous trading day (holidays are observed
 # from the candles). The switch dates below were CONFIRMED by the owner against

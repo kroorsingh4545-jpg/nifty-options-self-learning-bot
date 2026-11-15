@@ -98,6 +98,33 @@ def recorded_days(con: sqlite3.Connection, table: str) -> list[date]:
     return [date.fromisoformat(r[0]) for r in rows]
 
 
+def signal_rows(con: sqlite3.Connection) -> list[dict[str, object]]:
+    """Every row of the bot's ``signals`` table (empty before trading-db v7)."""
+    if not table_columns(con, "signals"):
+        return []
+    return [dict(r) for r in con.execute("SELECT * FROM signals ORDER BY candle_end, signal_id")]
+
+
+def closed_trades(con: sqlite3.Connection, mode: str = "PAPER") -> list[dict[str, object]]:
+    """The bot's closed trades of ``mode`` (for calibrating the shadow simulator)."""
+    rows = con.execute("SELECT trade_uid, strategy_id, instrument_key, quantity, created_at, entry_time, entry_price,"
+                       " exit_time, exit_price, exit_reason, initial_stop_loss, target, gross_pnl, charges"
+                       " FROM trades WHERE mode = ? AND status = 'CLOSED' ORDER BY created_at", (mode,))
+    return [dict(r) for r in rows]
+
+
+def index_close_at(con: sqlite3.Connection, instrument_key: str, at: datetime,
+                   max_age: timedelta = timedelta(minutes=2)) -> tuple[float, str] | None:
+    """Close of the newest complete 1-minute candle of ``instrument_key`` that
+    ended at or before ``at`` (and not more than ``max_age`` before it), with
+    its end time; None when there is none."""
+    lo = (at - max_age).isoformat()
+    row = con.execute("SELECT close, end_time FROM candles WHERE instrument_key = ? AND timeframe_minutes = 1"
+                      " AND complete = 1 AND end_time <= ? AND end_time >= ? ORDER BY end_time DESC LIMIT 1",
+                      (instrument_key, at.isoformat(), lo)).fetchone()
+    return None if row is None else (float(row[0]), str(row[1]))
+
+
 #: raw_quotes reads rows whose last trade is at most this many days before the day received
 STALE_LOOKBACK_DAYS = 7
 
@@ -136,4 +163,4 @@ def recorded_signals(con: sqlite3.Connection, day: date) -> list[dict[str, objec
 
 __all__ = ["QUOTE_COLUMNS", "STALE_LOOKBACK_DAYS", "TradingDbUnavailableError", "open_trading_db_readonly",
            "quote_minute_bars", "raw_quotes", "recorded_days", "recorded_quote_days", "recorded_signals",
-           "table_columns"]
+           "closed_trades", "index_close_at", "signal_rows", "table_columns"]

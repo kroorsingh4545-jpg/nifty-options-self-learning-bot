@@ -109,6 +109,17 @@ class ForecastSection(_Frozen):
         return self
 
 
+class ShadowSection(_Frozen):
+    """Shadow simulation (D2). Trade rules come from the bot configuration; these
+    are research-only settings."""
+
+    sim_version: str = Field(default="d2.1", min_length=1)  # bump when the simulator changes
+    option_tick_size: float = Field(default=0.05, gt=0.0)  # NIFTY options (Upstox instrument list)
+    entry_tolerance_ticks: float = Field(default=1.0, ge=0.0)  # calibration against real PAPER trades
+    exit_tolerance_ticks: float = Field(default=2.0, ge=0.0)
+    spot_max_age_seconds: float = Field(default=60.0, gt=0.0)  # NIFTY quote used for the ATM strike
+
+
 class ExpiryRule(_Frozen):
     effective_from: date
     weekday: int = Field(ge=0, le=4)
@@ -129,6 +140,7 @@ class ResearchConfig(_Frozen):
     smoke: SmokeSection = SmokeSection()
     forecast: ForecastSection = ForecastSection()
     data_quality: DataQualitySection = DataQualitySection()
+    shadow: ShadowSection = ShadowSection()
     weekly_expiry_rules: tuple[ExpiryRule, ...] = Field(min_length=1)
 
     @model_validator(mode="after")

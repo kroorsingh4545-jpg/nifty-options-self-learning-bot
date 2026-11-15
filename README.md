@@ -273,9 +273,11 @@ a message and does nothing.
 4. `data-quality` audits what the bot recorded today and saves it to `logs\research\data-quality-YYYY-MM-DD.txt`
    (see *Data quality* in `docs/research.md`);
 5. `chain-snapshot` saves an option-chain snapshot of the nearest expiries plus the next monthly (a few calls);
-6. `forecast` adds today's outcome and **tomorrow's forecast**, made before the open so it is recorded live and
+6. `shadow` simulates every recorded strategy signal on the recorded quotes and saves the counterfactual outcomes
+   to `logs\research\shadow-YYYY-MM-DD.txt` (see *Shadow mode* in `docs/research.md`; no Upstox call);
+7. `forecast` adds today's outcome and **tomorrow's forecast**, made before the open so it is recorded live and
    can never be changed later;
-7. `report` saves the full report to `logs\research\report-YYYY-MM-DD.md`.
+8. `report` saves the full report to `logs\research\report-YYYY-MM-DD.md`.
 
 **Reading the result.** The window stays open at the end:
 

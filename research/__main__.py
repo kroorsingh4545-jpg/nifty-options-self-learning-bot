@@ -19,6 +19,7 @@ so may ``chain-schedule`` (about 5 calls per scheduled time);
     summarize-quotes   copy the bot's recorded option quotes into 1-minute bars (trading.db read-only)
     archive-quotes     copy the bot's raw 5-second option and market quotes (trading.db read-only)
     data-quality       data-quality audit of recorded sessions (trading.db read-only); JSON also stored
+    shadow             counterfactual outcome of every recorded signal on archived quotes (D2); JSON also stored
     calendar           derived session calendar + weekly expiries for a year
     forecast           build forecast (before each session) and outcome rows from stored history
     report [--json]    forecast-vs-reality and volatility report (markdown, or JSON); JSON also stored
@@ -40,11 +41,12 @@ import sys
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import date, datetime, timedelta
 
+from broker.charges import ChargeCalculator
 from broker.upstox_rate_limiter import UpstoxRateLimiter
 from broker.upstox_rest import UpstoxRestClient
 from config.loader import ConfigError, load_config
 from config.settings import BotConfig, EffectiveRateLimits, WindowLimits
-from core.clock import now_ist
+from core.clock import IST, now_ist
 from core.enums import TradingMode
 from research.audit.data_quality import QualityThresholds, consecutive_clean, day_quality, render_text
 from research.collect.archive import archive_recorded_quotes
@@ -56,15 +58,25 @@ from research.forecast.analysis import full_report
 from research.forecast.run import run_build
 from research.reports.forecast_report import render_markdown
 from research.sessions import SessionCalendar, weekly_expiries
+from research.shadow.calibrate import ActualTrade
+from research.shadow.report import render_text as render_shadow
+from research.shadow.report import summarize
+from research.shadow.rules import TradeRules
+from research.shadow.run import ShadowInputs, evaluate
+from research.shadow.signals import from_log_records, from_table_rows, merge, parse_log_lines
+from research.shadow.simulate import Contract, Quote
 from research.smoke import run_smoke
 from research.sources import ReadOnlySource
 from research.store import ResearchStore
 from research.trading_readonly import (
     TradingDbUnavailableError,
+    closed_trades,
+    index_close_at,
     open_trading_db_readonly,
     raw_quotes,
     recorded_days,
     recorded_signals,
+    signal_rows,
 )
 
 NETWORK_COMMANDS = frozenset({"smoke", "history", "contracts", "chain-snapshot", "chain-schedule"})
@@ -139,6 +151,11 @@ def _parser() -> argparse.ArgumentParser:
     dq.add_argument("--json", action="store_true", help="print JSON instead of text")
     dq.add_argument("--expected-contracts", type=int, default=None,
                     help="option contracts the bot keeps subscribed (default: from the bot configuration)")
+    sh = sub.add_parser("shadow")
+    sh.add_argument("--day", type=date.fromisoformat, action="append", default=None,
+                    help="only signals of these day(s) (default: every recorded signal)")
+    sh.add_argument("--json", action="store_true", help="print JSON instead of text")
+    sh.add_argument("--no-log", action="store_true", help="do not rebuild pre-v7 signals from the bot's JSON log")
     sub.add_parser("forecast")
     sub.add_parser("report").add_argument("--json", action="store_true", help="print JSON instead of markdown")
     c = sub.add_parser("calendar")
@@ -205,6 +222,97 @@ def _calendar(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, st
     for e in weekly_expiries(date(year, 1, 1), date(year, 12, 31), rcfg.weekly_expiry_rules, cal, observed=observed):
         moved = f" (moved from {e.rule_date})" if e.shifted else ""
         print(f"  expiry {e.expiry} [{e.status}]{moved}")
+    return 0
+
+
+def shadow_rules(cfg: BotConfig, tick_size: float) -> dict[str, TradeRules]:
+    """Each strategy's trade rules as plain values (the bot configuration is read
+    here, in the composition root, and nowhere else in research). The strike step
+    is the bot's universe step (``OptionUniverse`` default, 50), which is what the
+    resolver selects on."""
+    s = cfg.settings
+    out = {}
+    for sid, st in cfg.strategies.strategies.items():
+        ss = st.strike_selection
+        out[sid] = TradeRules(
+            stop_mode=st.stop_loss.mode, stop_value=st.stop_loss.value, target_mode=st.take_profit.mode,
+            target_value=st.take_profit.value, trailing_enabled=st.trailing.enabled, trailing_mode=st.trailing.mode,
+            trailing_activation=st.trailing.activation, trailing_step=st.trailing.step, strike_mode=ss.mode,
+            strike_offset=ss.offset_steps, min_premium=ss.min_premium, max_premium=ss.max_premium,
+            min_volume=ss.liquidity.min_volume, min_oi=ss.liquidity.min_oi,
+            max_spread_pct=ss.liquidity.max_spread_pct, tick_size=tick_size,
+            slippage_ticks=s.paper_broker.slippage_ticks, entry_buffer_ticks=s.execution.entry_limit_buffer_ticks,
+            entry_timeout_seconds=s.execution.entry_timeout_seconds,
+            max_quote_age_seconds=s.paper_broker.max_quote_age_seconds,
+            square_off_start=cfg.risk.time_rules.square_off_start)
+    return out
+
+
+def _ms(at: datetime) -> int:
+    return int(at.timestamp() * 1000)
+
+
+def _from_ms(ms: int) -> datetime:
+    return datetime.fromtimestamp(ms / 1000, tz=IST)
+
+
+def _log_records(cfg: BotConfig) -> list[dict[str, object]]:
+    """The bot's JSON log lines (current file and any rotated ones), read-only, in time order."""
+    name = cfg.settings.logging.file_name
+    files = sorted(cfg.log_directory.glob(f"{name}*")) if cfg.log_directory.is_dir() else []
+    recs = [r for f in files for r in parse_log_lines(f.read_text(encoding="utf-8", errors="replace").splitlines())]
+    return sorted(recs, key=lambda r: str(r.get("ts", "")))
+
+
+def _shadow(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, store: ResearchStore,
+            trading: sqlite3.Connection) -> int:
+    sc = rcfg.shadow
+    index_key = rcfg.instruments.nifty_index_key
+    table = from_table_rows(signal_rows(trading))
+    records = [] if args.no_log else _log_records(cfg)
+    log, logged = from_log_records(records)
+    signals = merge(table, log, logged)
+    known = {x.signal_id for x in signals}
+    unrebuilt = sorted({str(r["signal_id"]) for r in records
+                        if r.get("event") == "signal processed" and r.get("signal_id")} - known)
+    if args.day:
+        days = set(args.day)
+        signals = [x for x in signals if x.generated_at.date() in days]
+    if not signals:
+        print("no recorded signals (signals table or bot log) for the chosen day(s)")
+        return 1
+    contracts = [Contract(k, str(c["instrument_type"]), float(c["strike"]), date.fromisoformat(str(c["expiry"])),
+                          int(c["lot_size"]))
+                 for k, c in store.contracts().items()
+                 if c["instrument_type"] in ("CE", "PE") and c["strike"] is not None and c["expiry"]
+                 and c["underlying_key"] == index_key]
+
+    def quotes(key: str, start: datetime, end: datetime) -> list[Quote]:
+        return [Quote(_from_ms(r["received_ms"]), _from_ms(r["exchange_ms"]), r["ltp"], r["bid"], r["ask"],
+                      r["bid_qty"], r["ask_qty"], r["volume_today"], r["oi"])
+                for r in store.archived_quotes(key, _ms(start), _ms(end))]
+
+    def spot(at: datetime) -> tuple[float, str] | None:
+        q = store.last_archived_quote(index_key, _ms(at), max_age_ms=int(sc.spot_max_age_seconds * 1000))
+        if q is not None:
+            return float(q["ltp"]), "INDEX_QUOTE"
+        c = index_close_at(trading, index_key, at, timedelta(seconds=sc.spot_max_age_seconds * 2))
+        return None if c is None else (c[0], "INDEX_1M_CLOSE")
+
+    inp = ShadowInputs(rules=shadow_rules(cfg, sc.option_tick_size), contracts=contracts, quotes=quotes, spot=spot,
+                       cost_fn=ChargeCalculator(cfg.settings.costs).round_trip,
+                       trades=[ActualTrade.from_row(r) for r in closed_trades(trading)], sim_version=sc.sim_version,
+                       entry_tolerance_ticks=sc.entry_tolerance_ticks, exit_tolerance_ticks=sc.exit_tolerance_ticks)
+    rows, calib = evaluate(signals, inp)
+    store.upsert_shadow(rows, at=now_ist())
+    summary = summarize(rows, calib)
+    body = json.dumps({"sim_version": sc.sim_version, "summary": summary, "calibration": calib, "outcomes": rows,
+                       "unrebuilt_log_signals": unrebuilt}, indent=1, default=str)
+    store.save_report("shadow", body)
+    print(body if args.json else "\n".join(render_shadow(summary, rows, calib)))
+    if unrebuilt and not args.json:
+        print(f"{len(unrebuilt)} logged signal(s) could not be rebuilt (no per-candle decision line or no "
+              f"direction in the log, e.g. a session before per-candle decision logging): {', '.join(unrebuilt)}")
     return 0
 
 
@@ -307,7 +415,7 @@ def _dispatch(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, st
         store.save_report("forecast_vs_reality", body)
         print(body if args.json else render_markdown(rep))
         return 0
-    if cmd in ("summarize-quotes", "archive-quotes", "data-quality"):
+    if cmd in ("summarize-quotes", "archive-quotes", "data-quality", "shadow"):
         try:
             trading = open_trading_db_readonly(cfg.database_path)
         except TradingDbUnavailableError as exc:
@@ -322,6 +430,8 @@ def _dispatch(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, st
                 for (d, kind), n in archive_recorded_quotes(trading, store, now=now_ist, days=args.day).items():
                     print(f"{d} {kind}: {n:,} raw quotes archived")
                 return 0
+            if cmd == "shadow":
+                return _shadow(args, cfg, rcfg, store, trading)
             return _data_quality(args, cfg, rcfg, store, trading)
         finally:
             trading.close()

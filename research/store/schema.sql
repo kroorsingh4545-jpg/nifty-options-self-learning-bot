@@ -252,3 +252,58 @@ CREATE TABLE IF NOT EXISTS archive_log (
     archived_at   TEXT NOT NULL,
     PRIMARY KEY (session_date, kind)
 ) WITHOUT ROWID;
+
+-- ---------------------------------------------------------------------------
+-- v4 (decision-engine D2): counterfactual outcome of every recorded strategy
+-- signal, one row per (signal, simulator version). Each signal traded alone,
+-- one lot, with the bot's rules, on recorded quotes. Never read by trading.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS shadow_outcomes (
+    signal_id         TEXT NOT NULL,
+    sim_version       TEXT NOT NULL,
+    strategy_id       TEXT NOT NULL,
+    option_type       TEXT NOT NULL CHECK (option_type IN ('CE','PE')),
+    generated_at      TEXT NOT NULL,
+    candle_end        TEXT NOT NULL,
+    signal_source     TEXT NOT NULL CHECK (signal_source IN ('TABLE','LOG')),
+    decided           INTEGER NOT NULL CHECK (decided IN (0,1)),
+    approved          INTEGER CHECK (approved IS NULL OR approved IN (0,1)),
+    decision_reasons_json TEXT NOT NULL DEFAULT '[]',
+    trade_uid         TEXT,
+    spot              REAL,
+    spot_source       TEXT,
+    instrument_key    TEXT,
+    strike            REAL,
+    expiry            TEXT,
+    lot_size          INTEGER,
+    status            TEXT NOT NULL CHECK (status IN
+                      ('FILLED','NO_CONTRACT','NO_SPOT','NO_QUOTE','NO_TWO_SIDED','BAD_LEVELS','NO_FILL')),
+    decision_quote_at TEXT,
+    entry_ref         REAL,
+    stop              REAL,
+    target            REAL,
+    risk_per_unit     REAL,
+    entry_time        TEXT,
+    entry_price       REAL,
+    exit_time         TEXT,
+    exit_price        REAL,
+    exit_price_best   REAL,
+    exit_reason       TEXT,
+    final_stop        REAL,
+    quantity          INTEGER NOT NULL DEFAULT 0,
+    gross             REAL,
+    charges           REAL,
+    net               REAL,
+    r_gross           REAL,
+    r_net             REAL,
+    mfe_r             REAL,
+    mae_r             REAL,
+    quotes_used       INTEGER NOT NULL DEFAULT 0,
+    max_gap_seconds   REAL,
+    liquidity_json    TEXT NOT NULL DEFAULT '[]',
+    flags_json        TEXT NOT NULL DEFAULT '[]',
+    computed_at       TEXT NOT NULL,
+    PRIMARY KEY (signal_id, sim_version),
+    CHECK (status <> 'FILLED' OR (entry_price IS NOT NULL AND exit_price IS NOT NULL AND net IS NOT NULL))
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS ix_shadow_time ON shadow_outcomes(sim_version, generated_at);
