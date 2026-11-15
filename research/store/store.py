@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +17,51 @@ from core.clock import IST as IST_TZ
 from core.clock import now_ist
 from core.models import Candle, Instrument
 
-SCHEMA_VERSION = 4  # v3: quote_archive, archive_log (D1); v4: shadow_outcomes (D2)
+SCHEMA_VERSION = 5  # v3: quote_archive, archive_log (D1); v4: shadow_outcomes (D2); v5: shadow_evidence (D3)
+
+EVIDENCE_COLUMNS = (
+    "signal_id",
+    "sim_version",
+    "evidence_version",
+    "overnight_share",
+    "minutes_to_expiry",
+    "trading_minutes_to_expiry",
+    "gap_weight_to_expiry",
+    "iv_feed",
+    "iv_solved",
+    "iv_feed_unit",
+    "iv_entry",
+    "delta",
+    "gamma",
+    "vega",
+    "theta_day",
+    "position_delta_rupees",
+    "position_gamma_rupees",
+    "position_vega_rupees",
+    "position_theta_rupees_day",
+    "horizon_minutes",
+    "decay_business",
+    "decay_calendar",
+    "costs_per_unit",
+    "breakeven_points",
+    "expected_move_calendar",
+    "expected_move_trading",
+    "expected_move_business",
+    "breakeven_to_move",
+    "hold_minutes",
+    "realised_var_hold",
+    "implied_var_hold",
+    "realised_to_implied",
+    "iv_exit",
+    "iv_change_points",
+    "pnl_delta",
+    "pnl_gamma",
+    "pnl_vega",
+    "pnl_decay",
+    "pnl_explained",
+    "pnl_actual_mid",
+    "pnl_residual",
+)
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 MINUTES_PER_DAY = 1440
 
@@ -218,7 +262,7 @@ class ResearchStore:
     def count(self, table: str) -> int:
         if table not in {"daily_candles", "minute_candles", "contracts", "chain_snapshots", "chain_snapshot_rows",
                          "quote_minute_bars", "fetch_log", "observations", "vol_forecasts", "vol_outcomes",
-                         "reports", "quote_archive", "archive_log", "shadow_outcomes"}:
+                         "reports", "quote_archive", "archive_log", "shadow_outcomes", "shadow_evidence"}:
             raise ValueError(table)
         return int(self.con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])  # noqa: S608 - whitelisted
 
@@ -329,6 +373,34 @@ class ResearchStore:
             self.con.executemany(sql, [(*r.values(), stamp) for r in rows])
         return len(rows)
 
+    def upsert_evidence(self, rows: Sequence[Mapping[str, Any]], *, at: datetime | None = None) -> int:
+        """Insert or replace volatility evidence rows; missing fields are stored as NULL."""
+        if not rows:
+            return 0
+        unknown = {k for r in rows for k in r} - set(EVIDENCE_COLUMNS)
+        if unknown:
+            raise ResearchStoreError(f"unknown evidence columns: {sorted(unknown)}")
+        stamp = (at or now_ist()).isoformat()
+        cols = [*EVIDENCE_COLUMNS, "computed_at"]
+        sql = (f"INSERT OR REPLACE INTO shadow_evidence ({', '.join(cols)}) "  # noqa: S608 - fixed column names
+               f"VALUES ({', '.join('?' * len(cols))})")
+        with self.con:
+            self.con.executemany(sql, [(*(r.get(c) for c in EVIDENCE_COLUMNS), stamp) for r in rows])
+        return len(rows)
+
+    def evidence_rows(self, sim_version: str, evidence_version: str) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.con.execute(
+            "SELECT * FROM shadow_evidence WHERE sim_version=? AND evidence_version=? ORDER BY signal_id",
+            (sim_version, evidence_version))]
+
+    def minute_closes(self, instrument_key: str, start: datetime, end: datetime) -> list[tuple[datetime, float]]:
+        """(candle END, close) of stored 1-minute candles ending in [start, end]."""
+        lo, hi = (start - timedelta(minutes=1)).isoformat(), (end - timedelta(minutes=1)).isoformat()
+        rows = self.con.execute("SELECT start_time, close FROM minute_candles WHERE instrument_key=? AND"
+                                " interval_minutes=1 AND complete=1 AND start_time BETWEEN ? AND ?"
+                                " ORDER BY start_time", (instrument_key, lo, hi))
+        return [(datetime.fromisoformat(r[0]) + timedelta(minutes=1), float(r[1])) for r in rows]
+
     def shadow_rows(self, sim_version: str) -> list[dict[str, Any]]:
         return [dict(r) for r in self.con.execute(
             "SELECT * FROM shadow_outcomes WHERE sim_version=? ORDER BY generated_at, signal_id", (sim_version,))]
@@ -381,5 +453,5 @@ class ResearchStore:
         return None if row is None else str(row[0])
 
 
-__all__ = ["ARCHIVE_COLUMNS", "SCHEMA_VERSION", "ArchivedQuote", "ChainRow", "QuoteBar", "ResearchStore",
-           "ResearchStoreError"]
+__all__ = ["ARCHIVE_COLUMNS", "EVIDENCE_COLUMNS", "SCHEMA_VERSION", "ArchivedQuote", "ChainRow",
+           "QuoteBar", "ResearchStore", "ResearchStoreError"]

@@ -109,4 +109,61 @@ def render_text(summary: Mapping[str, Any], rows: Sequence[Mapping[str, Any]],
     return lines
 
 
-__all__ = ["MIN_SAMPLE", "render_text", "summarize"]
+def evidence_summary(evidence: Sequence[Mapping[str, Any]], rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Volatility evidence (D3) beside the outcomes: medians, and the
+    counterfactual R of signals whose breakeven move was above / within one
+    expected move (descriptive only; see ``MIN_SAMPLE``)."""
+    r_by_id = {r["signal_id"]: r for r in rows}
+
+    def med(key: str) -> float | None:
+        xs = [float(e[key]) for e in evidence if e.get(key) is not None]
+        return round(median(xs), 3) if xs else None
+
+    groups: dict[str, list[float]] = {"breakeven_above_1sd": [], "breakeven_within_1sd": []}
+    for e in evidence:
+        ratio, row = e.get("breakeven_to_move"), r_by_id.get(e["signal_id"])
+        if ratio is None or row is None or row.get("r_net") is None:
+            continue
+        groups["breakeven_above_1sd" if ratio > 1 else "breakeven_within_1sd"].append(float(row["r_net"]))
+    return {"signals": len(evidence), "median_iv_entry": med("iv_entry"),
+            "median_breakeven_to_move": med("breakeven_to_move"), "median_decay_business": med("decay_business"),
+            "median_decay_calendar": med("decay_calendar"), "median_realised_to_implied": med("realised_to_implied"),
+            "median_iv_change_points": med("iv_change_points"), "median_abs_pnl_residual": (
+                round(median(abs(float(e["pnl_residual"])) for e in evidence if e.get("pnl_residual") is not None), 3)
+                if any(e.get("pnl_residual") is not None for e in evidence) else None),
+            "iv_feed_units": dict(Counter(str(e.get("iv_feed_unit")) for e in evidence)),
+            "r_net_by_breakeven": {k: {"n": len(v), "mean_r_net": round(mean(v), 3) if v else None,
+                                       "enough_to_judge": len(v) >= MIN_SAMPLE} for k, v in groups.items()}}
+
+
+def render_evidence(summary: Mapping[str, Any], evidence: Sequence[Mapping[str, Any]],
+                    rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    def f(x: Any, nd: int = 2) -> str:
+        return "n/a" if x is None else f"{x:.{nd}f}"
+
+    by_id = {r["signal_id"]: r for r in rows}
+    lines = ["", "Volatility evidence (per unit; IV decimal; moves in NIFTY points over the assumed hold):",
+             "signal time          dir  IV     delta  hold  decay biz/cal  costs  breakeven  1sd move biz (cal)  "
+             "be/move  RV/IV hold  dIV pts  residual"]
+    for e in evidence:
+        r = by_id.get(e["signal_id"], {})
+        lines.append(f"{str(r.get('generated_at', ''))[:19]}  {str(r.get('option_type', '')):3s} "
+                     f"{f(e.get('iv_entry'), 3):6s} {f(e.get('delta'), 2):>6s} {f(e.get('horizon_minutes'), 0):>4s}  "
+                     f"{f(e.get('decay_business'))}/{f(e.get('decay_calendar'))}  {f(e.get('costs_per_unit')):>5s}  "
+                     f"{f(e.get('breakeven_points')):>9s}  {f(e.get('expected_move_business')):>8s} "
+                     f"({f(e.get('expected_move_calendar'))})  {f(e.get('breakeven_to_move')):>7s}  "
+                     f"{f(e.get('realised_to_implied')):>10s}  {f(e.get('iv_change_points')):>7s}  "
+                     f"{f(e.get('pnl_residual')):>8s}")
+    s = summary
+    lines += [f"median breakeven / 1-sd move {s['median_breakeven_to_move']}; "
+              f"decay business {s['median_decay_business']} vs calendar theta {s['median_decay_calendar']}; "
+              f"realised / implied variance over the hold "
+              f"{s['median_realised_to_implied']}; IV change {s['median_iv_change_points']} points; feed IV units "
+              f"{s['iv_feed_units']}"]
+    for k, g in s["r_net_by_breakeven"].items():
+        judge = "" if g["enough_to_judge"] else f"  [too few to judge: {g['n']} < {MIN_SAMPLE}]"
+        lines.append(f"  {k}: {g['n']} filled, mean R {g['mean_r_net']}{judge}")
+    return lines
+
+
+__all__ = ["MIN_SAMPLE", "evidence_summary", "render_evidence", "render_text", "summarize"]

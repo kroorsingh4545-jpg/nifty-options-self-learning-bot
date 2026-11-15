@@ -105,6 +105,59 @@ the 2026-11-09 trade cannot be simulated (no quotes recorded then).
 switch), one lot, with today's YAML rules. Every figure is printed with its sample size, and groups under 30 filled
 trades are marked *too few to judge*. No engine uses these numbers yet (D7 does, in shadow, pre-registered).
 
+## D3: volatility evidence (2026-11-15)
+
+Pure maths in `volatility/` (no I/O; `tests/unit/test_volatility_purity.py`):
+
+| Module | Contents |
+|---|---|
+| `volatility/options.py` | Black-Scholes(-Merton) in calendar and total-variance form, Greeks with explicit units, IV solver, IV unit handling (`as_decimal_iv`, `infer_iv_unit`), put-call parity residual and implied forward. Checked against finite differences and the bot's `options/pricing.py`. |
+| `volatility/business_time.py` | Three clocks for the implied variance of an intraday window: `calendar` (every minute of the year), `trading` (252 x 375 minutes) and `business` (each session's variance split between its overnight gap, share `w`, and its 375 trading minutes; weekends weighted). Realised window variance, overnight share. |
+| `volatility/position.py` | Whole-position Greeks in rupees, hold decay in business time, breakeven move, P&L attribution. |
+
+**Units** (stated once, tested in `tests/unit/test_volatility_*.py`): IV decimal, annualised on calendar time (the
+REST chain's percent is converted; the feed is decimal: confirmed on all 10 recorded signals). Greeks per option
+unit: delta per index point, gamma per point per point, vega per volatility point (0.01), theta per calendar day.
+Window variances are per window, never annualised, so implied and realised compare on the same minutes.
+
+**`python -m research shadow`** now also stores **`shadow_evidence`** (store v5) for every outcome: IV at entry
+(feed and solved), Greeks and 1-lot position Greeks, decay over a 30-minute hold in business time vs calendar
+theta, costs per unit, the breakeven move vs the 1-sd move under each clock, and, for filled outcomes, realised vs
+implied variance over the hold, the IV change and a delta / gamma / vega / decay attribution.
+
+**`python -m research intraday-vol [--json]`** (offline) tests the clocks on the stored 1-minute history: at 10:00,
+11:30, 13:00 and 14:00 the India VIX close gives the implied variance of the next 15 / 30 / 60 minutes; the outcome
+is the realised variance of those minutes; the overnight share is measured point in time on earlier sessions.
+
+### First findings (real data, scratch copies, 2026-11-15)
+
+History, 14,396 windows on 1,201 sessions (2022-01-03 .. 2026-11-13), median overnight share 0.40:
+
+| 30-minute windows | realised / implied variance (95 % CI) | inside 1 implied sd (normal 68.3 %) | QLIKE |
+|---|---|---|---|
+| calendar clock | 1.96 (1.83-2.12) | 62.4 % | -11.70 |
+| trading clock | 0.35 (0.33-0.38) | 92.1 % | -11.56 |
+| business clock | **0.58** (0.55-0.63) | 85.1 % | **-11.84** (best) |
+
+* **The calendar clock understates an intraday hold's variance about 2x; the trading clock overstates it about
+  3x.** Business time is the best of the three, but VIX still over-prices midday windows by about 1.7x (consistent
+  with the R2 variance premium and the intraday lull: 0.73 at 10:00, 0.45 at 11:30, 0.51 at 13:00, 0.63 at 14:00).
+  The same holds for 15 and 60 minutes and in every year (0.52-0.69).
+* So a "1-sd move" from VIX or option IV is too large for a midday hold. Any rule built on expected moves must use
+  business time and allow for this bias; it is NOT corrected here (a trailing correction would be a fitted
+  parameter: a later, validated step).
+
+Per signal (10 signals with recorded quotes, all ATM weeklies 4-5 days to expiry):
+
+* Decay over a 30-minute hold in business time is about 2.5x calendar theta (0.91 vs 0.36 rupees per unit), but
+  time and costs together need only about 5 NIFTY points: **0.11 of a 1-sd move**. These trades were lost on
+  direction, not on theta or costs.
+* Realised / implied variance over the actual holds: median 0.65, in line with the history study.
+* IV fell over most holds (median -0.49 points); on 2026-11-13 the ORB calls lost about a third of their premium
+  drop to vega (IV -1.3 points). Attribution residuals are 10-30 % of the move on long holds (second-order effects
+  around entry Greeks).
+* With 10 signals, none of this is evidence of an edge or a filter: every group is marked *too few to judge*.
+
 ## Data caveats
 
 * **Expired option prices need Upstox Plus** (about 6 months, OHLC + OI, no bid/ask, no IV). Not used.

@@ -109,6 +109,29 @@ class ForecastSection(_Frozen):
         return self
 
 
+class VolatilityEvidenceSection(_Frozen):
+    """Volatility evidence (D3): option IV and Greeks at each signal, the decay and
+    costs of a hold against the expected move, and IV vs realised variance on
+    matched windows. Research-only settings; nothing here changes how the bot trades."""
+
+    evidence_version: str = Field(default="d3.1", min_length=1)  # bump when the evidence maths changes
+    risk_free_rate: float = Field(default=0.065, ge=0.0, le=0.2)  # same as the ML feature pipeline
+    dividend_yield: float = Field(default=0.0, ge=0.0, le=0.1)  # NIFTY ~1 %; 0 keeps parity with options/pricing
+    horizon_minutes: int = Field(default=30, ge=1, le=375)  # the hold the ex-ante evidence assumes
+    default_overnight_share: float = Field(default=0.35, ge=0.0, lt=1.0)  # R2: ~35 % of variance overnight
+    overnight_lookback_sessions: int = Field(default=252, ge=20, le=2520)  # trailing, point in time
+    weekend_variance_multiple: float = Field(default=1.9, ge=1.0, le=5.0)  # R2: weekend ~1.9 normal days
+    quote_max_age_seconds: float = Field(default=10.0, gt=0.0)  # option quote used for IV at entry / exit
+    intraday_checkpoints: tuple[time, ...] = (time(10, 0), time(11, 30), time(13, 0), time(14, 0))
+    intraday_horizons: tuple[int, ...] = (15, 30, 60)
+
+    @model_validator(mode="after")
+    def _lists(self) -> VolatilityEvidenceSection:
+        if not self.intraday_checkpoints or not self.intraday_horizons or min(self.intraday_horizons) < 1:
+            raise ValueError("intraday_checkpoints and intraday_horizons (minutes >= 1) must not be empty")
+        return self
+
+
 class ShadowSection(_Frozen):
     """Shadow simulation (D2). Trade rules come from the bot configuration; these
     are research-only settings."""
@@ -141,6 +164,7 @@ class ResearchConfig(_Frozen):
     forecast: ForecastSection = ForecastSection()
     data_quality: DataQualitySection = DataQualitySection()
     shadow: ShadowSection = ShadowSection()
+    volatility: VolatilityEvidenceSection = VolatilityEvidenceSection()
     weekly_expiry_rules: tuple[ExpiryRule, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
