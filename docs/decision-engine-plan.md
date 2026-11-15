@@ -11,8 +11,8 @@ PairFlow, CrossFlow (optional), decision engine in shadow, learning from history
 | Phase | Goal | Status |
 |---|---|---|
 | D1 | Data audit and recorder: stop losing data, measure its quality | **merged** (PR #19); exit = 10 clean sessions |
-| D2 | Shadow harness: counterfactual P&L of every recorded signal from recorded quotes | **built** (branch `decision-d2-shadow-harness`) |
-| D3 | Volatility evidence (theta and costs vs expected move, IV-RV on matched horizons, position Greeks) | not started |
+| D2 | Shadow harness: counterfactual P&L of every recorded signal from recorded quotes | **merged** (PR #20) |
+| D3 | Volatility evidence (theta and costs vs expected move, IV-RV on matched horizons, position Greeks) | **built** (branch `decision-d3-volatility`) |
 | D4 | Regime (R3) and Momentum Pulse, validated on 2022-2026 NIFTY history | not started |
 | D5 | Thrust and PairFlow, shadow-recorded (needs at least 40 recorded sessions) | not started |
 | D6 | CrossFlow, only if the D1 audit shows the data can support it (optional) | not started |

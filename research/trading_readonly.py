@@ -125,6 +125,16 @@ def index_close_at(con: sqlite3.Connection, instrument_key: str, at: datetime,
     return None if row is None else (float(row[0]), str(row[1]))
 
 
+def index_minute_closes(con: sqlite3.Connection, instrument_key: str, start: datetime,
+                        end: datetime) -> list[tuple[datetime, float]]:
+    """(end time, close) of the bot's complete 1-minute candles of
+    ``instrument_key`` that ended in [start, end], oldest first."""
+    rows = con.execute("SELECT end_time, close FROM candles WHERE instrument_key = ? AND timeframe_minutes = 1"
+                       " AND complete = 1 AND end_time >= ? AND end_time <= ? ORDER BY end_time",
+                       (instrument_key, start.isoformat(), end.isoformat()))
+    return [(datetime.fromisoformat(str(r[0])), float(r[1])) for r in rows]
+
+
 #: raw_quotes reads rows whose last trade is at most this many days before the day received
 STALE_LOOKBACK_DAYS = 7
 
@@ -163,4 +173,4 @@ def recorded_signals(con: sqlite3.Connection, day: date) -> list[dict[str, objec
 
 __all__ = ["QUOTE_COLUMNS", "STALE_LOOKBACK_DAYS", "TradingDbUnavailableError", "open_trading_db_readonly",
            "quote_minute_bars", "raw_quotes", "recorded_days", "recorded_quote_days", "recorded_signals",
-           "closed_trades", "index_close_at", "signal_rows", "table_columns"]
+           "closed_trades", "index_close_at", "index_minute_closes", "signal_rows", "table_columns"]

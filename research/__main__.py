@@ -19,7 +19,8 @@ so may ``chain-schedule`` (about 5 calls per scheduled time);
     summarize-quotes   copy the bot's recorded option quotes into 1-minute bars (trading.db read-only)
     archive-quotes     copy the bot's raw 5-second option and market quotes (trading.db read-only)
     data-quality       data-quality audit of recorded sessions (trading.db read-only); JSON also stored
-    shadow             counterfactual outcome of every recorded signal on archived quotes (D2); JSON also stored
+    shadow             counterfactual outcome + volatility evidence of every recorded signal (D2, D3); JSON stored
+    intraday-vol       India VIX vs realised NIFTY variance over 15-60 minute windows, three clocks (D3); JSON stored
     calendar           derived session calendar + weekly expiries for a year
     forecast           build forecast (before each session) and outcome rows from stored history
     report [--json]    forecast-vs-reality and volatility report (markdown, or JSON); JSON also stored
@@ -41,6 +42,8 @@ import sys
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import date, datetime, timedelta
 
+import pandas as pd
+
 from broker.charges import ChargeCalculator
 from broker.upstox_rate_limiter import UpstoxRateLimiter
 from broker.upstox_rest import UpstoxRestClient
@@ -55,12 +58,17 @@ from research.collect.history import BulkDownloadBlockedError, download_daily, d
 from research.collect.quotes import summarize_recorded_quotes
 from research.config import BlockedWindow, ResearchConfig, load_research_config
 from research.forecast.analysis import full_report
+from research.forecast.intraday import minute_closes_by_day, trailing_overnight_shares
+from research.forecast.intraday import render_text as render_intraday
+from research.forecast.intraday import study as intraday_study
+from research.forecast.intraday import windows as intraday_windows
 from research.forecast.run import run_build
 from research.reports.forecast_report import render_markdown
 from research.sessions import SessionCalendar, weekly_expiries
 from research.shadow.calibrate import ActualTrade
+from research.shadow.evidence import VolContext, evidence_rows, gap_weights, weekend_gap_weight
+from research.shadow.report import evidence_summary, render_evidence, summarize
 from research.shadow.report import render_text as render_shadow
-from research.shadow.report import summarize
 from research.shadow.rules import TradeRules
 from research.shadow.run import ShadowInputs, evaluate
 from research.shadow.signals import from_log_records, from_table_rows, merge, parse_log_lines
@@ -72,6 +80,7 @@ from research.trading_readonly import (
     TradingDbUnavailableError,
     closed_trades,
     index_close_at,
+    index_minute_closes,
     open_trading_db_readonly,
     raw_quotes,
     recorded_days,
@@ -156,6 +165,7 @@ def _parser() -> argparse.ArgumentParser:
                     help="only signals of these day(s) (default: every recorded signal)")
     sh.add_argument("--json", action="store_true", help="print JSON instead of text")
     sh.add_argument("--no-log", action="store_true", help="do not rebuild pre-v7 signals from the bot's JSON log")
+    sub.add_parser("intraday-vol").add_argument("--json", action="store_true", help="print JSON instead of text")
     sub.add_parser("forecast")
     sub.add_parser("report").add_argument("--json", action="store_true", help="print JSON instead of markdown")
     c = sub.add_parser("calendar")
@@ -306,14 +316,80 @@ def _shadow(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, stor
     rows, calib = evaluate(signals, inp)
     store.upsert_shadow(rows, at=now_ist())
     summary = summarize(rows, calib)
-    body = json.dumps({"sim_version": sc.sim_version, "summary": summary, "calibration": calib, "outcomes": rows,
-                       "unrebuilt_log_signals": unrebuilt}, indent=1, default=str)
+    evidence = evidence_rows(rows, _vol_context(cfg, rcfg, store, trading, inp.cost_fn))
+    store.upsert_evidence(evidence, at=now_ist())
+    ev_summary = evidence_summary(evidence, rows)
+    body = json.dumps({"sim_version": sc.sim_version, "evidence_version": rcfg.volatility.evidence_version,
+                       "summary": summary, "calibration": calib, "evidence_summary": ev_summary, "outcomes": rows,
+                       "evidence": evidence, "unrebuilt_log_signals": unrebuilt}, indent=1, default=str)
     store.save_report("shadow", body)
-    print(body if args.json else "\n".join(render_shadow(summary, rows, calib)))
+    print(body if args.json else "\n".join(render_shadow(summary, rows, calib)
+                                              + render_evidence(ev_summary, evidence, rows)))
     if unrebuilt and not args.json:
         print(f"{len(unrebuilt)} logged signal(s) could not be rebuilt (no per-candle decision line or no "
               f"direction in the log, e.g. a session before per-candle decision logging): {', '.join(unrebuilt)}")
     return 0
+
+
+def _nifty_daily(store: ResearchStore, key: str) -> pd.DataFrame:
+    d = pd.read_sql("SELECT session_date, open AS o, close AS c FROM daily_candles WHERE instrument_key = ?"
+                    " AND complete = 1 ORDER BY session_date", store.con, params=(key,))
+    d["session_date"] = pd.to_datetime(d["session_date"]).dt.date
+    return d
+
+
+def _vol_context(cfg: BotConfig, rcfg: ResearchConfig, store: ResearchStore, trading: sqlite3.Connection,
+                 cost_fn: Callable[[int, float, float], float]) -> VolContext:
+    v, index_key = rcfg.volatility, rcfg.instruments.nifty_index_key
+    shares = trailing_overnight_shares(_nifty_daily(store, index_key), lookback=v.overnight_lookback_sessions,
+                                       reliable_from=rcfg.forecast.reliable_open_from,
+                                       default=v.default_overnight_share)
+
+    def share(day: date) -> float:
+        return shares.get(day, v.default_overnight_share)
+
+    def weights(day: date, expiry: date) -> list[float]:
+        return gap_weights(day, expiry, cfg.settings.market_session.is_trading_day,
+                           weekend_gap_weight(v.weekend_variance_multiple, share(day)))
+
+    def option_quote(key: str, at: datetime) -> dict[str, object] | None:
+        r = store.last_archived_quote(key, _ms(at), kind="OPT", max_age_ms=int(v.quote_max_age_seconds * 1000))
+        return None if r is None else dict(r)
+
+    def closes(start: datetime, end: datetime) -> list[float]:
+        bars = index_minute_closes(trading, index_key, start, end) or store.minute_closes(index_key, start, end)
+        return [c for _, c in bars]
+
+    return VolContext(r=v.risk_free_rate, q=v.dividend_yield, horizon_minutes=v.horizon_minutes,
+                      square_off=cfg.risk.time_rules.square_off_start, tick_size=rcfg.shadow.option_tick_size,
+                      slippage_ticks=cfg.settings.paper_broker.slippage_ticks, evidence_version=v.evidence_version,
+                      overnight_share=share, gap_weights=weights, option_quote=option_quote, index_closes=closes,
+                      cost_fn=cost_fn)
+
+
+def _intraday_vol(args: argparse.Namespace, rcfg: ResearchConfig, store: ResearchStore) -> int:
+    v = rcfg.volatility
+
+    def minutes(key: str) -> pd.DataFrame:
+        return pd.read_sql("SELECT start_time, close FROM minute_candles WHERE instrument_key = ? AND"
+                           " interval_minutes = 1 AND complete = 1 ORDER BY start_time", store.con, params=(key,))
+
+    nifty, vix = minutes(rcfg.instruments.nifty_index_key), minutes(rcfg.instruments.india_vix_key)
+    if nifty.empty or vix.empty:
+        print("no NIFTY / India VIX 1-minute history yet: run `python -m research history` first")
+        return 1
+    shares = trailing_overnight_shares(_nifty_daily(store, rcfg.instruments.nifty_index_key),
+                                       lookback=v.overnight_lookback_sessions,
+                                       reliable_from=rcfg.forecast.reliable_open_from,
+                                       default=v.default_overnight_share)
+    df = intraday_windows(minute_closes_by_day(nifty), minute_closes_by_day(vix), shares,
+                          checkpoints=v.intraday_checkpoints, horizons=v.intraday_horizons,
+                          default_share=v.default_overnight_share)
+    rep = intraday_study(df, block=rcfg.forecast.block_bootstrap)
+    body = json.dumps(rep, indent=1, default=str)
+    store.save_report("intraday_vol", body)
+    print(body if args.json else "\n".join(render_intraday(rep)))
+    return 0 if rep.get("windows") else 1
 
 
 def expected_option_contracts(cfg: BotConfig) -> int:
@@ -400,6 +476,8 @@ def _dispatch(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, st
         return _history(args, cfg, rcfg, store)
     if cmd == "calendar":
         return _calendar(args, cfg, rcfg, store)
+    if cmd == "intraday-vol":
+        return _intraday_vol(args, rcfg, store)
     if cmd == "forecast":
         summary = run_build(store, rcfg, configured_holidays=cfg.settings.market_session.holidays, now=now_ist())
         for line in summary.lines():

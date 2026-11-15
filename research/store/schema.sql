@@ -307,3 +307,56 @@ CREATE TABLE IF NOT EXISTS shadow_outcomes (
     CHECK (status <> 'FILLED' OR (entry_price IS NOT NULL AND exit_price IS NOT NULL AND net IS NOT NULL))
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS ix_shadow_time ON shadow_outcomes(sim_version, generated_at);
+
+-- ---------------------------------------------------------------------------
+-- v5 (decision-engine D3): volatility evidence per shadow outcome. Units: IV
+-- decimal (calendar-annualised); Greeks per option unit (delta per point, vega
+-- per volatility point, theta per calendar day); position_* in rupees for one
+-- lot; decay and costs in rupees per unit; moves in index points; variances are
+-- per window (no annualisation). Never read by trading.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS shadow_evidence (
+    signal_id                    TEXT NOT NULL,
+    sim_version                  TEXT NOT NULL,
+    evidence_version             TEXT NOT NULL,
+    overnight_share              REAL,
+    minutes_to_expiry            REAL,
+    trading_minutes_to_expiry    REAL,
+    gap_weight_to_expiry         REAL,
+    iv_feed                      REAL,
+    iv_solved                    REAL,
+    iv_feed_unit                 TEXT,
+    iv_entry                     REAL,
+    delta                        REAL,
+    gamma                        REAL,
+    vega                         REAL,
+    theta_day                    REAL,
+    position_delta_rupees        REAL,
+    position_gamma_rupees        REAL,
+    position_vega_rupees         REAL,
+    position_theta_rupees_day    REAL,
+    horizon_minutes              REAL,
+    decay_business               REAL,
+    decay_calendar               REAL,
+    costs_per_unit               REAL,
+    breakeven_points             REAL,
+    expected_move_calendar       REAL,
+    expected_move_trading        REAL,
+    expected_move_business       REAL,
+    breakeven_to_move            REAL,
+    hold_minutes                 REAL,
+    realised_var_hold            REAL,
+    implied_var_hold             REAL,
+    realised_to_implied          REAL,
+    iv_exit                      REAL,
+    iv_change_points             REAL,
+    pnl_delta                    REAL,
+    pnl_gamma                    REAL,
+    pnl_vega                     REAL,
+    pnl_decay                    REAL,
+    pnl_explained                REAL,
+    pnl_actual_mid               REAL,
+    pnl_residual                 REAL,
+    computed_at                  TEXT NOT NULL,
+    PRIMARY KEY (signal_id, sim_version, evidence_version)
+) WITHOUT ROWID;

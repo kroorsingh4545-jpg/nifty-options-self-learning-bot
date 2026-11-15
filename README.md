@@ -274,6 +274,7 @@ a message and does nothing.
    (see *Data quality* in `docs/research.md`);
 5. `chain-snapshot` saves an option-chain snapshot of the nearest expiries plus the next monthly (a few calls);
 6. `shadow` simulates every recorded strategy signal on the recorded quotes and saves the counterfactual outcomes
+   and their volatility evidence (IV, Greeks, decay and costs vs the expected move)
    to `logs\research\shadow-YYYY-MM-DD.txt` (see *Shadow mode* in `docs/research.md`; no Upstox call);
 7. `forecast` adds today's outcome and **tomorrow's forecast**, made before the open so it is recorded live and
    can never be changed later;

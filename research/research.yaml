@@ -78,6 +78,20 @@ shadow:
   exit_tolerance_ticks: 2           # ... exit within 2 ticks, and the exit reason and contract match
   spot_max_age_seconds: 60          # NIFTY price used to pick the ATM strike may be at most 60 s old
 
+# `volatility` (decision-engine D3): option IV / Greeks at each signal, hold decay and costs vs the expected
+# move, IV vs realised variance on matched windows, and the `intraday-vol` history study. Research only.
+volatility:
+  evidence_version: "d3.1"          # recorded with every evidence row; bump when the maths changes
+  risk_free_rate: 0.065             # decimal, continuous; the same rate the ML feature pipeline uses
+  dividend_yield: 0.0               # NIFTY yields ~1 %; 0 keeps parity with options/pricing.py
+  horizon_minutes: 30               # the hold the ex-ante evidence assumes (capped at the square-off)
+  default_overnight_share: 0.35     # share of daily variance in the overnight gap, when history is missing (R2)
+  overnight_lookback_sessions: 252  # otherwise measured on the trailing sessions before the day (point in time)
+  weekend_variance_multiple: 1.9    # close-to-close variance across a weekend vs a normal night (R2)
+  quote_max_age_seconds: 10         # option quote used for IV at entry and at exit
+  intraday_checkpoints: ["10:00", "11:30", "13:00", "14:00"]   # `intraday-vol`: forecast made at these times ...
+  intraday_horizons: [15, 30, 60]                              # ... for the next N trading minutes
+
 # NIFTY weekly option expiry weekday by period (0 = Monday). A rule expiry on
 # an exchange holiday moves to the previous trading day (holidays are observed
 # from the candles). The switch dates below were CONFIRMED by the owner against
