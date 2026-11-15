@@ -266,12 +266,16 @@ a message and does nothing.
 
 1. `history --to today` refreshes the NIFTY and India VIX candles (a few Upstox calls; already-complete ranges
    are skipped);
-2. `summarize-quotes` copies the bot's recorded option quotes into the research database before the bot's
-   30-day purge (no Upstox call; the trading database is opened read-only);
-3. `chain-snapshot` saves an option-chain snapshot of the nearest expiries plus the next monthly (a few calls);
-4. `forecast` adds today's outcome and **tomorrow's forecast**, made before the open so it is recorded live and
+2. `summarize-quotes` copies the bot's recorded option quotes into one-minute bars (no Upstox call; the trading
+   database is opened read-only);
+3. `archive-quotes` copies the bot's **raw 5-second** option and market quotes into the research database before
+   the bot's 30-day purge (no Upstox call; read-only);
+4. `data-quality` audits what the bot recorded today and saves it to `logs\research\data-quality-YYYY-MM-DD.txt`
+   (see *Data quality* in `docs/research.md`);
+5. `chain-snapshot` saves an option-chain snapshot of the nearest expiries plus the next monthly (a few calls);
+6. `forecast` adds today's outcome and **tomorrow's forecast**, made before the open so it is recorded live and
    can never be changed later;
-5. `report` saves the full report to `logs\research\report-YYYY-MM-DD.md`.
+7. `report` saves the full report to `logs\research\report-YYYY-MM-DD.md`.
 
 **Reading the result.** The window stays open at the end:
 
@@ -285,6 +289,13 @@ a message and does nothing.
 
 Make a desktop shortcut the same way as for the start files (right-click `daily-research.bat` → **Send to →
 Desktop (create shortcut)**).
+
+### Option-chain snapshots during the day (optional, morning)
+
+`scripts\chain-schedule.bat` takes option-chain snapshots at 09:20, 11:00, 13:30 and 15:20 IST (`chain.schedule`
+in `research\research.yaml`) and closes itself after the last one. Double-click it in the morning next to the
+PAPER bot. It is research only, with about 5 read-only Upstox calls per time on research's own small budget, and
+it never talks to the bot. Closing the window early is safe: the snapshots already taken are kept.
 
 ## Docker
 

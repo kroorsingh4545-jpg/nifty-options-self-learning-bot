@@ -17,7 +17,8 @@ from core.clock import now_ist
 #: v5: rl_decisions, trade_journal, strategy_versions, strategy_deployments,
 #: model_runs.promoted_autonomy + autonomy / promotion triggers (Phase 9);
 #: v6: candles, option_quotes (recorded market data for session reviews)
-SCHEMA_VERSION = 6
+#: v7: option_quotes Greeks / tbq / tsq / ltq / atp, market_quotes, signals (recording only)
+SCHEMA_VERSION = 7
 
 #: Columns added to existing tables after v1, applied before the schema script
 #: on databases created by an older version (CREATE TABLE IF NOT EXISTS does
@@ -28,6 +29,15 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("model_runs", "promoted_autonomy",
      "TEXT CHECK (promoted_autonomy IS NULL OR promoted_autonomy IN "
      "('OBSERVE_ONLY','PAPER_AUTO_IMPROVE','LIVE_CANDIDATE_APPROVAL'))"),
+    # v7: what the full feed sends besides price and first-level depth (recording only)
+    ("option_quotes", "delta", "REAL"),
+    ("option_quotes", "gamma", "REAL"),
+    ("option_quotes", "theta", "REAL"),
+    ("option_quotes", "vega", "REAL"),
+    ("option_quotes", "tbq", "REAL"),
+    ("option_quotes", "tsq", "REAL"),
+    ("option_quotes", "ltq", "INTEGER"),
+    ("option_quotes", "atp", "REAL"),
 )
 
 REQUIRED_TABLES = (
@@ -49,6 +59,8 @@ REQUIRED_TABLES = (
     "strategy_deployments",
     "candles",
     "option_quotes",
+    "market_quotes",
+    "signals",
 )
 
 

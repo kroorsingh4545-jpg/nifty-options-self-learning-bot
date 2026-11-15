@@ -13,10 +13,11 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from core.clock import IST as IST_TZ
 from core.clock import now_ist
 from core.models import Candle, Instrument
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3  # v3: quote_archive, archive_log (decision-engine D1)
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 MINUTES_PER_DAY = 1440
 
@@ -46,6 +47,37 @@ class ChainRow:
     vega: float | None = None
     pop: float | None = None
     strike_pcr: float | None = None
+
+
+@dataclass(frozen=True)
+class ArchivedQuote:
+    """One raw quote row from the bot's option_quotes (OPT) or market_quotes (MKT)."""
+
+    instrument_key: str
+    exchange_ms: int
+    received_ms: int
+    kind: str  # OPT | MKT
+    ltp: float
+    bid: float | None = None
+    ask: float | None = None
+    bid_qty: int | None = None
+    ask_qty: int | None = None
+    volume_today: int | None = None
+    oi: float | None = None
+    iv: float | None = None
+    delta: float | None = None
+    gamma: float | None = None
+    theta: float | None = None
+    vega: float | None = None
+    tbq: float | None = None
+    tsq: float | None = None
+    ltq: int | None = None
+    atp: float | None = None
+    held: int = 0
+
+
+ARCHIVE_COLUMNS = ("instrument_key", "exchange_ms", "received_ms", "kind", "ltp", "bid", "ask", "bid_qty", "ask_qty",
+                   "volume_today", "oi", "iv", "delta", "gamma", "theta", "vega", "tbq", "tsq", "ltq", "atp", "held")
 
 
 @dataclass(frozen=True)
@@ -186,7 +218,7 @@ class ResearchStore:
     def count(self, table: str) -> int:
         if table not in {"daily_candles", "minute_candles", "contracts", "chain_snapshots", "chain_snapshot_rows",
                          "quote_minute_bars", "fetch_log", "observations", "vol_forecasts", "vol_outcomes",
-                         "reports"}:
+                         "reports", "quote_archive", "archive_log"}:
             raise ValueError(table)
         return int(self.con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])  # noqa: S608 - whitelisted
 
@@ -248,6 +280,29 @@ class ResearchStore:
                 " held_quotes=excluded.held_quotes, summarized_at=excluded.summarized_at", rows)
         return len(rows)
 
+    def archive_quotes(self, day: date, kind: str, rows: Sequence[ArchivedQuote], *,
+                       at: datetime | None = None) -> int:
+        """Copy raw quotes received on one session day; rows already archived
+        are kept (idempotent). Returns how many rows the day now has for ``kind``."""
+        if kind not in ("OPT", "MKT") or any(r.kind != kind for r in rows):
+            raise ValueError("kind must be OPT or MKT and match every row")
+        marks = ",".join("?" * len(ARCHIVE_COLUMNS))
+        with self.con:
+            self.con.executemany(
+                f"INSERT OR IGNORE INTO quote_archive ({','.join(ARCHIVE_COLUMNS)}) VALUES ({marks})",  # noqa: S608
+                [tuple(getattr(r, c) for c in ARCHIVE_COLUMNS) for r in rows])
+            start = int(datetime.combine(day, datetime.min.time(), tzinfo=IST_TZ).timestamp() * 1000)
+            n = int(self.con.execute("SELECT COUNT(*) FROM quote_archive WHERE kind=? AND received_ms>=? AND"
+                                     " received_ms<?", (kind, start, start + 86_400_000)).fetchone()[0])
+            self.con.execute("INSERT INTO archive_log VALUES (?,?,?,?) ON CONFLICT(session_date, kind) DO UPDATE SET"
+                             " rows=excluded.rows, archived_at=excluded.archived_at",
+                             (day.isoformat(), kind, n, (at or now_ist()).isoformat()))
+        return n
+
+    def archived_days(self, kind: str) -> set[date]:
+        rows = self.con.execute("SELECT session_date FROM archive_log WHERE kind=?", (kind,))
+        return {date.fromisoformat(r[0]) for r in rows}
+
     def summarized_days(self) -> set[date]:
         rows = self.con.execute("SELECT DISTINCT substr(minute_start, 1, 10) FROM quote_minute_bars")
         return {date.fromisoformat(r[0]) for r in rows}
@@ -292,4 +347,5 @@ class ResearchStore:
         return None if row is None else str(row[0])
 
 
-__all__ = ["SCHEMA_VERSION", "ChainRow", "QuoteBar", "ResearchStore", "ResearchStoreError"]
+__all__ = ["ARCHIVE_COLUMNS", "SCHEMA_VERSION", "ArchivedQuote", "ChainRow", "QuoteBar", "ResearchStore",
+           "ResearchStoreError"]

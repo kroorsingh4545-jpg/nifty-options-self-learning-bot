@@ -8,13 +8,17 @@ Commands::
     history            download daily + 1-minute NIFTY index and India VIX history
     contracts          save the current NIFTY option contract list (strike/expiry per key)
     chain-snapshot     save option-chain snapshots of the nearest expiries (+ next monthly)
+    chain-schedule     take chain snapshots at the research.yaml chain.schedule times today, then exit
 
 Every command that calls Upstox is refused on weekdays inside
 ``history.blocked_window`` (08:30-15:40 IST), so research never competes
 with a running PAPER session for the rate limit. ``contracts`` and
 ``chain-snapshot`` (a few calls each) may opt in with ``--during-session``;
+so may ``chain-schedule`` (about 5 calls per scheduled time);
 ``history`` and ``smoke`` never can.
     summarize-quotes   copy the bot's recorded option quotes into 1-minute bars (trading.db read-only)
+    archive-quotes     copy the bot's raw 5-second option and market quotes (trading.db read-only)
+    data-quality       data-quality audit of recorded sessions (trading.db read-only); JSON also stored
     calendar           derived session calendar + weekly expiries for a year
     forecast           build forecast (before each session) and outcome rows from stored history
     report [--json]    forecast-vs-reality and volatility report (markdown, or JSON); JSON also stored
@@ -31,6 +35,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sqlite3
 import sys
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import date, datetime, timedelta
@@ -41,7 +46,9 @@ from config.loader import ConfigError, load_config
 from config.settings import BotConfig, EffectiveRateLimits, WindowLimits
 from core.clock import now_ist
 from core.enums import TradingMode
-from research.collect.chain import capture_contracts, snapshot_chains
+from research.audit.data_quality import QualityThresholds, consecutive_clean, day_quality, render_text
+from research.collect.archive import archive_recorded_quotes
+from research.collect.chain import SnapshotResult, capture_contracts, run_chain_schedule, snapshot_chains
 from research.collect.history import BulkDownloadBlockedError, download_daily, download_minutes, ensure_outside_window
 from research.collect.quotes import summarize_recorded_quotes
 from research.config import BlockedWindow, ResearchConfig, load_research_config
@@ -52,10 +59,16 @@ from research.sessions import SessionCalendar, weekly_expiries
 from research.smoke import run_smoke
 from research.sources import ReadOnlySource
 from research.store import ResearchStore
-from research.trading_readonly import TradingDbUnavailableError, open_trading_db_readonly
+from research.trading_readonly import (
+    TradingDbUnavailableError,
+    open_trading_db_readonly,
+    raw_quotes,
+    recorded_days,
+    recorded_signals,
+)
 
-NETWORK_COMMANDS = frozenset({"smoke", "history", "contracts", "chain-snapshot"})
-SESSION_ALLOWED_COMMANDS = frozenset({"contracts", "chain-snapshot"})
+NETWORK_COMMANDS = frozenset({"smoke", "history", "contracts", "chain-snapshot", "chain-schedule"})
+SESSION_ALLOWED_COMMANDS = frozenset({"contracts", "chain-snapshot", "chain-schedule"})
 
 
 def network_guard(command: str, *, during_session: bool, now: datetime, window: BlockedWindow) -> str | None:
@@ -118,6 +131,14 @@ def _parser() -> argparse.ArgumentParser:
                                           help="allow during the weekday session window (a few calls)")
     q = sub.add_parser("summarize-quotes")
     q.add_argument("--day", type=date.fromisoformat, action="append", default=None)
+    a = sub.add_parser("archive-quotes")
+    a.add_argument("--day", type=date.fromisoformat, action="append", default=None)
+    dq = sub.add_parser("data-quality")
+    dq.add_argument("--day", type=date.fromisoformat, action="append", default=None,
+                    help="day(s) to audit (default: every recorded day)")
+    dq.add_argument("--json", action="store_true", help="print JSON instead of text")
+    dq.add_argument("--expected-contracts", type=int, default=None,
+                    help="option contracts the bot keeps subscribed (default: from the bot configuration)")
     sub.add_parser("forecast")
     sub.add_parser("report").add_argument("--json", action="store_true", help="print JSON instead of markdown")
     c = sub.add_parser("calendar")
@@ -127,7 +148,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _status(store: ResearchStore) -> int:
     for table in ("daily_candles", "minute_candles", "contracts", "chain_snapshots", "chain_snapshot_rows",
-                  "quote_minute_bars", "fetch_log", "observations"):
+                  "quote_minute_bars", "quote_archive", "archive_log", "fetch_log", "observations"):
         print(f"{table:22s} {store.count(table):>10,}")
     for r in store.con.execute("SELECT instrument_key, unit, interval, COUNT(*) n, SUM(rows) rows,"
                                " SUM(status='ERROR') errors, MAX(fetched_at) last FROM fetch_log"
@@ -187,6 +208,56 @@ def _calendar(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, st
     return 0
 
 
+def expected_option_contracts(cfg: BotConfig) -> int:
+    """Option contracts the bot keeps subscribed: nearest expiry ATM +/- strike_band and,
+    when recorded, the next expiry ATM +/- next_expiry_band (CE and PE each)."""
+    rec = cfg.settings.market_recording
+    n = 2 * (2 * cfg.settings.instruments.strike_band + 1)
+    if rec.enabled and rec.next_expiry_band > 0:
+        n += 2 * (2 * rec.next_expiry_band + 1)
+    return n
+
+
+def _data_quality(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, store: ResearchStore,
+                  trading: sqlite3.Connection) -> int:
+    q = rcfg.data_quality
+    th = QualityThresholds(quote_interval_seconds=q.quote_interval_seconds, min_completeness=q.min_completeness,
+                           max_gap_seconds=q.max_gap_seconds, max_missing_share=q.max_missing_share,
+                           abnormal_spread_pct=q.abnormal_spread_pct,
+                           max_abnormal_spread_share=q.max_abnormal_spread_share,
+                           stale_trade_seconds=q.stale_trade_seconds,
+                           max_clock_offset_seconds=q.max_clock_offset_seconds,
+                           edge_tolerance_seconds=q.edge_tolerance_seconds,
+                           session_open=cfg.settings.market_session.market_open,
+                           session_close=cfg.settings.market_session.market_close)
+    index_key, vix_key = rcfg.instruments.nifty_index_key, rcfg.instruments.india_vix_key
+    expected = args.expected_contracts or expected_option_contracts(cfg)
+    days = sorted(set(args.day)) if args.day else recorded_days(trading, "option_quotes")
+    if not days:
+        print("no recorded quotes in the trading database yet")
+        return 1
+    reports = []
+    for d in days:
+        market = raw_quotes(trading, d, "market_quotes")
+        futures = {str(r["instrument_key"]) for r in market} - {index_key, vix_key}
+        rep = day_quality(d, raw_quotes(trading, d, "option_quotes"), market, recorded_signals(trading, d),
+                          index_key=index_key, futures_keys=futures, vix_key=vix_key,
+                          expected_option_contracts=expected, th=th)
+        reports.append(rep)
+        if not args.json:
+            print("\n".join(render_text(rep)))
+    streak = consecutive_clean(reports)
+    summary = {"days": reports, "consecutive_clean": streak, "required": q.clean_sessions_required,
+               "expected_option_contracts": expected}
+    body = json.dumps(summary, indent=1, default=str)
+    store.save_report("data_quality", body)
+    if args.json:
+        print(body)
+    else:
+        print(f"clean sessions in a row (most recent first): {streak} of {q.clean_sessions_required} required")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -236,19 +307,24 @@ def _dispatch(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, st
         store.save_report("forecast_vs_reality", body)
         print(body if args.json else render_markdown(rep))
         return 0
-    if cmd == "summarize-quotes":
+    if cmd in ("summarize-quotes", "archive-quotes", "data-quality"):
         try:
             trading = open_trading_db_readonly(cfg.database_path)
         except TradingDbUnavailableError as exc:
             print(exc)
             return 1
         try:
-            done = summarize_recorded_quotes(trading, store, now=now_ist, days=args.day)
+            if cmd == "summarize-quotes":
+                for d, n in summarize_recorded_quotes(trading, store, now=now_ist, days=args.day).items():
+                    print(f"{d}: {n} one-minute quote bars")
+                return 0
+            if cmd == "archive-quotes":
+                for (d, kind), n in archive_recorded_quotes(trading, store, now=now_ist, days=args.day).items():
+                    print(f"{d} {kind}: {n:,} raw quotes archived")
+                return 0
+            return _data_quality(args, cfg, rcfg, store, trading)
         finally:
             trading.close()
-        for d, n in done.items():
-            print(f"{d}: {n} one-minute quote bars")
-        return 0
 
     async def smoke(source: ReadOnlySource) -> int:
         lines = await run_smoke(source, store, rcfg, now_ist)
@@ -266,8 +342,22 @@ def _dispatch(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, st
             print(f"{r.expiry}: " + (f"ERROR {r.error}" if r.error else f"{r.rows} rows, spot {r.spot}"))
         return 0
 
+    async def schedule(source: ReadOnlySource) -> int:
+        def report(at: datetime, res: list[SnapshotResult] | str) -> None:
+            if isinstance(res, str):
+                print(f"{at:%H:%M} ERROR {res}", flush=True)
+                return
+            print(f"{at:%H:%M} " + "; ".join(f"{r.expiry}: " + (f"ERROR {r.error}" if r.error else f"{r.rows} rows")
+                                             for r in res), flush=True)
+
+        taken = await run_chain_schedule(
+            rcfg.chain.schedule, now=now_ist, sleep=asyncio.sleep, report=report,
+            take=lambda: snapshot_chains(source, store, rcfg.instruments.nifty_index_key, rcfg.chain, now_ist))
+        print(f"{taken} scheduled snapshot set(s) taken today")
+        return 0
+
     jobs: dict[str, Callable[[ReadOnlySource], Awaitable[int]]] = {
-        "smoke": smoke, "contracts": contracts, "chain-snapshot": chains}
+        "smoke": smoke, "contracts": contracts, "chain-snapshot": chains, "chain-schedule": schedule}
     return asyncio.run(_with_source(cfg, rcfg, jobs[cmd]))
 
 

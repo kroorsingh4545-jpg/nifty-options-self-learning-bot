@@ -109,7 +109,9 @@ class MarketSession(_Frozen):
 
 class InstrumentsSection(_Frozen):
     nifty_index_key: str = "NSE_INDEX|Nifty 50"
-    strike_band: int = Field(default=3, ge=0, le=10)
+    # India VIX index key: subscribed for RECORDING only (market_recording.record_vix); trading never reads it.
+    india_vix_key: str = "NSE_INDEX|India VIX"
+    strike_band: int = Field(default=5, ge=0, le=10)  # owner 2026-11-15: 3 -> 5
 
 
 class DatabaseSection(_Frozen):
@@ -201,8 +203,20 @@ class MarketRecordingSection(_Frozen):
     quote_interval_seconds: PositiveFloat = 5.0
     held_quote_interval_seconds: PositiveFloat = 1.0  # while a position is open in the contract
     flush_interval_seconds: PositiveFloat = 5.0
-    # option_quotes older than this are deleted (at start-up and after the close).
+    # option_quotes and market_quotes older than this are deleted (at start-up and after the close).
     option_quote_retention_days: int = Field(default=30, ge=1, le=365)
+    # Recording-only extras (v7). None of these contracts or keys can ever be traded: the strike
+    # universe used for entries is the nearest expiry only, and the entry gates read only the
+    # NIFTY index and the current future.
+    # Next weekly expiry: ATM +/- N strikes, CE and PE (0 = do not record the next expiry).
+    next_expiry_band: int = Field(default=3, ge=0, le=10)
+    # India VIX (instruments.india_vix_key) subscribed and its quotes recorded.
+    record_vix: bool = True
+    # NIFTY index, current future and India VIX quotes (market_quotes) sampled like option quotes.
+    record_market_quotes: bool = True
+    # At most this many rows are written per flush; the rest stay buffered for the next flush, so a
+    # backlog (after a database hiccup) can never stall the event loop with one huge write.
+    max_rows_per_flush: int = Field(default=5000, ge=100, le=50_000)
 
 
 class PaperBrokerSection(_Frozen):

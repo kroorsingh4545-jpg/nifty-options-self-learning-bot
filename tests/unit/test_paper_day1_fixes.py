@@ -995,7 +995,7 @@ def _db() -> tuple[Database, Repositories]:
 
 def test_schema_v6_has_the_recording_tables() -> None:
     db, _ = _db()
-    assert SCHEMA_VERSION == 6 and {"candles", "option_quotes"} <= set(db.tables())
+    assert SCHEMA_VERSION == 7 and {"candles", "option_quotes"} <= set(db.tables())
 
 
 def test_candles_are_saved_and_a_full_candle_replaces_a_partial_one() -> None:

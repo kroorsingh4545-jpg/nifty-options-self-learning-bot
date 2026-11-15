@@ -1,5 +1,5 @@
 -- ============================================================================
--- NIFTY options self-learning bot — SQLite schema, version 6
+-- NIFTY options self-learning bot — SQLite schema, version 7
 --
 -- Design rules enforced IN THE DATABASE (not only in Python):
 --   * Every order / fill / position / trade row carries `mode` (PAPER | LIVE).
@@ -17,6 +17,10 @@
 --     autonomy level and is refused unless that level allows it; nothing can
 --     be deployed to LIVE (strategy_deployments accepts PAPER rows only).
 --   * v5: every RL decision is persisted (rl_decisions, append-only).
+--   * v7: recording only (decision-engine D1): option_quotes gains Greeks, resting
+--     total buy/sell quantity, last traded quantity and average traded price;
+--     market_quotes (NIFTY index, future, India VIX) and signals (every strategy
+--     signal with its entry decision, append-only). Trading never reads them.
 -- All timestamps are ISO-8601 strings in IST (+05:30).
 -- ============================================================================
 
@@ -495,6 +499,12 @@ CREATE TABLE IF NOT EXISTS candles (
 -- ---------------------------------------------------------------------------
 -- option_quotes (v6): sampled quotes of subscribed option contracts, for reviews
 -- (held = 1 while the bot had a position in the contract).
+-- v7 columns (NULL on rows recorded before v7, or when the feed did not send them):
+--   delta / gamma / theta / vega  Greeks as sent by the Upstox feed
+--   tbq / tsq                     total quantity RESTING on the bid / ask side (all
+--                                 depth levels): displayed liquidity, NOT executed flow
+--   ltq                           last traded quantity; atp: average traded price
+-- exchange_time is the LAST TRADE time (Upstox ltt), not the message time.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS option_quotes (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -509,10 +519,71 @@ CREATE TABLE IF NOT EXISTS option_quotes (
     volume_today   INTEGER,
     oi             REAL,
     iv             REAL,
-    held           INTEGER NOT NULL DEFAULT 0 CHECK (held IN (0,1))
+    held           INTEGER NOT NULL DEFAULT 0 CHECK (held IN (0,1)),
+    delta          REAL,
+    gamma          REAL,
+    theta          REAL,
+    vega           REAL,
+    tbq            REAL,
+    tsq            REAL,
+    ltq            INTEGER,
+    atp            REAL
 );
 CREATE INDEX IF NOT EXISTS ix_option_quotes_key_time ON option_quotes(instrument_key, exchange_time);
 CREATE INDEX IF NOT EXISTS ix_option_quotes_time ON option_quotes(exchange_time);
+
+-- ---------------------------------------------------------------------------
+-- market_quotes (v7): sampled quotes of the NIFTY index, the current NIFTY
+-- future and India VIX (same sampling and retention as option_quotes). An index
+-- has no depth or volume: those columns are NULL for it.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS market_quotes (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    instrument_key TEXT NOT NULL,
+    exchange_time  TEXT NOT NULL,
+    received_at    TEXT NOT NULL,
+    ltp            REAL NOT NULL,
+    bid            REAL,
+    ask            REAL,
+    bid_qty        INTEGER,
+    ask_qty        INTEGER,
+    volume_today   INTEGER,
+    oi             REAL,
+    tbq            REAL,
+    tsq            REAL,
+    ltq            INTEGER,
+    atp            REAL
+);
+CREATE INDEX IF NOT EXISTS ix_market_quotes_key_time ON market_quotes(instrument_key, exchange_time);
+CREATE INDEX IF NOT EXISTS ix_market_quotes_time ON market_quotes(exchange_time);
+
+-- ---------------------------------------------------------------------------
+-- signals (v7): every strategy signal and what became of it (approved, or the
+-- rejection reasons), for shadow evaluation. Append-only; trading never reads it.
+-- decided = 0: no entry decision was seen (the session stopped first).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS signals (
+    signal_id              TEXT PRIMARY KEY,
+    mode                   TEXT NOT NULL CHECK (mode IN ('PAPER','LIVE')),
+    strategy_id            TEXT NOT NULL,
+    strategy_version       TEXT NOT NULL,
+    option_type            TEXT NOT NULL CHECK (option_type IN ('CE','PE')),
+    generated_at           TEXT NOT NULL,
+    candle_end             TEXT NOT NULL,
+    underlying_key         TEXT NOT NULL,
+    underlying_price       REAL NOT NULL,
+    reason                 TEXT NOT NULL,
+    features_json          TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(features_json)),
+    decided                INTEGER NOT NULL CHECK (decided IN (0,1)),
+    approved               INTEGER CHECK (approved IS NULL OR approved IN (0,1)),
+    decision_reasons_json  TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(decision_reasons_json)),
+    trade_uid              TEXT,
+    quantity               INTEGER,
+    ml_score               REAL,
+    recorded_at            TEXT NOT NULL,
+    CHECK (decided = 1 OR approved IS NULL)
+);
+CREATE INDEX IF NOT EXISTS ix_signals_time ON signals(mode, strategy_id, candle_end);
 
 -- ============================================================================
 -- Isolation / integrity triggers
@@ -716,6 +787,19 @@ CREATE TRIGGER IF NOT EXISTS trg_rl_decisions_append_only_delete
 BEFORE DELETE ON rl_decisions
 BEGIN
     SELECT RAISE(ABORT, 'immutable: rl_decisions are append-only');
+END;
+
+-- v7: recorded signals are evidence for shadow evaluation: never rewritten.
+CREATE TRIGGER IF NOT EXISTS trg_signals_append_only_update
+BEFORE UPDATE ON signals
+BEGIN
+    SELECT RAISE(ABORT, 'immutable: signals are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_signals_append_only_delete
+BEFORE DELETE ON signals
+BEGIN
+    SELECT RAISE(ABORT, 'immutable: signals are append-only');
 END;
 
 -- Trade journal: must match a CLOSED trade of the same mode / strategy; append-only.

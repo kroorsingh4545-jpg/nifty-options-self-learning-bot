@@ -1,3 +1,12 @@
-from research.store.store import SCHEMA_VERSION, ChainRow, QuoteBar, ResearchStore, ResearchStoreError
+from research.store.store import (
+    ARCHIVE_COLUMNS,
+    SCHEMA_VERSION,
+    ArchivedQuote,
+    ChainRow,
+    QuoteBar,
+    ResearchStore,
+    ResearchStoreError,
+)
 
-__all__ = ["SCHEMA_VERSION", "ChainRow", "QuoteBar", "ResearchStore", "ResearchStoreError"]
+__all__ = ["ARCHIVE_COLUMNS", "SCHEMA_VERSION", "ArchivedQuote", "ChainRow", "QuoteBar", "ResearchStore",
+           "ResearchStoreError"]

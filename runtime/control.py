@@ -349,7 +349,7 @@ class ControlService:
                 "feed_lag_limit_seconds": conn.get("feed_lag_limit_seconds"),
                 "entry_feed_lag_limit_seconds": cfg.settings.websocket.max_entry_feed_lag_seconds,
                 "clock": conn.get("clock"),
-                "subscriptions": len(bot.universe.subscribed | bot.base_keys()) if bot.universe else 0,
+                "subscriptions": len(bot.subscribed_keys()) if bot.universe else 0,
             },
             "market": {
                 "index": {"key": bot.spot_key, **bot.md.quote_status(bot.spot_key)},

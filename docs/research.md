@@ -49,6 +49,33 @@ Calendar check: holidays observed from the 2026 candles match the 14 holidays in
 contract list confirms the rule-based Monday 23 Nov 2026 expiry (Tuesday 24 Nov is a holiday). The 31 special
 sessions since 2000 include the 1 Feb 2026 Budget Sunday and the 8 Nov 2026 Muhurat session.
 
+## D1 additions (decision-engine data foundation, 2026-11-15)
+
+| Command | Upstox calls | What it does |
+|---|---|---|
+| `archive-quotes [--day D]` | none | Copies the bot's **raw** `option_quotes` and `market_quotes` rows (every 5-second sample, with Greeks, resting total buy/sell quantity, last traded quantity, average traded price) into `quote_archive` before the bot's 30-day purge. Rows are grouped by the day they were **received**. Idempotent; the latest day is always redone. About 105 bytes a row. |
+| `data-quality [--day D] [--json] [--expected-contracts N]` | none | Audits each recorded session (thresholds in `research.yaml` `data_quality`) and stores the JSON in `reports` (`data_quality`). Prints CLEAN or the problems, and how many clean sessions in a row (D1 exit: 10). |
+| `chain-schedule --during-session` | about 5 per scheduled time | Takes `chain-snapshot` sets at the `chain.schedule` times today (09:20, 11:00, 13:30, 15:20), then exits. One of the three commands allowed during the session; at most 8 times a day (tested). |
+
+### Data quality
+
+`research/audit/data_quality.py` (pure functions; the CLI passes the rows in). A session is **CLEAN** when:
+
+* the **option window** holds a sample for at least 99 % of (contract, 5-second slot) pairs, against the number of
+  contracts the bot keeps subscribed (nearest expiry ATM +/- `strike_band`, next expiry ATM +/- `next_expiry_band`,
+  CE and PE: 22 + 14 = 36 with the current config). A contract leaving the window as NIFTY moves is not a gap; the
+  window running short is;
+* the NIFTY index, the future and India VIX each have a sample in at least 99 % of the session's 5-second slots,
+  no silence longer than 30 s, and the index is recorded within 2 minutes of the open and of the close;
+* IV, Greeks, resting total buy/sell quantity and bid/ask are missing in at most 1 % of option rows;
+* no crossed quote, at most 1 % abnormal spreads (over 5 % of mid);
+* the median NIFTY receipt minus exchange time is within 2 s (PC clock offset plus latency).
+
+Reported but never failed: how often the last price lies outside the same message's bid/ask (about 50 % on the
+two days recorded before D1; a property of the Upstox snapshot feed), stale trades and duplicates.
+
+Sessions recorded before D1 cannot be clean: they have no Greeks, no resting quantity and no market quotes.
+
 ## Data caveats
 
 * **Expired option prices need Upstox Plus** (about 6 months, OHLC + OI, no bid/ask, no IV). Not used.

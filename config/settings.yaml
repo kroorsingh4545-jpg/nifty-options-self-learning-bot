@@ -40,7 +40,8 @@ instruments:
   # The current-month NIFTY futures contract (for NIFTY_FUT signal
   # instruments) and all lot sizes are taken from the Upstox instrument list
   # every trading day - never configured here.
-  strike_band: 3                 # subscribe ATM +/- N strikes (CE and PE) of the nearest expiry
+  strike_band: 5                 # subscribe ATM +/- N strikes (CE and PE) of the nearest expiry (owner 2026-11-15: 3 -> 5)
+  india_vix_key: "NSE_INDEX|India VIX"   # recorded only (market_recording.record_vix); never traded or gated on
 
 database:
   # Relative paths resolve against the project root.
@@ -86,7 +87,14 @@ market_recording:                # saved for session reviews; trading never read
   quote_interval_seconds: 5      # one option_quotes row per subscribed contract per interval
   held_quote_interval_seconds: 1 # ... this often while a position is open in the contract
   flush_interval_seconds: 5
-  option_quote_retention_days: 30 # older option_quotes are deleted at start-up and after the close (about 60,000 rows/day)
+  option_quote_retention_days: 30 # older option_quotes / market_quotes are deleted at start-up and after the close
+  # Recording-only extras (decision-engine D1, owner 2026-11-15). Never traded, never used by an entry gate.
+  next_expiry_band: 3            # also record the NEXT weekly expiry, ATM +/- 3 strikes (0 = off)
+  record_vix: true               # subscribe India VIX and record its quotes
+  record_market_quotes: true     # NIFTY index, current future and VIX quotes in market_quotes (5 s)
+  max_rows_per_flush: 5000       # a backlog is written over several flushes, never in one long write
+  # Expected load with these settings: about 39 subscriptions (Upstox full-mode limit 2,000) and about
+  # 170,000 quote rows / 52 MB a day, about 1.2 GB at the 30-day retention.
 
 paper_broker:
   starting_funds: 200000

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from sqlite3 import Row
 from typing import Any, TypeVar
@@ -41,7 +42,7 @@ from core.enums import (
     TradeStatus,
     TradingMode,
 )
-from core.models import Candle, Tick
+from core.models import Candle, Signal, Tick
 from data.storage.database import Database
 from data.storage.records import (
     ControlCommandRecord,
@@ -794,6 +795,21 @@ class RuntimeStateRepository(_ModeScoped):
         return json.loads(row["state_json"]), ensure_ist(datetime.fromisoformat(row["published_at"]))
 
 
+@dataclass(frozen=True)
+class SignalRow:
+    """One strategy signal and its entry decision, for the ``signals`` table.
+    ``decided`` is False when no decision was seen (``approved`` is then None)."""
+
+    signal: Signal
+    mode: TradingMode
+    decided: bool
+    approved: bool | None = None
+    reasons: tuple[str, ...] = ()
+    trade_uid: str | None = None
+    quantity: int | None = None
+    ml_score: float | None = None
+
+
 class MarketHistoryRepository(_Clocked):
     """Recorded candles and option quotes, for reviewing a session afterwards.
     Market data is the same in every trading mode, so it is not mode-scoped.
@@ -828,23 +844,72 @@ class MarketHistoryRepository(_Clocked):
             (instrument_key, timeframe_minutes, day.isoformat(), (day + timedelta(days=1)).isoformat()))
 
     def save_quotes(self, rows: Iterable[tuple[Tick, bool]]) -> int:
-        """Insert (tick, held) pairs."""
-        values = [(t.instrument_key, t.exchange_time.isoformat(), t.received_at.isoformat(), t.ltp, t.bid, t.ask,
-                   t.bid_qty, t.ask_qty, t.volume_today, t.oi, t.iv, int(held)) for t, held in rows]
+        """Insert (tick, held) pairs of option contracts."""
+        values = []
+        for t, held in rows:
+            g = t.greeks
+            values.append((t.instrument_key, t.exchange_time.isoformat(), t.received_at.isoformat(), t.ltp, t.bid,
+                           t.ask, t.bid_qty, t.ask_qty, t.volume_today, t.oi, t.iv, int(held),
+                           g.delta if g else None, g.gamma if g else None, g.theta if g else None,
+                           g.vega if g else None, t.total_buy_qty, t.total_sell_qty, t.ltq, t.atp))
         if not values:
             return 0
         with self.db.transaction() as conn:
             conn.executemany("INSERT INTO option_quotes(instrument_key, exchange_time, received_at, ltp, bid, ask, "
-                             "bid_qty, ask_qty, volume_today, oi, iv, held) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", values)
+                             "bid_qty, ask_qty, volume_today, oi, iv, held, delta, gamma, theta, vega, tbq, tsq, "
+                             "ltq, atp) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", values)
+        return len(values)
+
+    def save_market_quotes(self, rows: Iterable[Tick]) -> int:
+        """Insert quotes of the NIFTY index, the current future and India VIX."""
+        values = [(t.instrument_key, t.exchange_time.isoformat(), t.received_at.isoformat(), t.ltp, t.bid, t.ask,
+                   t.bid_qty, t.ask_qty, t.volume_today, t.oi, t.total_buy_qty, t.total_sell_qty, t.ltq, t.atp)
+                  for t in rows]
+        if not values:
+            return 0
+        with self.db.transaction() as conn:
+            conn.executemany("INSERT INTO market_quotes(instrument_key, exchange_time, received_at, ltp, bid, ask, "
+                             "bid_qty, ask_qty, volume_today, oi, tbq, tsq, ltq, atp) "
+                             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", values)
+        return len(values)
+
+    def save_signals(self, rows: Iterable[SignalRow]) -> int:
+        """Insert recorded signals. A signal already recorded is kept as it is
+        (the table is append-only), so a repeated write is harmless."""
+        at = self.now().isoformat()
+        values = [(r.signal.signal_id, r.mode.value, r.signal.strategy_id, r.signal.strategy_version,
+                   r.signal.option_type.value, r.signal.generated_at.isoformat(), r.signal.candle_end.isoformat(),
+                   r.signal.underlying_key, r.signal.underlying_price, r.signal.reason,
+                   json.dumps(r.signal.features, sort_keys=True), int(r.decided),
+                   None if r.approved is None else int(r.approved), json.dumps(list(r.reasons)), r.trade_uid,
+                   r.quantity, r.ml_score, at) for r in rows]
+        if not values:
+            return 0
+        with self.db.transaction() as conn:
+            conn.executemany("INSERT OR IGNORE INTO signals(signal_id, mode, strategy_id, strategy_version, "
+                             "option_type, generated_at, candle_end, underlying_key, underlying_price, reason, "
+                             "features_json, decided, approved, decision_reasons_json, trade_uid, quantity, "
+                             "ml_score, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", values)
         return len(values)
 
     def purge_quotes(self, before: date) -> int:
-        """Delete option quotes from before ``before``. Returns how many."""
-        return int(self.db.execute("DELETE FROM option_quotes WHERE exchange_time < ?", (before.isoformat(),)).rowcount)
+        """Delete option and market quotes from before ``before``. Returns how many."""
+        cut = (before.isoformat(),)
+        with self.db.transaction() as conn:
+            n = conn.execute("DELETE FROM option_quotes WHERE exchange_time < ?", cut).rowcount
+            n += conn.execute("DELETE FROM market_quotes WHERE exchange_time < ?", cut).rowcount
+        return int(n)
 
     def quotes(self, instrument_key: str) -> list[Row]:
         return self.db.query("SELECT * FROM option_quotes WHERE instrument_key = ? ORDER BY exchange_time, id",
                              (instrument_key,))
+
+    def market_quotes(self, instrument_key: str) -> list[Row]:
+        return self.db.query("SELECT * FROM market_quotes WHERE instrument_key = ? ORDER BY exchange_time, id",
+                             (instrument_key,))
+
+    def signals(self) -> list[Row]:
+        return self.db.query("SELECT * FROM signals ORDER BY candle_end, signal_id")
 
 
 class Repositories:
@@ -894,6 +959,7 @@ __all__: Sequence[str] = (
     "Repositories",
     "RLDecisionRepository",
     "RiskEventRepository",
+    "SignalRow",
     "StrategyDeploymentRepository",
     "StrategyRepository",
     "StrategyVersionRepository",

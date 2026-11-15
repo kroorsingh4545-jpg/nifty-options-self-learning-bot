@@ -11,13 +11,15 @@ Startup sequence (``prepare``):
  4. build strategies (NIFTY_FUT strategies get the current-month future) and
     re-apply today's per-direction entry counts; resolver, gateway, engine;
     wire tick -> candle -> engine
- 5. subscribe NIFTY index + current future; new-day reset (clears only
-    day-scoped blocks from PREVIOUS days; persistent kills stay)
+ 5. subscribe NIFTY index + current future (+ India VIX, recording only);
+    new-day reset (clears only day-scoped blocks from PREVIOUS days;
+    persistent kills stay)
  6. startup reconciliation (a mismatch triggers the kill switch)
 
 Scheduled jobs (``schedule``), all IST:
  * candle flush (1 s)          * stale-entry expiry (5 s)
- * square-off check (5 s)      * strike-universe recenter (30 s)
+ * square-off check (5 s)      * strike-universe recenter (30 s; also the
+   recording-only next-expiry universe)
  * periodic reconciliation (<= 300 s)
  * control plane (1 s): dashboard commands + published state snapshot
  * daily 09:00 start-of-day (Mon-Fri): refresh the instrument list (with
@@ -165,6 +167,10 @@ class TradingBot:
                                      partial_tolerance_seconds=cfg.settings.websocket.candle_partial_tolerance_seconds)
         self.strategies: list[BaseStrategy] = []
         self.universe: OptionUniverse | None = None
+        # Next weekly expiry, ATM +/- market_recording.next_expiry_band: subscribed for RECORDING only.
+        # The resolver never sees it, so none of its contracts can be traded.
+        self.recording_universe: OptionUniverse | None = None
+        self._orphaned: set[str] = set()  # recording keys of a universe that no longer exists
         self.engine: TradingEngine | None = None
         self.instruments: dict[str, Instrument] = {}
         self.master: InstrumentMaster | None = None
@@ -198,6 +204,7 @@ class TradingBot:
         self.universe = OptionUniverse(master.nifty_options(expiry), expiry=expiry,
                                        band=self.cfg.settings.instruments.strike_band)
         self.universe.subscribed = set(previous)
+        self._load_recording_universe(master, today)
         self.futures = master.current_month_future(today)
         self.master = master
         self.instruments = dict(master.by_key)
@@ -242,7 +249,7 @@ class TradingBot:
         self.md.add_listener(self.candles.on_tick)
         self.md.add_listener(self.engine.on_tick)
         self.candles.add_listener(self.engine.on_candle)
-        await self._subscribe(self.base_keys(), set())
+        await self._subscribe(self.base_keys() | self.recording_keys(), set())
         self.new_day(today)
         self._restore_entry_counts(today)  # after new_day: it resets strategy day state
         await s.reconciler.reconcile("startup")
@@ -321,11 +328,41 @@ class TradingBot:
                 strat.restore_entries(today, {OptionType(k): n for k, n in counts.items()})
                 log.info("strategy entry counts restored", extra={"strategy_id": strat.strategy_id, **counts})
 
+    def _load_recording_universe(self, master: InstrumentMaster, today: date) -> None:
+        rec = self.cfg.settings.market_recording
+        previous = self.recording_universe.subscribed if self.recording_universe is not None else set()
+        expiries = master.option_expiries(today)
+        if rec.enabled and rec.next_expiry_band > 0 and len(expiries) > 1:
+            self.recording_universe = OptionUniverse(master.nifty_options(expiries[1]), expiry=expiries[1],
+                                                     band=rec.next_expiry_band)
+            self.recording_universe.subscribed = set(previous)
+        else:
+            self.recording_universe = None
+            self._orphaned |= previous
+
     def base_keys(self) -> set[str]:
-        """Always-subscribed instruments: NIFTY index (+ current future)."""
+        """Always-subscribed instruments: NIFTY index (+ current future). The
+        entry gates (frozen price, feed lag) read only these."""
         keys = {self.spot_key}
         if self.futures is not None:
             keys.add(self.futures.instrument_key)
+        return keys
+
+    def recording_keys(self) -> set[str]:
+        """Instruments subscribed only so they can be recorded (India VIX).
+        No trading decision and no entry gate ever reads them."""
+        rec = self.cfg.settings.market_recording
+        return {self.cfg.settings.instruments.india_vix_key} if rec.enabled and rec.record_vix else set()
+
+    def market_keys(self) -> set[str]:
+        """Non-option instruments whose quotes are recorded (market_quotes)."""
+        return self.base_keys() | self.recording_keys()
+
+    def subscribed_keys(self) -> set[str]:
+        keys = self.base_keys() | self.recording_keys()
+        for u in (self.universe, self.recording_universe):
+            if u is not None:
+                keys |= u.subscribed
         return keys
 
     async def _subscribe(self, add: set[str], remove: set[str]) -> None:
@@ -481,6 +518,15 @@ class TradingBot:
             return
         held = {t.instrument.instrument_key for t in self.stack.positions.open_trades()}
         add, remove = self.universe.recenter(spot, keep=held)
+        if self.recording_universe is not None:
+            radd, rremove = self.recording_universe.recenter(spot)
+            add, remove = add | radd, remove | rremove
+        remove |= self._orphaned
+        self._orphaned = set()
+        # A key leaves the feed only when nothing needs it any more: the two universes can share
+        # keys on the day the next expiry becomes the nearest one, and held contracts, the index,
+        # the future and VIX always stay.
+        remove -= self.subscribed_keys() | held
         await self._subscribe(add, remove)
 
     def schedule(self) -> TradingScheduler:

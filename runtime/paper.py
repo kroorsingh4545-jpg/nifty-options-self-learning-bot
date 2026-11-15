@@ -50,6 +50,7 @@ from config.settings import BotConfig
 from core.autonomy import may_auto_deploy_paper
 from core.clock import IST, ClockOffset, now_ist
 from core.enums import AutonomyLevel, EvidenceSource, TradingMode, UpstoxTokenType
+from core.event_bus import Topic
 from data.market_data import MarketDataService
 from data.storage.bootstrap import sync_strategies
 from data.storage.database import SCHEMA_VERSION, Database
@@ -512,10 +513,16 @@ class PaperSession:
             def held() -> set[str]:
                 return {t.instrument.instrument_key for t in bot.stack.positions.open_trades()}
 
+            def is_market(key: str) -> bool:
+                return key in bot.market_keys()
+
             self.market_recorder = recorder = MarketRecorder(bot.repos.market_history, recording, is_option=is_option,
-                                                             held_keys=held)
+                                                             held_keys=held, is_market=is_market, mode=bot.cfg.mode)
             bot.candles.add_listener(recorder.on_candle)
             market_data.add_listener(recorder.on_tick)
+            # every signal and its entry decision (signals table, for shadow evaluation)
+            bot.bus.subscribe(Topic.SIGNAL, recorder.on_signal)
+            bot.bus.subscribe(Topic.ENTRY_DECISION, recorder.on_decision)
             bot.scheduler.every("market_recording", recording.flush_interval_seconds, recorder.flush)
             recorder.purge_old_quotes(bot._now().date())
             bot.scheduler.daily("option_quote_retention", time(15, 45),
@@ -663,7 +670,7 @@ class PaperSession:
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(self.history.close(), timeout)
             if self.market_recorder is not None:
-                self.market_recorder.flush()
+                self.market_recorder.close()
             open_trades = bot.stack.positions.open_trades()
             if open_trades:
                 log.warning("PAPER session stopped with open trades: they are restored at the next start, and "

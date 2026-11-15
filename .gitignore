@@ -18,7 +18,8 @@ models/
 data/dev/ml/
 mlruns/
 output/
-reports/
+# Root-level report output only: research/reports/ is source code and must stay tracked.
+/reports/
 
 # Personal Claude Code settings
 .claude/settings.local.json
