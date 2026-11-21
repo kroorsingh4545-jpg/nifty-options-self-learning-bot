@@ -277,9 +277,12 @@ a message and does nothing.
    with their volatility evidence (IV, Greeks, decay and costs vs the expected move), the regime and
    Momentum Pulse at each signal, and the shadow decision engine's verdict (never used for trading)
    to `logs\research\shadow-YYYY-MM-DD.txt` (see *Shadow mode* in `docs/research.md`; no Upstox call);
-7. `forecast` adds today's outcome and **tomorrow's forecast**, made before the open so it is recorded live and
+7. `variants` runs the pre-registered forward shadow variants (A: our ORB entries with the ORB-study exit;
+   B: 30-minute retest, long ATM) on the recorded quotes and prints them per session next to the current ORB,
+   saved to `logs\research\variants-YYYY-MM-DD.txt` (`docs/shadow-variants-preregistration.md`; no Upstox call);
+8. `forecast` adds today's outcome and **tomorrow's forecast**, made before the open so it is recorded live and
    can never be changed later;
-8. `report` saves the full report to `logs\research\report-YYYY-MM-DD.md`.
+9. `report` saves the full report to `logs\research\report-YYYY-MM-DD.md`.
 
 **Reading the result.** The window stays open at the end:
 

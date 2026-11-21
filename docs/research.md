@@ -232,6 +232,24 @@ status is NOT_YET_EVALUABLE (0 counted signals).
 reach the registered 100 signals, and v1 will stay *not yet evaluable*. That is an outcome of the evidence, not
 something to tune away: a different comparison would need a new pre-registered version (v2).
 
+## Forward shadow variants A and B (sv.v1, 2026-11-21)
+
+`python -m research variants [--day D] [--json]` (no Upstox call; trading database read-only for the NIFTY
+1-minute candles; step 7 of `scripts\daily-research.bat`, after `shadow`). Pre-registered in
+`docs/shadow-variants-preregistration.md` (`research/shadow/variant_rules.py`, fingerprint-tested) before the code
+existed; origin: ORB study E1 (`docs/orb-e1-findings.md`).
+
+| Variant | Signals | Exit |
+|---|---|---|
+| A `A_ORB_SOURCE_EXIT` | every `orb_options` D2 shadow signal, same contract and entry as its D2 row | first 1-minute NIFTY close beyond the OPPOSITE side of the 09:15-09:29 range (acted on 2 s after the bar), else square-off 15:10; no target, no trailing, no premium stop |
+| B `B_RETEST30_LONG_ATM` | E1 filter B: 30-minute range <= 0.5 % of the open, retest within 60 min of the first break; long ATM | first later close beyond the opposite side of the 30-minute range, else 15:10 |
+
+`research/shadow/variants.py` restates the D2 entry (tested equal to `simulate.py` on the same quotes) and replaces
+the premium exit with the index-driven one. Outcomes go to `shadow_variants` (research store v8); the report
+(`shadow_variants`) lists each session's current ORB (D2), A, A - ORB and B, totals since 2026-11-23 and the
+evaluation status (first look A 525 / B 625 trades; years away). Sessions before 2026-11-23 are shown with `*` and
+never counted.
+
 ## Data caveats
 
 * **Expired option prices need Upstox Plus** (about 6 months, OHLC + OI, no bid/ask, no IV). Not used.
