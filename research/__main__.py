@@ -24,6 +24,7 @@ so may ``chain-schedule`` (about 5 calls per scheduled time);
     regime-validate    regime + Momentum Pulse hypotheses, purged walk-forward by year on 2022+ history (D4)
     decision-report    the shadow engine's pre-registered forward evaluation (D7); JSON also stored
     orb-direction      how often historical ORB signals moved their own way after 30 and 60 minutes (D7)
+    orb-study          ORB study E1: Groww ORB replication, our exit vs theirs, ESTIMATED option structures; JSON stored
     calendar           derived session calendar + weekly expiries for a year
     forecast           build forecast (before each session) and outcome rows from stored history
     report [--json]    forecast-vs-reality and volatility report (markdown, or JSON); JSON also stored
@@ -49,13 +50,14 @@ from typing import Any
 
 import pandas as pd
 
+from backtest.cost_model import CostModel
 from broker.charges import ChargeCalculator
 from broker.upstox_rate_limiter import UpstoxRateLimiter
 from broker.upstox_rest import UpstoxRestClient
 from config.loader import ConfigError, load_config
 from config.settings import BotConfig, EffectiveRateLimits, WindowLimits
 from core.clock import IST, now_ist
-from core.enums import TradingMode
+from core.enums import OrderSide, TradingMode
 from research.audit.data_quality import QualityThresholds, consecutive_clean, day_quality, render_text
 from research.collect.archive import archive_recorded_quotes
 from research.collect.chain import SnapshotResult, capture_contracts, run_chain_schedule, snapshot_chains
@@ -75,6 +77,12 @@ from research.forecast.intraday import render_text as render_intraday
 from research.forecast.intraday import study as intraday_study
 from research.forecast.intraday import windows as intraday_windows
 from research.forecast.run import run_build
+from research.orb_study.data import data_check, exclusion_reason, make_session
+from research.orb_study.options import Fills, Market
+from research.orb_study.registration import STUDY_E1
+from research.orb_study.study import Limits
+from research.orb_study.study import render_text as render_orb_study
+from research.orb_study.study import run as run_orb_study
 from research.regime.orb import OrbRule
 from research.regime.pulse import Cutoffs
 from research.regime.pulse import fit as fit_pulse
@@ -190,6 +198,10 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("regime-validate").add_argument("--json", action="store_true", help="print JSON instead of text")
     sub.add_parser("decision-report").add_argument("--json", action="store_true", help="print JSON instead of text")
     sub.add_parser("orb-direction").add_argument("--json", action="store_true", help="print JSON instead of text")
+    orb = sub.add_parser("orb-study")
+    orb.add_argument("--json", action="store_true", help="print JSON instead of text")
+    orb.add_argument("--posthoc-ignore-stray-bars", action="store_true",
+                     help="POST-HOC sensitivity: drop 1-minute bars outside 09:15-15:29 before the session rule")
     sub.add_parser("forecast")
     sub.add_parser("report").add_argument("--json", action="store_true", help="print JSON instead of markdown")
     c = sub.add_parser("calendar")
@@ -519,6 +531,92 @@ def _orb_direction(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfi
     return 0
 
 
+def orb_study_fills(cfg: BotConfig, tick: float, lot: int) -> Fills:
+    """ORB study E1 execution costs: the backtest cost model with the configured charge rates and slippage."""
+    cm = CostModel(cfg.settings.costs, slippage_ticks=cfg.settings.paper_broker.slippage_ticks)
+
+    def charges(side: str, qty: int, price: float) -> float:
+        return cm.calculator.compute(OrderSide[side], qty, price).total
+
+    return Fills(quote=lambda mid: cm.quote(max(mid, tick), tick), charges=charges,
+                 slippage=cm.slippage_ticks * tick, tick=tick, lot=lot)
+
+
+def _orb_study(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, store: ResearchStore) -> int:
+    nkey, vkey = rcfg.instruments.nifty_index_key, rcfg.instruments.india_vix_key
+    q = ("SELECT start_time, open, high, low, close FROM minute_candles WHERE instrument_key = ? AND"
+         " interval_minutes = 1 AND complete = 1 ORDER BY start_time")
+    day_bars: dict[date, dict[time, tuple[float, float, float, float]]] = {}
+    for st, o, h, lo, c in store.con.execute(q, (nkey,)):
+        t = datetime.fromisoformat(str(st))
+        day_bars.setdefault(t.date(), {})[t.time()] = (float(o), float(h), float(lo), float(c))
+    vix_bars: dict[date, dict[time, float]] = {}
+    for st, _o, _h, _lo, c in store.con.execute(q, (vkey,)):
+        t = datetime.fromisoformat(str(st))
+        vix_bars.setdefault(t.date(), {})[t.time()] = float(c)
+    if not day_bars:
+        print("no NIFTY 1-minute history yet: run `python -m research history` first")
+        return 1
+    posthoc = bool(getattr(args, "posthoc_ignore_stray_bars", False))
+    if posthoc:  # found after the registered run: single flat pre-open / post-close ticks excluded whole sessions
+        day_bars = {day: {k: b for k, b in bars.items() if time(9, 15) <= k <= time(15, 29)}
+                    for day, bars in day_bars.items()}
+    d = STUDY_E1["data"]
+    min_bars, lot = int(d["session"]["min_bars"]), int(d["lot_size"])
+    sessions = store.daily_sessions(nkey)
+    cal = SessionCalendar.from_sessions(sessions, configured_holidays=cfg.settings.market_session.holidays)
+    first, last = min(day_bars), max(day_bars)
+    hol = [h for y in range(first.year, last.year + 1) for h in cal.holidays_in(y) if first <= h <= last]
+    check = data_check(day_bars, vix_bars, min_bars=min_bars, weekday_holidays=hol)
+    vd = pd.read_sql("SELECT session_date, close FROM daily_candles WHERE instrument_key = ? AND complete = 1"
+                     " ORDER BY session_date", store.con, params=(vkey,))
+    vix_close = {date.fromisoformat(str(x)): float(c) for x, c in zip(vd["session_date"], vd["close"], strict=True)}
+    vix_days = sorted(vix_close)
+    used = [day for day in sorted(day_bars) if exclusion_reason(day_bars[day], min_bars=min_bars) is None]
+    prepared = []
+    for day in used:
+        prev = [x for x in vix_days if x < day][-1:] if vix_days else []
+        prepared.append(make_session(day, day_bars[day], vix_bars.get(day), vix_close[prev[0]] if prev else None))
+    v = rcfg.volatility
+    shares = trailing_overnight_shares(_nifty_daily(store, nkey), lookback=v.overnight_lookback_sessions,
+                                       reliable_from=rcfg.forecast.reliable_open_from,
+                                       default=v.default_overnight_share)
+    expiries = sorted(e.expiry for e in weekly_expiries(sessions[0], last + timedelta(days=14),
+                                                        rcfg.weekly_expiry_rules, cal,
+                                                        observed=store.observed_expiries(nkey)))
+
+    def expiry_of(day: date) -> date | None:
+        return next((e for e in expiries if e >= day), None)
+
+    def share(day: date) -> float:
+        return shares.get(day, v.default_overnight_share)
+
+    def weights(day: date, expiry: date) -> list[float]:
+        return gap_weights(day, expiry, cal.is_trading_day, weekend_gap_weight(v.weekend_variance_multiple,
+                                                                                share(day)))
+
+    tick = rcfg.shadow.option_tick_size
+    orb = cfg.strategies.strategies["orb_options"]
+    mk = Market(expiry_of=expiry_of, gap_weights=weights, overnight_share=share, r=v.risk_free_rate,
+                q=v.dividend_yield, strike_step=orb.strike_selection.strike_step)
+    limits = Limits(capital=float(orb.allocated_capital), risk_per_trade=float(orb.sizing.risk_per_trade),
+                    max_daily_loss=float(orb.risk.max_daily_loss))
+    rep = run_orb_study(prepared, mk=mk, fills=orb_study_fills(cfg, tick, lot), our_rules=shadow_rules(cfg, tick)[
+        "orb_options"], orb_rule=sample_settings(cfg, rcfg).orb, tz=IST, limits=limits, data=check,
+        progress=lambda m: print(m, file=sys.stderr, flush=True))
+    if posthoc:
+        rep["posthoc"] = ("POST-HOC sensitivity (not registered): 1-minute bars outside 09:15-15:29 were dropped "
+                          "before the registered session rule, so sessions whose only fault was a stray flat "
+                          "pre-open or post-close bar are included")
+    rep["limits"] = {"capital": limits.capital, "risk_per_trade": limits.risk_per_trade,
+                     "max_daily_loss": limits.max_daily_loss}
+    rep["expiry_switch"] = [str(e) for e in expiries if date(2025, 8, 20) <= e <= date(2025, 9, 10)]
+    body = json.dumps(rep, indent=1, default=str)
+    store.save_report("orb_e1_study_posthoc_stray_bars" if posthoc else "orb_e1_study", body)
+    print(body if args.json else "\n".join(render_orb_study(rep)))
+    return 0
+
+
 def _regime_context(cfg: BotConfig, rcfg: ResearchConfig, store: ResearchStore,
                     trading: sqlite3.Connection, history: list[Sample]) -> RegimeContext:
     nkey, vkey = rcfg.instruments.nifty_index_key, rcfg.instruments.india_vix_key
@@ -671,6 +769,8 @@ def _dispatch(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, st
         return _decision_report(args, rcfg, store)
     if cmd == "orb-direction":
         return _orb_direction(args, cfg, rcfg, store)
+    if cmd == "orb-study":
+        return _orb_study(args, cfg, rcfg, store)
     if cmd == "forecast":
         summary = run_build(store, rcfg, configured_holidays=cfg.settings.market_session.holidays, now=now_ist())
         for line in summary.lines():
