@@ -2,14 +2,15 @@
 rem Double-click AFTER 15:40 on a trading day (or at the weekend): daily research update.
 rem Research layer only (read-only market data). It never starts, stops or talks to the
 rem PAPER bot, never touches trading settings and places no orders.
-rem   1/8 history --to today   refresh NIFTY and India VIX candles (resumable, a few Upstox calls)
-rem   2/8 summarize-quotes     copy the bot's recorded option quotes into 1-minute bars (no Upstox call)
-rem   3/8 archive-quotes       copy the bot's raw 5-second quotes before their 30-day purge (no Upstox call)
-rem   4/8 data-quality         audit of what the bot recorded, saved to logs\research\data-quality-YYYY-MM-DD.txt
-rem   5/8 chain-snapshot       option-chain snapshot: nearest expiries + next monthly (a few Upstox calls)
-rem   6/8 shadow               counterfactual outcome of every signal, saved to logs\research\shadow-YYYY-MM-DD.txt
-rem   7/8 forecast             outcome rows + the next session's forecast (no Upstox call)
-rem   8/8 report               saved to logs\research\report-YYYY-MM-DD.md (no Upstox call)
+rem   1/9 history --to today   refresh NIFTY and India VIX candles (resumable, a few Upstox calls)
+rem   2/9 summarize-quotes     copy the bot's recorded option quotes into 1-minute bars (no Upstox call)
+rem   3/9 archive-quotes       copy the bot's raw 5-second quotes before their 30-day purge (no Upstox call)
+rem   4/9 data-quality         audit of what the bot recorded, saved to logs\research\data-quality-YYYY-MM-DD.txt
+rem   5/9 chain-snapshot       option-chain snapshot: nearest expiries + next monthly (a few Upstox calls)
+rem   6/9 shadow               counterfactual outcome of every signal, saved to logs\research\shadow-YYYY-MM-DD.txt
+rem   7/9 variants             forward shadow variants A and B next to the ORB, saved to logs\research\variants-YYYY-MM-DD.txt
+rem   8/9 forecast             outcome rows + the next session's forecast (no Upstox call)
+rem   9/9 report               saved to logs\research\report-YYYY-MM-DD.md (no Upstox call)
 rem Research refuses Upstox calls on weekdays 08:30-15:40 IST, so this stops with a message if run too early.
 setlocal EnableExtensions
 cd /d "%~dp0.." || (echo Could not open the project folder "%~dp0..". & pause & exit /b 1)
@@ -33,7 +34,7 @@ for /f %%d in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd"') d
 if not exist "logs\research" mkdir "logs\research"
 set "FAILED="
 
-echo === 1/8  History ^(NIFTY + India VIX up to today^) ===
+echo === 1/9  History ^(NIFTY + India VIX up to today^) ===
 "%PY%" -m research history --to today
 set "RC=%ERRORLEVEL%"
 if "%RC%"=="3" (
@@ -48,17 +49,17 @@ if "%RC%"=="3" (
 if not "%RC%"=="0" set "FAILED=%FAILED% history"
 echo.
 
-echo === 2/8  Recorded option quotes ^(trading database, read-only^) ===
+echo === 2/9  Recorded option quotes ^(trading database, read-only^) ===
 "%PY%" -m research summarize-quotes
 if errorlevel 1 set "FAILED=%FAILED% summarize-quotes"
 echo.
 
-echo === 3/8  Raw quote archive ^(trading database, read-only^) ===
+echo === 3/9  Raw quote archive ^(trading database, read-only^) ===
 "%PY%" -m research archive-quotes
 if errorlevel 1 set "FAILED=%FAILED% archive-quotes"
 echo.
 
-echo === 4/8  Data quality ^(trading database, read-only^) ===
+echo === 4/9  Data quality ^(trading database, read-only^) ===
 "%PY%" -m research data-quality > "logs\research\data-quality-%TODAY%.txt"
 if errorlevel 1 (
   set "FAILED=%FAILED% data-quality"
@@ -67,12 +68,12 @@ if errorlevel 1 (
 )
 echo.
 
-echo === 5/8  Option-chain snapshot ===
+echo === 5/9  Option-chain snapshot ===
 "%PY%" -m research chain-snapshot
 if errorlevel 1 set "FAILED=%FAILED% chain-snapshot"
 echo.
 
-echo === 6/8  Shadow outcomes ^(trading database and bot log, read-only^) ===
+echo === 6/9  Shadow outcomes ^(trading database and bot log, read-only^) ===
 "%PY%" -m research shadow > "logs\research\shadow-%TODAY%.txt"
 if errorlevel 1 (
   set "FAILED=%FAILED% shadow"
@@ -81,12 +82,21 @@ if errorlevel 1 (
 )
 echo.
 
-echo === 7/8  Forecasts ^(outcomes + next session^) ===
+echo === 7/9  Shadow variants A and B next to the current ORB ^(trading database read-only^) ===
+"%PY%" -m research variants > "logs\research\variants-%TODAY%.txt"
+if errorlevel 1 (
+  set "FAILED=%FAILED% variants"
+) else (
+  type "logs\research\variants-%TODAY%.txt"
+)
+echo.
+
+echo === 8/9  Forecasts ^(outcomes + next session^) ===
 "%PY%" -m research forecast
 if errorlevel 1 set "FAILED=%FAILED% forecast"
 echo.
 
-echo === 8/8  Report ===
+echo === 9/9  Report ===
 "%PY%" -m research report > "logs\research\report-%TODAY%.md"
 if errorlevel 1 (
   set "FAILED=%FAILED% report"

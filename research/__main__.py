@@ -20,6 +20,7 @@ so may ``chain-schedule`` (about 5 calls per scheduled time);
     archive-quotes     copy the bot's raw 5-second option and market quotes (trading.db read-only)
     data-quality       data-quality audit of recorded sessions (trading.db read-only); JSON also stored
     shadow             counterfactual outcome + volatility evidence of every recorded signal (D2, D3); JSON stored
+    variants           forward shadow variants A and B (sv.v1) next to the current ORB, per session; JSON stored
     intraday-vol       India VIX vs realised NIFTY variance over 15-60 minute windows, three clocks (D3); JSON stored
     regime-validate    regime + Momentum Pulse hypotheses, purged walk-forward by year on 2022+ history (D4)
     decision-report    the shadow engine's pre-registered forward evaluation (D7); JSON also stored
@@ -101,6 +102,10 @@ from research.shadow.rules import TradeRules
 from research.shadow.run import ShadowInputs, evaluate
 from research.shadow.signals import from_log_records, from_table_rows, merge, parse_log_lines
 from research.shadow.simulate import Contract, Quote
+from research.shadow.variant_rules import VARIANTS_VERSION
+from research.shadow.variants import VariantInputs, variant_a, variant_b
+from research.shadow.variants import render_text as render_variants
+from research.shadow.variants import report as variants_report
 from research.smoke import run_smoke
 from research.sources import ReadOnlySource
 from research.store import ResearchStore
@@ -189,6 +194,10 @@ def _parser() -> argparse.ArgumentParser:
     dq.add_argument("--json", action="store_true", help="print JSON instead of text")
     dq.add_argument("--expected-contracts", type=int, default=None,
                     help="option contracts the bot keeps subscribed (default: from the bot configuration)")
+    va = sub.add_parser("variants")
+    va.add_argument("--day", type=date.fromisoformat, action="append", default=None,
+                    help="session(s) to (re)compute (default: every session with archived option quotes)")
+    va.add_argument("--json", action="store_true", help="print JSON instead of text")
     sh = sub.add_parser("shadow")
     sh.add_argument("--day", type=date.fromisoformat, action="append", default=None,
                     help="only signals of these day(s) (default: every recorded signal)")
@@ -310,6 +319,52 @@ def _log_records(cfg: BotConfig) -> list[dict[str, object]]:
     return sorted(recs, key=lambda r: str(r.get("ts", "")))
 
 
+def _option_contracts(store: ResearchStore, index_key: str) -> list[Contract]:
+    """The stored NIFTY option contracts (strike / expiry / lot per instrument key)."""
+    return [Contract(k, str(c["instrument_type"]), float(c["strike"]), date.fromisoformat(str(c["expiry"])),
+                     int(c["lot_size"]))
+            for k, c in store.contracts().items()
+            if c["instrument_type"] in ("CE", "PE") and c["strike"] is not None and c["expiry"]
+            and c["underlying_key"] == index_key]
+
+
+def _quote_reader(store: ResearchStore) -> Callable[[str, datetime, datetime], list[Quote]]:
+    """Archived 5-second option quotes of one contract between two receipt times."""
+    def quotes(key: str, start: datetime, end: datetime) -> list[Quote]:
+        return [Quote(_from_ms(r["received_ms"]), _from_ms(r["exchange_ms"]), r["ltp"], r["bid"], r["ask"],
+                      r["bid_qty"], r["ask_qty"], r["volume_today"], r["oi"])
+                for r in store.archived_quotes(key, _ms(start), _ms(end))]
+    return quotes
+
+
+def _variants(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, store: ResearchStore,
+              trading: sqlite3.Connection) -> int:
+    """Forward shadow variants A and B (pre-registered sv.v1) next to the current ORB's D2 shadow."""
+    sc, nkey = rcfg.shadow, rcfg.instruments.nifty_index_key
+    d2 = [r for r in store.shadow_rows(sc.sim_version) if r.get("strategy_id") == "orb_options"]
+    days = sorted(store.archived_days("OPT"))
+    if args.day:
+        wanted = set(args.day)
+        days = [d for d in days if d in wanted]
+        d2 = [r for r in d2 if datetime.fromisoformat(str(r["generated_at"])).date() in wanted]
+
+    def bars(day: date) -> dict[time, tuple[float, float, float, float]]:
+        return index_minute_bars(trading, nkey, day) or store.minute_bars(nkey, day)
+
+    inp = VariantInputs(rules=shadow_rules(cfg, sc.option_tick_size)["orb_options"],
+                        contracts=_option_contracts(store, nkey), quotes=_quote_reader(store), bars=bars,
+                        cost_fn=ChargeCalculator(cfg.settings.costs).round_trip, tz=IST)
+    rows = variant_a(d2, inp) + variant_b(days, inp)
+    store.upsert_variants(rows, at=now_ist())
+    rep = variants_report(store.shadow_rows(sc.sim_version), store.variant_rows(VARIANTS_VERSION))
+    body = json.dumps(rep, indent=1, default=str)
+    store.save_report("shadow_variants", body)
+    if not rep["sessions"]:
+        print("no recorded sessions yet: run `python -m research archive-quotes` and `shadow` first")
+    print(body if args.json else "\n".join(render_variants(rep)))
+    return 0
+
+
 def _shadow(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, store: ResearchStore,
             trading: sqlite3.Connection) -> int:
     sc = rcfg.shadow
@@ -327,16 +382,8 @@ def _shadow(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, stor
     if not signals:
         print("no recorded signals (signals table or bot log) for the chosen day(s)")
         return 1
-    contracts = [Contract(k, str(c["instrument_type"]), float(c["strike"]), date.fromisoformat(str(c["expiry"])),
-                          int(c["lot_size"]))
-                 for k, c in store.contracts().items()
-                 if c["instrument_type"] in ("CE", "PE") and c["strike"] is not None and c["expiry"]
-                 and c["underlying_key"] == index_key]
-
-    def quotes(key: str, start: datetime, end: datetime) -> list[Quote]:
-        return [Quote(_from_ms(r["received_ms"]), _from_ms(r["exchange_ms"]), r["ltp"], r["bid"], r["ask"],
-                      r["bid_qty"], r["ask_qty"], r["volume_today"], r["oi"])
-                for r in store.archived_quotes(key, _ms(start), _ms(end))]
+    contracts = _option_contracts(store, index_key)
+    quotes = _quote_reader(store)
 
     def spot(at: datetime) -> tuple[float, str] | None:
         q = store.last_archived_quote(index_key, _ms(at), max_age_ms=int(sc.spot_max_age_seconds * 1000))
@@ -786,7 +833,7 @@ def _dispatch(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, st
         store.save_report("forecast_vs_reality", body)
         print(body if args.json else render_markdown(rep))
         return 0
-    if cmd in ("summarize-quotes", "archive-quotes", "data-quality", "shadow"):
+    if cmd in ("summarize-quotes", "archive-quotes", "data-quality", "shadow", "variants"):
         try:
             trading = open_trading_db_readonly(cfg.database_path)
         except TradingDbUnavailableError as exc:
@@ -803,6 +850,8 @@ def _dispatch(args: argparse.Namespace, cfg: BotConfig, rcfg: ResearchConfig, st
                 return 0
             if cmd == "shadow":
                 return _shadow(args, cfg, rcfg, store, trading)
+            if cmd == "variants":
+                return _variants(args, cfg, rcfg, store, trading)
             return _data_quality(args, cfg, rcfg, store, trading)
         finally:
             trading.close()

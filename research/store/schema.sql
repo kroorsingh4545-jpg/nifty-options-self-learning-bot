@@ -420,3 +420,41 @@ CREATE TABLE IF NOT EXISTS shadow_decisions (
     PRIMARY KEY (signal_id, sim_version, rules_version),
     CHECK (verdict IN ('TRADE','NO_TRADE','INSUFFICIENT_EVIDENCE'))
 ) WITHOUT ROWID;
+
+-- ---------------------------------------------------------------------------
+-- v8 (shadow variants sv.v1): forward shadow variants A (our ORB entries, source
+-- exit) and B (30-minute retest, long ATM) on recorded quotes, pre-registered in
+-- docs/shadow-variants-preregistration.md. Shadow only: never read by trading.
+-- before_registration = 1: shown, never counted. base_* = the current ORB's D2 row (A only).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS shadow_variants (
+    variant              TEXT NOT NULL,
+    variant_version      TEXT NOT NULL,
+    signal_id            TEXT NOT NULL,
+    day                  TEXT NOT NULL,
+    generated_at         TEXT NOT NULL,
+    option_type          TEXT NOT NULL,
+    before_registration  INTEGER NOT NULL,
+    status               TEXT NOT NULL,
+    instrument_key       TEXT,
+    strike               REAL,
+    expiry               TEXT,
+    lot_size             INTEGER,
+    decision_quote_at    TEXT,
+    entry_time           TEXT,
+    entry_price          REAL,
+    exit_time            TEXT,
+    exit_price           REAL,
+    exit_reason          TEXT,
+    trigger_at           TEXT,
+    quantity             INTEGER,
+    gross                REAL,
+    charges              REAL,
+    net                  REAL,
+    base_status          TEXT,
+    base_net             REAL,
+    flags_json           TEXT,
+    info_json            TEXT,
+    computed_at          TEXT NOT NULL,
+    PRIMARY KEY (variant, variant_version, signal_id)
+) WITHOUT ROWID;

@@ -4,6 +4,7 @@ from research.store.store import (
     EVIDENCE_COLUMNS,
     REGIME_COLUMNS,
     SCHEMA_VERSION,
+    VARIANT_COLUMNS,
     ArchivedQuote,
     ChainRow,
     QuoteBar,
@@ -12,4 +13,4 @@ from research.store.store import (
 )
 
 __all__ = ["ARCHIVE_COLUMNS", "DECISION_COLUMNS", "EVIDENCE_COLUMNS", "REGIME_COLUMNS", "SCHEMA_VERSION",
-           "ArchivedQuote", "ChainRow", "QuoteBar", "ResearchStore", "ResearchStoreError"]
+           "VARIANT_COLUMNS", "ArchivedQuote", "ChainRow", "QuoteBar", "ResearchStore", "ResearchStoreError"]

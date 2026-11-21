@@ -17,8 +17,15 @@ from core.clock import IST as IST_TZ
 from core.clock import now_ist
 from core.models import Candle, Instrument
 
-SCHEMA_VERSION = 7  # v3: quote_archive, archive_log (D1); v4: shadow_outcomes (D2); v5: shadow_evidence (D3);
-#                    v6: shadow_regime (D4); v7: shadow_decisions (D7)
+SCHEMA_VERSION = 8  # v3: quote_archive, archive_log (D1); v4: shadow_outcomes (D2); v5: shadow_evidence (D3);
+#                    v6: shadow_regime (D4); v7: shadow_decisions (D7); v8: shadow_variants (sv.v1)
+
+VARIANT_COLUMNS = (
+    "variant", "variant_version", "signal_id", "day", "generated_at", "option_type", "before_registration",
+    "status", "instrument_key", "strike", "expiry", "lot_size", "decision_quote_at", "entry_time", "entry_price",
+    "exit_time", "exit_price", "exit_reason", "trigger_at", "quantity", "gross", "charges", "net", "base_status",
+    "base_net", "flags_json", "info_json",
+)
 
 DECISION_COLUMNS = (
     "signal_id",
@@ -468,6 +475,26 @@ class ResearchStore:
         return [dict(r) for r in self.con.execute(
             "SELECT * FROM shadow_decisions WHERE sim_version=? AND rules_version=? ORDER BY generated_at",
             (sim_version, rules_version))]
+
+    def upsert_variants(self, rows: Sequence[Mapping[str, Any]], *, at: datetime | None = None) -> int:
+        """Insert or replace forward shadow variant outcomes (recomputed from the archive on every run)."""
+        if not rows:
+            return 0
+        unknown = {k for r in rows for k in r} - set(VARIANT_COLUMNS)
+        if unknown:
+            raise ResearchStoreError(f"unknown variant columns: {sorted(unknown)}")
+        stamp = (at or now_ist()).isoformat()
+        cols = [*VARIANT_COLUMNS, "computed_at"]
+        sql = (f"INSERT OR REPLACE INTO shadow_variants ({', '.join(cols)}) "  # noqa: S608 - fixed column names
+               f"VALUES ({', '.join('?' * len(cols))})")
+        with self.con:
+            self.con.executemany(sql, [(*(r.get(c) for c in VARIANT_COLUMNS), stamp) for r in rows])
+        return len(rows)
+
+    def variant_rows(self, variant_version: str) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.con.execute(
+            "SELECT * FROM shadow_variants WHERE variant_version=? ORDER BY day, variant, signal_id",
+            (variant_version,))]
 
     def regime_rows(self, sim_version: str, regime_version: str) -> list[dict[str, Any]]:
         return [dict(r) for r in self.con.execute(
