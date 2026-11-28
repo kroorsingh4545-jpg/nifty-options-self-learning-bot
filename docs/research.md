@@ -68,11 +68,21 @@ sessions since 2000 include the 1 Feb 2026 Budget Sunday and the 8 Nov 2026 Muhu
 * the NIFTY index, the future and India VIX each have a sample in at least 99 % of the session's 5-second slots,
   no silence longer than 30 s, and the index is recorded within 2 minutes of the open and of the close;
 * IV, Greeks, resting total buy/sell quantity and bid/ask are missing in at most 1 % of option rows;
-* no crossed quote, at most 1 % abnormal spreads (over 5 % of mid);
+* no crossed quote on an option or the index, at most 1 % abnormal spreads (over 5 % of mid);
 * the median NIFTY receipt minus exchange time is within 2 s (PC clock offset plus latency).
 
 Reported but never failed: how often the last price lies outside the same message's bid/ask (about 50 % on the
-two days recorded before D1; a property of the Upstox snapshot feed), stale trades and duplicates.
+two days recorded before D1; a property of the Upstox snapshot feed), stale trades, duplicates, and **crossed
+quotes on the NIFTY future**. The future's Upstox snapshot shows bid > ask on most days (20-82 a day,
+25-27 Nov 2026), so these are a `~ warning` line and do not fail the day (owner decision, 2026-11-28).
+
+**Fixed 5-second slots (from 2026-11-28).** The bot records the first tick of each fixed 5-second clock slot
+(:00, :05, :10, ...; 1-second slots while a position is held), the same slots this audit counts. Before, it
+recorded a tick once 5 s had passed since the previous sample. That drifted to about one sample every 5-6 s,
+so even on an uninterrupted day (26 Nov) the slot check found only 89-98 % (future 89 %, VIX 94 %, index
+98.5 %, option window 90 %). The 99 % rule could not be met. Sessions recorded before the change keep that
+shortfall, so the clean streak effectively starts with the first session recorded after it.
+**Stop the bot after 15:31** so the index is recorded up to the close; the check allows 2 minutes either side.
 
 Sessions recorded before D1 cannot be clean: they have no Greeks, no resting quantity and no market quotes.
 
