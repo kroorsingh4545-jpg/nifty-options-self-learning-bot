@@ -155,3 +155,55 @@ def test_daily_research_script_runs_only_research_commands() -> None:
 def test_daily_research_script_keeps_crlf_line_endings() -> None:
     raw = SCRIPT.read_bytes()
     assert b"\r\n" in raw and raw.count(b"\n") == raw.count(b"\r\n")  # batch labels/goto break with LF
+
+
+# --------------------------------------------------------------------------- #
+# Office / home versions of the daily research script (weekend-1 task 1)
+# --------------------------------------------------------------------------- #
+OFFICE_PY = r"C:\Users\Prince\venvs\nifty-bot\Scripts\python.exe"
+HOME_PY = r"%CD%\.venv\Scripts\python.exe"
+WRAPPERS = {"office": ROOT / "scripts" / "daily-research-office.bat",
+            "home": ROOT / "scripts" / "daily-research-home.bat"}
+
+
+def _start_script_python(where: str) -> str:
+    text = (ROOT / "scripts" / f"start-{where}.bat").read_text(encoding="utf-8")
+    return text.split('set "PY=', 1)[1].split('"', 1)[0]
+
+
+@pytest.mark.parametrize("where", ["office", "home"])
+def test_daily_research_wrappers_use_the_start_script_python(where: str) -> None:
+    raw = WRAPPERS[where].read_bytes()
+    assert raw.count(b"\n") == raw.count(b"\r\n")  # CRLF only
+    text = raw.decode("utf-8")
+    assert f'set "PY={_start_script_python(where)}"' in text  # same Python as start-<where>.bat
+    assert f'set "NIFTY_PC={where}"' in text
+    assert 'call "%~dp0daily-research.bat"' in text  # one shared copy of the steps
+    lowered = text.lower()
+    for forbidden in ("-m runtime", "-m research", "place_order", "trading_mode", ".env", "del ", "rmdir"):
+        assert forbidden not in lowered, forbidden
+
+
+def test_start_scripts_and_daily_research_agree_on_both_pythons() -> None:
+    assert _start_script_python("office") == OFFICE_PY
+    assert _start_script_python("home") == HOME_PY
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert f'set "OFFICE_PY={OFFICE_PY}"' in text
+    assert f'set "HOME_PY={HOME_PY}"' in text
+
+
+def test_daily_research_double_click_auto_detects_and_test_starts_python() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    # A wrapper's choice wins; otherwise any inherited PY is ignored and re-detected.
+    assert text.index("if defined NIFTY_PC goto python_chosen") < text.index('set "PY="') < text.index(":python_chosen")
+    # Office first: its path exists only on the office PC, while a .venv copied there with the
+    # project folder exists but does not start. Each candidate is test-started, never trusted on sight.
+    office = text.index('call :try_python "%OFFICE_PY%" office')
+    home = text.index('call :try_python "%HOME_PY%" home')
+    assert office < home
+    sub = text.split("\n:try_python", 1)[1]
+    assert '"%~1" -c "import research"' in sub and "if errorlevel 1 exit /b 0" in sub
+    # The chosen Python (wrapper or auto) is test-started before any research step runs.
+    first_step = text.index("-m research history")
+    check = text.index('"%PY%" -c "import research"')
+    assert text.index(":python_chosen") < check < first_step

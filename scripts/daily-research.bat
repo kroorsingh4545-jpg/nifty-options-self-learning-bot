@@ -12,20 +12,50 @@ rem   7/9 variants             forward shadow variants A and B next to the ORB, 
 rem   8/9 forecast             outcome rows + the next session's forecast (no Upstox call)
 rem   9/9 report               saved to logs\research\report-YYYY-MM-DD.md (no Upstox call)
 rem Research refuses Upstox calls on weekdays 08:30-15:40 IST, so this stops with a message if run too early.
+rem
+rem Which Python (same environments as start-office.bat / start-home.bat):
+rem   daily-research-office.bat  -> C:\Users\Prince\venvs\nifty-bot  (sets NIFTY_PC=office, then calls this file)
+rem   daily-research-home.bat    -> the project's .venv              (sets NIFTY_PC=home, then calls this file)
+rem   this file double-clicked   -> picks by itself: the office environment if it exists and starts,
+rem                                 else the project's .venv. A .venv copied from the other PC (the project
+rem                                 folder travels on a drive) exists but does not start, so it is never trusted
+rem                                 on sight: every candidate is test-started first.
 setlocal EnableExtensions
 cd /d "%~dp0.." || (echo Could not open the project folder "%~dp0..". & pause & exit /b 1)
 title NIFTY research - daily update
 
-rem Same Python as the start scripts: the project .venv (home PC), else the office PC environment.
-if not defined PY if exist "%CD%\.venv\Scripts\python.exe" set "PY=%CD%\.venv\Scripts\python.exe"
-if not defined PY set "PY=C:\Users\Prince\venvs\nifty-bot\Scripts\python.exe"
+set "OFFICE_PY=C:\Users\Prince\venvs\nifty-bot\Scripts\python.exe"
+set "HOME_PY=%CD%\.venv\Scripts\python.exe"
+if defined NIFTY_PC goto python_chosen
+set "PY="
+if exist "%OFFICE_PY%" call :try_python "%OFFICE_PY%" office
+if not defined PY if exist "%HOME_PY%" call :try_python "%HOME_PY%" home
+if not defined PY (
+  echo STOPPED: no working Python found. Tried:
+  echo   office PC: %OFFICE_PY%
+  echo   home PC:   %HOME_PY%
+  echo Create the environment first ^(see README, Setup^).
+  pause
+  exit /b 1
+)
+
+:python_chosen
 echo Project folder: %CD%
-echo Python:         %PY%
+echo Python:         %PY%  ^(%NIFTY_PC% PC^)
 echo.
 if not exist "%PY%" (
   echo STOPPED: Python was not found at
   echo   %PY%
   echo Create the environment first ^(see README, Setup^).
+  pause
+  exit /b 1
+)
+"%PY%" -c "import research" >nul 2>&1
+if errorlevel 1 (
+  echo STOPPED: Python at
+  echo   %PY%
+  echo does not start or cannot load the project. A .venv copied from the other PC does this:
+  echo use daily-research-office.bat on the office PC and daily-research-home.bat at home.
   pause
   exit /b 1
 )
@@ -118,4 +148,14 @@ echo  Done. Check the forecast lines above: tomorrow's forecast says
 echo  whether it was recorded before the open.
 echo ============================================================
 pause
+exit /b 0
+
+rem ---------------------------------------------------------------------------
+rem :try_python <python.exe> <office|home> sets PY and NIFTY_PC only if that Python
+rem starts and can load the project (cheap: imports the research package only).
+:try_python
+"%~1" -c "import research" >nul 2>&1
+if errorlevel 1 exit /b 0
+set "PY=%~1"
+set "NIFTY_PC=%~2"
 exit /b 0

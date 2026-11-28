@@ -253,10 +253,20 @@ folder from its own location.
 
 ### Daily research update (after 15:40)
 
-`scripts\daily-research.bat` updates the research layer (see `docs/research.md`) in one double-click. It is
-**research only**: it never starts, stops or talks to the PAPER bot, changes no trading setting and places no
-orders. It uses the same Python as the start files: the project's `.venv` if it exists (home PC), otherwise
-`C:\Users\Prince\venvs\nifty-bot` (office PC).
+The daily research update runs in one double-click (see `docs/research.md`). It is **research only**: it never
+starts, stops or talks to the PAPER bot, changes no trading setting and places no orders. Like the start files,
+there is one file per PC, using the same Python:
+
+| File | For | Python it uses |
+|---|---|---|
+| `scripts\daily-research-office.bat` | office PC | `C:\Users\Prince\venvs\nifty-bot\Scripts\python.exe` |
+| `scripts\daily-research-home.bat` | home PC | the project's `.venv\Scripts\python.exe` |
+| `scripts\daily-research.bat` | either PC (the old name keeps working) | picks by itself, see below |
+
+`daily-research.bat` holds the steps; the two per-PC files only choose the Python and then run it. Double-clicked
+directly, it uses the office Python if that exists and starts, otherwise the project's `.venv`. A `.venv` copied
+from the other PC together with the project folder exists but does not start, so each Python is test-started
+before it is used; if none works it stops with a message naming both paths and does nothing.
 
 **When:** after **15:40** on a trading day, or any time at the weekend. Research refuses Upstox calls on weekdays
 08:30–15:40 IST so it never competes with a running PAPER session. If you double-click too early, it stops with
@@ -294,8 +304,9 @@ a message and does nothing.
   today's candle when you ran it. Double-click again later in the evening, or before 08:30 the next morning;
   a forecast made by 09:10 still counts as live.
 
-Make a desktop shortcut the same way as for the start files (right-click `daily-research.bat` → **Send to →
-Desktop (create shortcut)**).
+Make a desktop shortcut the same way as for the start files (right-click `daily-research-office.bat` or
+`daily-research-home.bat` → **Send to → Desktop (create shortcut)**). An existing shortcut to
+`daily-research.bat` keeps working.
 
 ### Option-chain snapshots during the day (optional, morning)
 
