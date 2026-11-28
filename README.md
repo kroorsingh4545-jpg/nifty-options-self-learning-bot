@@ -207,6 +207,15 @@ Sending never blocks trading: alerts go through a bounded queue drained in the b
 message per second, with HTTP 429 `retry_after` honoured. A rejected token or chat disables the channel with
 one ERROR log. Messages pass through the secret masker.
 
+**CRITICAL alerts are never given up during an internet outage.** Kill-switch, daily-loss and exit-failure
+alerts wait in the queue and are retried until Telegram accepts them. The wait between tries is at most
+`critical_retry_max_seconds` (30 s), so they arrive within about 30 s of the connection coming back. They keep
+their order: alerts queued behind them follow. One that arrives more than a minute late starts with *"⏳ DELAYED:
+Telegram was unreachable; this happened N min ago at HH:MM:SS IST."* A full queue drops the oldest
+non-critical alert to make room, never a critical one. Other alerts still give up after `max_attempts` (3).
+If the bot is stopped while Telegram is still unreachable, the CRITICAL alerts not yet delivered are listed in
+an ERROR line in `logs/bot.jsonl`.
+
 ## Telegram menu
 
 The same Telegram bot also has a button menu. Send **Menu** (or `/menu`) in your chat and it shows these

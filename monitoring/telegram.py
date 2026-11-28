@@ -9,12 +9,22 @@ Guarantees:
 * ``send`` never blocks and never raises: alerts go into a bounded queue
   drained by a background task, so a slow or unreachable Telegram can never
   delay a kill switch, an exit or the heartbeat. When the queue is full a new
-  non-critical alert is dropped; a CRITICAL one replaces the oldest entry.
+  non-critical alert is dropped; a CRITICAL one makes room by dropping the
+  oldest NON-critical alert, so CRITICAL alerts are never dropped (up to a hard
+  cap of ``CRITICAL_QUEUE_FACTOR`` x ``queue_size``).
+* CRITICAL alerts (kill switch, daily-loss breach, exit failure) are retried
+  until Telegram accepts them: network errors, timeouts, 429 and 5xx wait with
+  back-off capped at ``critical_retry_max_seconds``, so after an internet
+  outage they arrive within that cap of the connection coming back, in order,
+  with a "delayed" note. Other alerts give up after ``max_attempts``. A
+  rejected token or chat (401 / 403 / 404) or a rejected message (other 4xx)
+  is never retried. At shutdown, CRITICAL alerts still undelivered after the
+  close timeout are logged as an ERROR.
 * ``send`` is thread-safe (the error-log handler can call it from any thread).
 * At most one message per ``min_interval_seconds`` (Telegram allows about
-  one per second per chat); HTTP 429 waits ``retry_after``; network errors
-  retry with backoff; an invalid token or chat (401 / 403 / 404) disables the
-  channel with one ERROR log instead of retrying forever.
+  one per second per chat); HTTP 429 waits ``retry_after``; an invalid token
+  or chat (401 / 403 / 404) disables the channel with one ERROR log instead of
+  retrying forever.
 * The bot token is only ever in the request URL. Every message is passed
   through the secret masker, and failures log the error type only.
 * This is the only module besides the Upstox adapters that may open a network
@@ -34,11 +44,13 @@ import threading
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import httpx
 
 from config.settings import TelegramSection
+from core.clock import now_ist
 from core.enums import RiskSeverity, TradingMode
 from core.masking import DEFAULT_MASKER, SecretMasker
 from monitoring.alerts import Alert, AlertKind
@@ -53,6 +65,13 @@ HEADINGS = {AlertKind.ENTRY: "ENTRY", AlertKind.EXIT: "EXIT", AlertKind.ERROR: "
             AlertKind.DAILY_LOSS: "DAILY LOSS LIMIT BREACHED", AlertKind.KILL_SWITCH: "KILL SWITCH",
             AlertKind.EOD_SUMMARY: "END OF DAY", AlertKind.GENERAL: "ALERT"}
 DISABLING_STATUS = frozenset({401, 403, 404})
+CRITICAL_QUEUE_FACTOR = 4  # criticals may overfill the queue up to 4 x queue_size before anything is lost
+DELAYED_NOTE_SECONDS = 60.0  # a CRITICAL delivered this late says so
+
+
+def _ago(seconds: float) -> str:
+    s = int(seconds)
+    return f"{s // 60} min {s % 60:02d} s" if s >= 60 else f"{s} s"
 
 
 def format_message(alert: Alert, mode: TradingMode, masker: SecretMasker = DEFAULT_MASKER) -> str:
@@ -73,9 +92,11 @@ class TelegramAlertSink:
     def __init__(self, *, token: str, chat_id: str, settings: TelegramSection | None = None,
                  mode: TradingMode = TradingMode.PAPER, http: httpx.AsyncClient | None = None,
                  masker: SecretMasker = DEFAULT_MASKER,
-                 sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
+                 sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+                 now_fn: Callable[[], datetime] = now_ist) -> None:
         if not token or not chat_id:
             raise ValueError("Telegram needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+        self._now = now_fn
         self.settings = settings or TelegramSection()
         self._url = f"{TELEGRAM_API}/bot{token}/sendMessage"
         self._chat_id = chat_id
@@ -96,6 +117,9 @@ class TelegramAlertSink:
         self.sent = 0
         self.dropped = 0
         self.failed = 0
+        self.delivered_late = 0  # CRITICAL alerts that needed retries before Telegram took them
+        self.critical_dropped = 0  # only beyond the hard cap (should never happen)
+        self._inflight: Alert | None = None
 
     # ------------------------------------------------------------------ #
     def wants(self, alert: Alert) -> bool:
@@ -118,8 +142,16 @@ class TelegramAlertSink:
                     if alert.severity is not RiskSeverity.CRITICAL:
                         self.dropped += 1
                         return
-                    self._queue.popleft()
-                    self.dropped += 1
+                    # Make room by dropping the oldest NON-critical alert: a CRITICAL is never dropped.
+                    victim = next((i for i, a in enumerate(self._queue) if a.severity is not RiskSeverity.CRITICAL),
+                                  None)
+                    if victim is not None:
+                        del self._queue[victim]
+                        self.dropped += 1
+                    elif len(self._queue) >= CRITICAL_QUEUE_FACTOR * self.settings.queue_size:
+                        self._queue.popleft()  # hard memory cap: only reachable with thousands of criticals
+                        self.dropped += 1
+                        self.critical_dropped += 1
                 self._queue.append(alert)
             self._notify()
         except Exception:  # an alert channel must never break the caller
@@ -166,59 +198,112 @@ class TelegramAlertSink:
                 continue
             if self.disabled is not None:
                 continue
-            await self._deliver(alert)
+            self._inflight = alert
+            try:
+                await self._deliver(alert)
+            finally:
+                self._inflight = None
             await self._sleep(self.settings.min_interval_seconds)
 
+    def _text(self, alert: Alert) -> str:
+        text = format_message(alert, self.mode, self._masker)
+        late = (self._now() - alert.at).total_seconds()
+        if late >= DELAYED_NOTE_SECONDS:
+            note = (f"⏳ DELAYED: Telegram was unreachable; this happened {_ago(late)} ago "
+                    f"at {alert.at:%H:%M:%S} IST.")
+            text = note + "\n" + text
+        return text if len(text) <= MAX_TEXT else text[: MAX_TEXT - 1] + "…"
+
+    def _backoff(self, failures: int, critical: bool) -> float:
+        cap = self.settings.critical_retry_max_seconds if critical else 30.0
+        return float(min(cap, 2.0 ** max(0, failures - 1)))
+
     async def _deliver(self, alert: Alert) -> None:
-        payload = {"chat_id": self._chat_id, "text": format_message(alert, self.mode, self._masker),
-                   "disable_web_page_preview": True}
-        for attempt in range(self.settings.max_attempts):
+        critical = alert.severity is RiskSeverity.CRITICAL
+        failures = 0
+        while True:
+            if self.disabled is not None:
+                return
+            # Rebuilt per attempt so a late CRITICAL says when it really happened.
+            payload = {"chat_id": self._chat_id, "text": self._text(alert), "disable_web_page_preview": True}
+            retry_in: float | None = None
             try:
                 resp = await self._http.post(self._url, json=payload)
             except (httpx.TimeoutException, httpx.TransportError) as exc:
-                log.warning("telegram send failed; retrying", extra={"error": type(exc).__name__,
-                                                                      "attempt": attempt + 1})
-                await self._sleep(min(30.0, 2.0 ** attempt))
-                continue
-            if resp.status_code == 200:
-                self.sent += 1
-                return
-            if resp.status_code == 429:
-                retry_after = 5.0
-                with contextlib.suppress(Exception):
-                    retry_after = float(resp.json().get("parameters", {}).get("retry_after", 5))
-                await self._sleep(min(max(retry_after, 1.0), 60.0))
-                continue
-            if resp.status_code in DISABLING_STATUS:
-                self.disabled = f"HTTP {resp.status_code}"
-                log.error("telegram alerts disabled: the bot token or chat id was rejected",
-                          extra={"status": resp.status_code})
-                return
-            if resp.status_code >= 500:
-                await self._sleep(min(30.0, 2.0 ** attempt))
-                continue
-            log.error("telegram rejected an alert", extra={"status": resp.status_code})
-            break
+                failures += 1
+                if not critical and failures >= self.settings.max_attempts:
+                    break
+                retry_in = self._backoff(failures, critical)
+                log.warning("telegram send failed; retrying", extra={
+                    "error": type(exc).__name__, "attempt": failures, "critical": critical,
+                    "retry_seconds": retry_in, "title": alert.title if critical else None})
+            else:
+                if resp.status_code == 200:
+                    self.sent += 1
+                    if critical and failures:
+                        self.delivered_late += 1
+                        log.warning("telegram CRITICAL alert delivered after retries",
+                                    extra={"title": alert.title, "attempts": failures + 1,
+                                           "late_seconds": round((self._now() - alert.at).total_seconds(), 1)})
+                    return
+                if resp.status_code in DISABLING_STATUS:
+                    self.disabled = f"HTTP {resp.status_code}"
+                    log.error("telegram alerts disabled: the bot token or chat id was rejected",
+                              extra={"status": resp.status_code})
+                    return
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    failures += 1
+                    if not critical and failures >= self.settings.max_attempts:
+                        break
+                    if resp.status_code == 429:
+                        retry_after = 5.0
+                        with contextlib.suppress(Exception):
+                            retry_after = float(resp.json().get("parameters", {}).get("retry_after", 5))
+                        retry_in = min(max(retry_after, 1.0), 60.0)
+                    else:
+                        retry_in = self._backoff(failures, critical)
+                else:  # 400 and the like: Telegram refuses this message; the same text would fail again
+                    log.error("telegram rejected an alert", extra={"status": resp.status_code,
+                                                                   "critical": critical})
+                    break
+            await self._sleep(retry_in)
         self.failed += 1
 
+    def undelivered_critical(self) -> list[Alert]:
+        with self._lock:
+            queued = [a for a in self._queue if a.severity is RiskSeverity.CRITICAL]
+        inflight = self._inflight
+        return ([inflight] if inflight is not None and inflight.severity is RiskSeverity.CRITICAL else []) + queued
+
     async def aclose(self, timeout: float = 10.0) -> None:
-        """Deliver what is queued (within ``timeout``), then stop."""
+        """Deliver what is queued (within ``timeout``), then stop. CRITICAL
+        alerts still undelivered then (Telegram unreachable) are logged."""
         self._closing = True
         if self._task is not None:
             self._notify()
             try:
                 await asyncio.wait_for(asyncio.shield(self._task), timeout)
             except (TimeoutError, asyncio.CancelledError, Exception):
+                lost = self.undelivered_critical()
                 self._task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await self._task
+                if lost:
+                    log.error("telegram: CRITICAL alerts NOT delivered before shutdown (Telegram unreachable)",
+                              extra={"count": len(lost), "titles": [a.title for a in lost][:20]})
         if self._owns_http:
             await self._http.aclose()
 
     def describe(self) -> str:
         if self.disabled is not None:
             return f"disabled ({self.disabled})"
-        return f"on (sent {self.sent}, queued {len(self._queue)}, dropped {self.dropped}, failed {self.failed})"
+        out = f"on (sent {self.sent}, queued {len(self._queue)}, dropped {self.dropped}, failed {self.failed}"
+        if self.delivered_late:
+            out += f", {self.delivered_late} critical delivered late"
+        pending = len(self.undelivered_critical())
+        if pending:
+            out += f", {pending} critical waiting for Telegram"
+        return out + ")"
 
 
 # --------------------------------------------------------------------------- #
