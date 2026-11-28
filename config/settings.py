@@ -354,6 +354,9 @@ class TelegramSection(_Frozen):
     max_attempts: int = Field(default=3, ge=1, le=10)
     request_timeout_seconds: PositiveFloat = 10.0
     error_dedupe_seconds: NonNegativeFloat = 300.0
+    # CRITICAL alerts (kill switch, daily loss, exit failure) retry until delivered, waiting at most this long
+    # between attempts, so they arrive within this time of the internet coming back.
+    critical_retry_max_seconds: float = Field(default=30.0, ge=5.0, le=300.0)
     menu: TelegramMenuSection = TelegramMenuSection()
 
 
