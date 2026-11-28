@@ -1,4 +1,5 @@
-"""Operator actions requested by a named human (via the dashboard).
+"""Operator actions requested by a named human (via the dashboard or the
+Telegram menu; both queue the same commands).
 
 The dashboard never acts on its own: it queues a command, and the bot runs it
 here, through the same risk and execution services the strategies use.
@@ -81,11 +82,13 @@ class OperatorControls:
         self._now = now_fn
 
     # ------------------------------------------------------------------ #
-    def trigger_kill(self, operator: str, note: str, strategy_id: str | None = None) -> ControlResult:
+    def trigger_kill(self, operator: str, note: str, strategy_id: str | None = None, *,
+                     source: str = "dashboard") -> ControlResult:
         op = _named(operator)
         if strategy_id is not None and strategy_id not in self.cfg.strategies.strategies:
             return ControlResult(False, f"unknown strategy {strategy_id!r}")
-        ev = self.kill_switch.trigger(KillReason.MANUAL, f"dashboard ({op}): {note or 'emergency stop'}",
+        where = source if source in ("dashboard", "telegram") else "dashboard"
+        ev = self.kill_switch.trigger(KillReason.MANUAL, f"{where} ({op}): {note or 'emergency stop'}",
                                       strategy_id=strategy_id)
         scope = strategy_id or "GLOBAL"
         if ev is None:

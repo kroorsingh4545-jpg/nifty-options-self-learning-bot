@@ -19,6 +19,10 @@ Guarantees:
   through the secret masker, and failures log the error type only.
 * This is the only module besides the Upstox adapters that may open a network
   connection (architecture test); it never receives Upstox credentials.
+
+``TelegramBotApi`` (below) is the transport of the control menu
+(``runtime/telegram_menu.py``): outbound long-polling of ``getUpdates``, never
+a webhook or an open port. It knows nothing about trading.
 """
 
 from __future__ import annotations
@@ -29,6 +33,8 @@ import logging
 import threading
 from collections import deque
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -215,4 +221,150 @@ class TelegramAlertSink:
         return f"on (sent {self.sent}, queued {len(self._queue)}, dropped {self.dropped}, failed {self.failed})"
 
 
-__all__ = ["TELEGRAM_API", "TelegramAlertSink", "format_message"]
+# --------------------------------------------------------------------------- #
+# Control-menu transport (outbound long-polling only)
+# --------------------------------------------------------------------------- #
+class TelegramApiError(Exception):
+    """A Telegram request failed (network, 409 conflict, 5xx): retry later."""
+
+
+class TelegramDisabled(TelegramApiError):
+    """The bot token or chat was rejected (401 / 403 / 404): stop polling."""
+
+
+@dataclass(frozen=True)
+class TelegramUpdate:
+    """One incoming update, reduced to what the menu needs. ``callback_data``
+    is untrusted text: the menu only accepts its own button ids."""
+
+    update_id: int
+    chat_id: str
+    user_id: str | None
+    user_name: str
+    text: str | None = None
+    callback_id: str | None = None
+    callback_data: str | None = None
+
+
+def _user_name(user: dict[str, Any]) -> str:
+    if user.get("username"):
+        return f"@{user['username']}"
+    name = " ".join(str(user.get(k) or "").strip() for k in ("first_name", "last_name")).strip()
+    return name or (f"telegram user {user['id']}" if user.get("id") is not None else "telegram user")
+
+
+def parse_update(raw: dict[str, Any]) -> TelegramUpdate | None:
+    """A message or button press, or None for anything else / malformed."""
+    try:
+        uid = int(raw["update_id"])
+        cb = raw.get("callback_query")
+        if isinstance(cb, dict):
+            user = cb.get("from") or {}
+            chat = ((cb.get("message") or {}).get("chat") or {})
+            if chat.get("id") is None:
+                return None
+            data = cb.get("data")
+            return TelegramUpdate(uid, str(chat["id"]), str(user["id"]) if user.get("id") is not None else None,
+                                  _user_name(user), callback_id=str(cb.get("id") or ""),
+                                  callback_data=data if isinstance(data, str) else None)
+        msg = raw.get("message")
+        if isinstance(msg, dict):
+            user = msg.get("from") or {}
+            chat = msg.get("chat") or {}
+            if chat.get("id") is None:
+                return None
+            text = msg.get("text")
+            return TelegramUpdate(uid, str(chat["id"]), str(user["id"]) if user.get("id") is not None else None,
+                                  _user_name(user), text=text if isinstance(text, str) else None)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return None
+
+
+Buttons = list[list[tuple[str, str]]]  # rows of (label, callback id)
+
+
+class TelegramBotApi:
+    """The control menu's Telegram client: ``getUpdates`` long-polling,
+    ``sendMessage`` with inline buttons and ``answerCallbackQuery``.
+
+    Outbound HTTPS to api.telegram.org only: no webhook is registered and no
+    port is opened. ``send`` / ``answer`` never raise; ``get_updates`` raises
+    ``TelegramApiError`` (retry) or ``TelegramDisabled`` (stop). The token is
+    only in the URL, registered with the masker, and errors log their type
+    only. ``authorised`` is the single chat check: every other chat is ignored."""
+
+    def __init__(self, *, token: str, chat_id: str, settings: TelegramSection | None = None,
+                 http: httpx.AsyncClient | None = None, masker: SecretMasker = DEFAULT_MASKER) -> None:
+        if not token or not chat_id:
+            raise ValueError("the Telegram menu needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+        self.settings = settings or TelegramSection()
+        self._base = f"{TELEGRAM_API}/bot{token}"
+        self._chat_id = str(chat_id).strip()
+        self._masker = masker
+        masker.register_many([token])
+        self._owns_http = http is None
+        self._http = http or httpx.AsyncClient(timeout=httpx.Timeout(self.settings.request_timeout_seconds),
+                                               follow_redirects=False)
+        self.sent = 0
+        self.failed = 0
+
+    def authorised(self, update: TelegramUpdate) -> bool:
+        return update.chat_id == self._chat_id
+
+    async def _call(self, method: str, payload: dict[str, Any], timeout: float | None = None) -> Any:
+        try:
+            resp = await self._http.post(f"{self._base}/{method}", json=payload,
+                                         timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT)
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise TelegramApiError(type(exc).__name__) from None
+        if resp.status_code in DISABLING_STATUS:
+            raise TelegramDisabled(f"HTTP {resp.status_code}")
+        if resp.status_code != 200:
+            raise TelegramApiError(f"HTTP {resp.status_code}")
+        try:
+            body = resp.json()
+        except ValueError:
+            raise TelegramApiError("invalid JSON") from None
+        if not isinstance(body, dict) or not body.get("ok"):
+            raise TelegramApiError("not ok")
+        return body.get("result")
+
+    async def get_updates(self, offset: int | None, timeout: int) -> list[dict[str, Any]]:
+        payload: dict[str, Any] = {"timeout": int(timeout), "allowed_updates": ["message", "callback_query"]}
+        if offset is not None:
+            payload["offset"] = int(offset)
+        result = await self._call("getUpdates", payload, timeout=timeout + self.settings.request_timeout_seconds)
+        return [u for u in result if isinstance(u, dict)] if isinstance(result, list) else []
+
+    async def send(self, text: str, buttons: Buttons | None = None) -> bool:
+        text = self._masker.mask_text(text)
+        if len(text) > MAX_TEXT:
+            text = text[: MAX_TEXT - 1] + "…"
+        payload: dict[str, Any] = {"chat_id": self._chat_id, "text": text, "disable_web_page_preview": True}
+        if buttons:
+            payload["reply_markup"] = {"inline_keyboard": [[{"text": label, "callback_data": data}
+                                                            for label, data in row] for row in buttons]}
+        try:
+            await self._call("sendMessage", payload)
+        except Exception as exc:  # the menu is best effort; trading never waits for it
+            self.failed += 1
+            log.warning("telegram menu message not sent", extra={"error": type(exc).__name__})
+            return False
+        self.sent += 1
+        return True
+
+    async def answer(self, callback_id: str | None, text: str = "") -> None:
+        if not callback_id:
+            return
+        with contextlib.suppress(Exception):
+            await self._call("answerCallbackQuery", {"callback_query_id": callback_id, "text": text[:190]})
+
+    async def aclose(self) -> None:
+        if self._owns_http:
+            with contextlib.suppress(Exception):
+                await self._http.aclose()
+
+
+__all__ = ["TELEGRAM_API", "Buttons", "TelegramAlertSink", "TelegramApiError", "TelegramBotApi", "TelegramDisabled",
+           "TelegramUpdate", "format_message", "parse_update"]

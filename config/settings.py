@@ -315,6 +315,29 @@ class LearningSection(_Frozen):
     loop: LearningLoopSection = LearningLoopSection()
 
 
+class TelegramMenuSection(_Frozen):
+    """Button menu on the same Telegram bot (``Menu``): read-only views plus
+    pause / resume entries, kill-switch reset, emergency kill and exiting one
+    position, each confirmed. Outbound long-polling only (no webhook, no open
+    port); only TELEGRAM_CHAT_ID is answered. Never LIVE, risk limits, config,
+    capital, tokens, autonomy or restarts."""
+
+    enabled: bool = True
+    # Name recorded in the audit trail for Telegram actions; empty = the Telegram account name.
+    operator_name: str | None = Field(default=None, max_length=64)
+    poll_timeout_seconds: int = Field(default=25, ge=1, le=50)  # getUpdates long-poll
+    min_press_interval_seconds: float = Field(default=1.0, ge=0.2, le=10.0)
+    max_presses_per_minute: int = Field(default=20, ge=1, le=120)
+    confirm_ttl_seconds: float = Field(default=60.0, ge=10.0, le=300.0)  # "Are you sure?" stays valid
+    stable_feed_seconds: float = Field(default=120.0, ge=30.0, le=900.0)  # reset / recovery message
+    result_timeout_seconds: float = Field(default=90.0, ge=5.0, le=300.0)  # wait for the bot's answer
+
+    @field_validator("operator_name")
+    @classmethod
+    def _operator(cls, v: str | None) -> str | None:
+        return v.strip() if v and v.strip() else None
+
+
 class TelegramSection(_Frozen):
     """Telegram alerts (sent only when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
     are set). CRITICAL alerts (kill switch, daily-loss breach, exit failure)
@@ -331,6 +354,7 @@ class TelegramSection(_Frozen):
     max_attempts: int = Field(default=3, ge=1, le=10)
     request_timeout_seconds: PositiveFloat = 10.0
     error_dedupe_seconds: NonNegativeFloat = 300.0
+    menu: TelegramMenuSection = TelegramMenuSection()
 
 
 class AlertsSection(_Frozen):
