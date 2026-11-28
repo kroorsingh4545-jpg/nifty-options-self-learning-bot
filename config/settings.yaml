@@ -182,6 +182,15 @@ alerts:
     max_attempts: 3
     request_timeout_seconds: 10
     error_dedupe_seconds: 300
+    menu:                          # "Menu" in the chat: read-only buttons + confirmed controls (README, Telegram menu)
+      enabled: true
+      operator_name:               # name in the audit trail; empty = your Telegram account name
+      poll_timeout_seconds: 25     # outbound long-polling only: no webhook, no open port
+      min_press_interval_seconds: 1.0
+      max_presses_per_minute: 20
+      confirm_ttl_seconds: 60      # an unanswered "Are you sure?" expires
+      stable_feed_seconds: 120     # Telegram reset needs the feed connected and stable this long
+      result_timeout_seconds: 90
   eod_summary_time: "15:35"        # IST, after the square-off window
 
 logging:

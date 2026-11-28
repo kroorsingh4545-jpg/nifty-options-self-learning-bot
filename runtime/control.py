@@ -25,6 +25,10 @@ Command rules:
   keep running (the scheduler is never stopped from the dashboard).
 * REQUEST_LIVE is evaluated against every precondition and refused while
   LIVE order routing does not exist; the reasons are recorded.
+* Commands carry their source (``payload_json["source"]``: dashboard, or
+  telegram for the Telegram menu). A Telegram RESET_KILL_SWITCH is re-checked
+  here, when it runs: refused unless the feed has been connected and stable
+  for ``alerts.telegram.menu.stable_feed_seconds`` (``feed_stability``).
 """
 
 from __future__ import annotations
@@ -45,6 +49,7 @@ from core.tasks import wait_for_tasks
 from data.storage.records import ControlCommandRecord
 from execution.operator_controls import ControlResult
 from monitoring.json_logger import get_logger
+from runtime.feed_stability import FeedStability
 
 if TYPE_CHECKING:
     from runtime.bot import TradingBot
@@ -54,6 +59,13 @@ log = get_logger(__name__)
 StatusProvider = Callable[[], dict[str, Any]]
 
 CANDLE_HISTORY = 400
+SOURCES = frozenset({"dashboard", "telegram"})
+
+
+def command_source(cmd: ControlCommandRecord) -> str:
+    """Where a command came from (dashboard unless the Telegram menu queued it)."""
+    src = str((cmd.payload_json or {}).get("source") or "dashboard")
+    return src if src in SOURCES else "dashboard"
 
 
 def _candle_row(c: Candle) -> list[Any]:
@@ -79,6 +91,8 @@ class ControlService:
         self.last_live_request: dict[str, Any] | None = None
         self.in_flight: set[int] = set()
         self._tasks: set[asyncio.Task[None]] = set()
+        self.feed_stability = FeedStability(bot.cfg.settings.alerts.telegram.menu.stable_feed_seconds)
+        self.last_state: dict[str, Any] | None = None  # the latest published snapshot (Telegram menu reads it)
         bot.candles.add_listener(self._on_candle)
 
     def set_status_providers(self, *, connection_status: StatusProvider | None = None,
@@ -167,16 +181,22 @@ class ControlService:
         self.bot.repos.commands.complete(cmd.id, status, result.message, at=self._wall(), result=result.details)
         log.warning("control command processed",
                     extra={"command": cmd.command.value, "id": cmd.id, "operator": cmd.operator,
-                           "strategy_id": cmd.strategy_id, "status": status.value, "result": result.message})
+                           "source": command_source(cmd), "strategy_id": cmd.strategy_id, "status": status.value,
+                           "result": result.message})
 
     async def _run(self, cmd: ControlCommandRecord) -> ControlResult:
         bot = self.bot
         controls = bot.stack.controls
         assert controls is not None
         c = ControlCommandType(cmd.command)
+        source = command_source(cmd)
         if c is ControlCommandType.KILL_SWITCH:
-            return controls.trigger_kill(cmd.operator, cmd.note, cmd.strategy_id)
+            return controls.trigger_kill(cmd.operator, cmd.note, cmd.strategy_id, source=source)
         if c is ControlCommandType.RESET_KILL_SWITCH:
+            if source == "telegram":
+                stable, why = self.feed_stability.check(self._wall())
+                if not stable:
+                    return ControlResult(False, f"reset refused: {why}")
             return await controls.reset_kill_switch(cmd.operator, cmd.note, cmd.strategy_id)
         if c is ControlCommandType.EXIT_POSITION:
             if not cmd.target:
@@ -232,6 +252,7 @@ class ControlService:
     async def publish_state(self) -> dict[str, Any]:
         state = await self.build_state()
         self.bot.repos.runtime_state.publish(state, at=self._wall())
+        self.last_state = state
         return state
 
     async def build_state(self) -> dict[str, Any]:
@@ -314,6 +335,9 @@ class ControlService:
                    "strategy_id": a.strategy_id} for a in list(s.alerts.alerts)[-50:]][::-1]
         exposure = sum(t.open_qty * t.avg_entry for t in s.positions.open_trades())
         conn = self._connection() if self._connection else {}
+        wall = self._wall()
+        if self._connection is not None:
+            self.feed_stability.observe(conn, wall)
 
         return {
             "schema": 1,
@@ -349,6 +373,9 @@ class ControlService:
                 "feed_lag_limit_seconds": conn.get("feed_lag_limit_seconds"),
                 "entry_feed_lag_limit_seconds": cfg.settings.websocket.max_entry_feed_lag_seconds,
                 "clock": conn.get("clock"),
+                "reconnects": conn.get("reconnects"),
+                "late_ticks_dropped": conn.get("late_ticks_dropped"),
+                "feed_stability": self.feed_stability.snapshot(wall),
                 "subscriptions": len(bot.subscribed_keys()) if bot.universe else 0,
             },
             "market": {

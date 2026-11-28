@@ -60,12 +60,13 @@ from learning.autonomy_source import persisted_autonomy
 from learning.deployment_controller import DeploymentController, VersionInUse
 from monitoring.alerts import AlertLogHandler, AlertSink
 from monitoring.json_logger import get_logger
-from monitoring.telegram import TelegramAlertSink
+from monitoring.telegram import TelegramAlertSink, TelegramBotApi
 from runtime.bot import TradingBot
 from runtime.history import HistoryLoader
 from runtime.learning_loop import LearningLoopRunner
 from runtime.market_recorder import MarketRecorder
 from runtime.notifications import TradeNotifier, send_end_of_day
+from runtime.telegram_menu import TelegramMenu
 
 log = get_logger(__name__)
 
@@ -212,6 +213,18 @@ def default_alert_sinks(cfg: BotConfig) -> tuple[AlertSink, ...]:
                               settings=cfg.settings.alerts.telegram, mode=cfg.mode),)
 
 
+MenuApiFactory = Callable[[BotConfig], "TelegramBotApi | None"]
+
+
+def default_menu_api(cfg: BotConfig) -> TelegramBotApi | None:
+    """The Telegram menu's client when Telegram is configured and the menu is on."""
+    if telegram_status(cfg) != "configured" or not cfg.settings.alerts.telegram.menu.enabled:
+        return None
+    assert cfg.env.telegram_bot_token is not None and cfg.env.telegram_chat_id
+    return TelegramBotApi(token=cfg.env.telegram_bot_token.get_secret_value(), chat_id=cfg.env.telegram_chat_id,
+                          settings=cfg.settings.alerts.telegram)
+
+
 # --------------------------------------------------------------------------- #
 # Which strategy versions this session trades
 # --------------------------------------------------------------------------- #
@@ -306,6 +319,7 @@ def upstox_connections(cfg: BotConfig, hooks: RiskHooks) -> MarketConnections:
                 "websocket_state": h.get("state", "IDLE"),
                 "websocket_connected": bool(h.get("connected")),
                 "websocket_stale": bool(h.get("stale")),
+                "reconnects": max(0, int(h.get("connect_count", 0) or 0) - 1),
                 "last_message_age_seconds": h.get("last_message_age_seconds"),
                 "messages": h.get("messages", 0),
                 "ticks": h.get("ticks", 0),
@@ -432,7 +446,7 @@ class PaperSession:
                  connections: ConnectionFactory = upstox_connections,
                  alert_sinks: Sequence[AlertSink] | None = None,
                  now_fn: Callable[[], datetime] = now_ist, install_signal_handlers: bool = True,
-                 run_scheduler: bool = True) -> None:
+                 run_scheduler: bool = True, menu_api: MenuApiFactory = default_menu_api) -> None:
         """``run_scheduler=False`` registers the jobs without starting the
         real-time scheduler (tests drive the jobs by hand)."""
         if cfg.mode is not TradingMode.PAPER:
@@ -463,6 +477,8 @@ class PaperSession:
         self.clock_monitor: ClockMonitor | None = None
         self.history: HistoryLoader | None = None
         self.market_recorder: MarketRecorder | None = None
+        self._menu_api = menu_api
+        self.telegram_menu: TelegramMenu | None = None
 
     # Hooks into the bot's risk manager --------------------------------------
     def _on_auth_failure(self, reason: str) -> None:
@@ -489,6 +505,8 @@ class PaperSession:
         assert self.conn is not None
         status = dict(self.conn.status())
         status["clock"] = self.clock_monitor.status() if self.clock_monitor is not None else None
+        if self.bot is not None:
+            status["late_ticks_dropped"] = self.bot.candles.dropped_late
         return status
 
     def _alert_channels(self) -> dict[str, Any]:
@@ -498,6 +516,8 @@ class PaperSession:
         for s in self._alert_sinks:
             describe = getattr(s, "describe", None)
             out[getattr(s, "channel", type(s).__name__)] = describe() if callable(describe) else "on"
+        if self.telegram_menu is not None:
+            out["telegram_menu"] = self.telegram_menu.describe()
         return out
 
     def _attach_market_history(self, bot: TradingBot, market_data: MarketDataService) -> None:
@@ -612,9 +632,22 @@ class PaperSession:
         else:
             bot.start()
         await bot.control.publish_state()
+        await self._start_telegram_menu(bot)
         log.warning("PAPER session started", extra={"mode": "PAPER", "paused": self.options.paused,
                                                     "strategies": [s.strategy_id for s in bot.strategies]})
         return bot
+
+    async def _start_telegram_menu(self, bot: TradingBot) -> None:
+        """The Telegram button menu, in its own tasks: a failure here is logged and never stops the session."""
+        try:
+            api = self._menu_api(self.yaml_cfg)
+            if api is None:
+                return
+            self.telegram_menu = TelegramMenu(bot, api, self.yaml_cfg.settings.alerts.telegram.menu)
+            await self.telegram_menu.start()
+        except Exception:
+            self.telegram_menu = None
+            log.exception("telegram menu could not start (alerts and trading are unaffected)")
 
     # Run / stop -------------------------------------------------------------
     def request_stop(self, reason: str) -> None:
@@ -678,6 +711,9 @@ class PaperSession:
                             extra={"trades": [t.trade_uid for t in open_trades]})
             with contextlib.suppress(Exception):
                 await bot.control.publish_state()
+        if self.telegram_menu is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self.telegram_menu.aclose(), timeout)
         if self._log_handler is not None:
             logging.getLogger().removeHandler(self._log_handler)
             self._log_handler = None

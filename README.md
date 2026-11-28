@@ -207,6 +207,59 @@ Sending never blocks trading: alerts go through a bounded queue drained in the b
 message per second, with HTTP 429 `retry_after` honoured. A rejected token or chat disables the channel with
 one ERROR log. Messages pass through the secret masker.
 
+## Telegram menu
+
+The same Telegram bot also has a button menu. Send **Menu** (or `/menu`) in your chat and it shows these
+buttons. It runs inside the PAPER bot whenever Telegram is configured (`alerts.telegram.menu.enabled: true`).
+
+**Read-only buttons** (they never change anything):
+
+| Button | Shows |
+|---|---|
+| Status | bot mode and engine state, feed, market session, whether entries are allowed, kill-switch state, open positions |
+| Positions | each open position: quantity, entry, LTP, P&L, stop, target, R |
+| Today's trades | today's closed trades with exit reason and net P&L |
+| Health | feed state, last message age, feed lag, PC clock offset vs Upstox, reconnects, late ticks dropped |
+| Risk | daily loss used / left per strategy and global |
+| Recent log | the last 15 WARNING / ERROR / CRITICAL lines of `logs/bot.jsonl` |
+| Last signals | each strategy's latest signal and the decision on it |
+| Shadow | current ORB vs variants A and B and the shadow decision-engine summary from the latest `logs/research` report, if there is one (research only) |
+
+**Control buttons.** Each one first asks **"Are you sure? Yes / No"**. Then it is queued as a normal control
+command, with your name and source `telegram`, and the bot runs it exactly like the same dashboard button:
+
+| Button | Does |
+|---|---|
+| Pause entries | engine PAUSED: no new entries; stops, targets and square-off keep running |
+| Resume entries | engine RUNNING again (every risk check still applies) |
+| Reset kill switch | resets the GLOBAL kill switch through the dashboard's reset path: named human, reconciliation first, strategies re-activated the same way. **Refused, with the reason, unless the feed has been connected and stable for 2 minutes right now.** The bot checks this again when it runs the reset. Strategy-only kills are reset from the dashboard |
+| Emergency kill | GLOBAL kill switch: blocks new entries and exits every position (never expires in the queue) |
+| Exit one position | lists the open positions; choose one, confirm, and it is exited at market |
+
+**When the kill switch triggers** you get the usual CRITICAL Telegram alert with the reason. The bot **never
+resets itself**. After a `WEBSOCKET_DISCONNECT` kill, once the feed has been connected and stable for 2 minutes
+(no reconnect in between), one message says *"Feed is back and stable. Positions: N. Tap Reset to resume"*,
+with a Reset button. That button still asks for confirmation and still checks the feed.
+
+**Never on the menu:** LIVE mode, risk limits, config, capital, tokens, autonomy level, restarting the bot.
+An architecture test checks that only the five commands above can be queued from Telegram.
+
+**Safety rules**
+
+- Only updates from `TELEGRAM_CHAT_ID` are answered. Every other chat or user is ignored without a reply,
+  and each ignored attempt is logged.
+- Outbound long-polling only (`getUpdates` to api.telegram.org): no webhook and no open port.
+- Button data is never trusted beyond its fixed button id. A confirmation is a random, single-use reference
+  that expires after 60 s (`confirm_ttl_seconds`). The state is checked again when you press Yes. Updates
+  sent while the bot was off are skipped at start-up.
+- Presses are rate limited: at most 1 per second and 20 per minute.
+- If you and the dashboard act at the same time, the existing control queue decides. For example, two resets
+  give one DONE and one "not active", and two exits of the same position sell once.
+- The menu runs in its own background tasks and catches every error. A slow, failing or unreachable Telegram
+  never blocks, slows or crashes trading. Polling just retries with back-off, and alerts keep their own retries.
+- The name recorded for your actions is `alerts.telegram.menu.operator_name` in `config/settings.yaml`. If
+  that is empty, your Telegram account name (`@username`) is used.
+
 ## Dashboard
 
 ```bash
