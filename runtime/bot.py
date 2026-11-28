@@ -405,10 +405,17 @@ class TradingBot:
         """New entries are blocked during market hours while the NIFTY index or
         the current future keeps ticking at one unchanged price for longer than
         ``websocket.max_frozen_price_seconds``: signals and strike selection
-        would use a price that is not moving. Exits never consult this."""
+        would use a price that is not moving. Exits never consult this.
+
+        Only checked while new entries are still allowed today (market hours,
+        before ``risk.time_rules.no_new_entries_after``): after the cut-off a
+        quiet index near the close blocks nothing, so it raises no block (and
+        no dashboard banner); an episode still open at the cut-off ends there."""
         limit = self.cfg.settings.websocket.max_frozen_price_seconds
+        now = self._now()
+        entries_open = self.market_hours(now) and now.time() < self.cfg.risk.time_rules.no_new_entries_after
         frozen: dict[str, float] = {}
-        if self.market_hours(self._now()):
+        if entries_open:
             for key in sorted(self.base_keys()):
                 seconds = self.md.frozen_seconds(key)
                 if seconds is not None and seconds > limit:
@@ -417,6 +424,8 @@ class TradingBot:
         if blocked and not self._frozen_blocked:
             log.warning("new entries blocked: NIFTY price frozen (exits unaffected)",
                         extra={"frozen_seconds": frozen, "limit_seconds": limit})
+        elif not blocked and self._frozen_blocked and not entries_open:
+            log.info("frozen-price check ended: new entries are closed for today", extra={"limit_seconds": limit})
         elif not blocked and self._frozen_blocked:
             log.warning("new entries allowed again: NIFTY price moving", extra={"limit_seconds": limit})
         self._frozen_blocked = blocked
