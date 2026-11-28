@@ -58,7 +58,7 @@ class MarketRecorder:
         self._market: list[Tick] = []
         self._signals: list[SignalRow] = []
         self._pending: OrderedDict[str, Signal] = OrderedDict()
-        self._last_quote: dict[str, datetime] = {}
+        self._last_slot: dict[str, tuple[timedelta, int]] = {}  # instrument -> (interval, slot) last sampled
         self.failures = 0  # database writes / retention runs that failed
         self.listener_failures = 0  # listener calls that raised internally (swallowed)
         self.dropped = 0  # rows refused because a buffer was full
@@ -98,10 +98,15 @@ class MarketRecorder:
             self._append(self._market, tick)
 
     def _due(self, key: str, at: datetime, every: timedelta) -> bool:
-        last = self._last_quote.get(key)
-        if last is not None and at - last < every:
+        """The first tick of each fixed clock slot (``every`` long, aligned to
+        the epoch, so 5-s slots start at :00, :05, ...; the same slots the
+        data-quality audit counts). The old rule ("``every`` since the last
+        sample") drifted: with ticks every ~1 s it sampled about every 5-6 s
+        and left ~7 % of 5-s slots empty on a perfect day."""
+        slot = (every, int(at.timestamp() // every.total_seconds()))
+        if self._last_slot.get(key) == slot:
             return False
-        self._last_quote[key] = at
+        self._last_slot[key] = slot
         return True
 
     def on_signal(self, event: Event) -> None:

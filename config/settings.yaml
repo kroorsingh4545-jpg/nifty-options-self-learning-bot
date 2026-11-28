@@ -84,7 +84,7 @@ websocket:
 
 market_recording:                # saved for session reviews; trading never reads these tables
   enabled: true
-  quote_interval_seconds: 5      # one option_quotes row per subscribed contract per interval
+  quote_interval_seconds: 5      # one row per contract per fixed 5-s clock slot (:00, :05, ...) with a tick
   held_quote_interval_seconds: 1 # ... this often while a position is open in the contract
   flush_interval_seconds: 5
   option_quote_retention_days: 30 # older option_quotes / market_quotes are deleted at start-up and after the close

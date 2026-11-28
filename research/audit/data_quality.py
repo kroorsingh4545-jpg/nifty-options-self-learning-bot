@@ -18,7 +18,10 @@ What is checked:
   slots with a sample, and the longest silence).
 * missing fields: IV, Greeks, resting total buy / sell quantity, bid / ask
   (options)
-* quote sanity: crossed quotes (bid > ask), abnormal spreads, and how often
+* quote sanity: crossed quotes (bid > ask; on the NIFTY future a WARNING
+  only, owner decision 2026-11-28: the Upstox snapshot of the future shows
+  them on most days, so they are reported and never fail a day; on options
+  and the index they still fail it), abnormal spreads, and how often
   the last traded price lies outside the bid / ask of the same message (a
   measure of how far the feed's price and quote are out of step; reported,
   not failed: it is a property of the Upstox snapshot feed)
@@ -133,6 +136,7 @@ def day_quality(day: date, option_rows: Sequence[Row], market_rows: Sequence[Row
     opts = {k: _instrument_stats(v, th, sess) for k, v in _by_key(option_rows).items()}
     mkts = {k: _instrument_stats(v, th, sess) for k, v in _by_key(market_rows).items()}
     problems: list[str] = []
+    warnings: list[str] = []  # reported, never make a day unclean
 
     def check(ok: bool, msg: str) -> None:
         if not ok:
@@ -164,8 +168,13 @@ def day_quality(day: date, option_rows: Sequence[Row], market_rows: Sequence[Row
           f"options: abnormal spreads in {(totals['abnormal_spread_share'] or 0):.1%} of quotes")
     totals["stale_trade_share"] = _share(sum(s["stale_trades"] for s in opts.values()), n_opt)
     totals["duplicate_share"] = _share(sum(s["duplicates"] for s in opts.values()), n_opt)
+    futures = set(futures_keys)
     for k, s in {**opts, **mkts}.items():
-        check(s["crossed"] == 0, f"{k}: {s['crossed']} crossed quotes (bid > ask)")
+        if k in futures:  # owner decision 2026-11-28: a feed property of the future's snapshot, reported only
+            if s["crossed"]:
+                warnings.append(f"{k}: {s['crossed']} crossed quotes (bid > ask) on the future")
+        else:
+            check(s["crossed"] == 0, f"{k}: {s['crossed']} crossed quotes (bid > ask)")
     for k, s in mkts.items():  # always subscribed: checked one by one
         check(s["session_completeness"] >= th.min_completeness,
               f"{k}: completeness {s['session_completeness']:.3f} < {th.min_completeness}")
@@ -183,7 +192,7 @@ def day_quality(day: date, option_rows: Sequence[Row], market_rows: Sequence[Row
         check(abs(clock) <= th.max_clock_offset_seconds, f"clock offset {clock:+.2f} s")
     else:
         check(False, "no NIFTY index quotes recorded (market_quotes)")
-    check(bool(set(futures_keys) & set(mkts)), "no NIFTY futures quotes recorded (market_quotes)")
+    check(bool(futures & set(mkts)), "no NIFTY futures quotes recorded (market_quotes)")
     if vix_key is not None:
         check(vix_key in mkts, "no India VIX quotes recorded (market_quotes)")
     totals["index_clock_offset_seconds"] = None if clock is None else round(clock, 3)
@@ -191,8 +200,8 @@ def day_quality(day: date, option_rows: Sequence[Row], market_rows: Sequence[Row
     totals["signals_undecided"] = sum(1 for s in signals if not s.get("decided"))
     for s in (*opts.values(), *mkts.values()):
         del s["_slots"]
-    return {"day": day.isoformat(), "clean": not problems, "problems": problems, "totals": totals,
-            "options": opts, "market": mkts}
+    return {"day": day.isoformat(), "clean": not problems, "problems": problems, "warnings": warnings,
+            "totals": totals, "options": opts, "market": mkts}
 
 
 def consecutive_clean(reports: Sequence[Mapping[str, Any]]) -> int:
@@ -222,6 +231,7 @@ def render_text(rep: Mapping[str, Any]) -> list[str]:
     lines += [f"  - {p}" for p in rep["problems"][:25]]
     if len(rep["problems"]) > 25:
         lines.append(f"  ... and {len(rep['problems']) - 25} more")
+    lines += [f"  ~ warning (does not fail the day): {w}" for w in rep.get("warnings", [])]
     return lines
 
 

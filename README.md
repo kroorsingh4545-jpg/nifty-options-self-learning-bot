@@ -303,7 +303,8 @@ Each one goes to its own project folder (the folder above `scripts\`), then:
    port 8501);
 4. opens <http://127.0.0.1:8501> in your browser.
 
-Stop the bot as before: Ctrl+C in the bot window, after the square-off. The shared steps live in
+Stop the bot as before: Ctrl+C in the bot window, **after 15:31**, so the session is recorded up to the 15:30
+close (the data-quality check needs the index within 2 minutes of the close). The shared steps live in
 `scripts\start-common.cmd`; do not run that file by itself.
 
 **Desktop shortcut.** In File Explorer open the project's `scripts` folder, right-click `start-office.bat`
